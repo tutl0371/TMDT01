@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BizFlow - Thanh Toán</title>
+    <script src="https://cdn.jsdelivr.net/npm/heroicons@2.0.18/16/solid/index.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .navbar h1 {
+            font-size: 24px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .app-badge {
+            width: 32px;
+            height: 32px;
+            border-radius: 12px;
+            display: grid;
+            place-items: center;
+            font-weight: 700;
+            font-size: 12px;
+            color: #fff;
+            background: #4c6fff;
+        }
+
+        .navbar .btn {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 30px;
+        }
+
+        .header h2 {
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .payment-method {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .method-option {
+            padding: 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-align: center;
+        }
+
+        .method-option:hover {
+            border-color: #4CAF50;
+            background: #f0f8f5;
+        }
+
+        .method-option.active {
+            border-color: #4CAF50;
+            background: linear-gradient(135deg, rgba(76, 175, 80, 0.1) 0%, rgba(69, 160, 73, 0.05) 100%);
+        }
+
+        .method-icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .method-name {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .order-summary {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+            overflow: hidden;
+            height: fit-content;
+            position: sticky;
+            top: 20px;
+        }
+
+        .summary-header {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+            color: white;
+            padding: 20px;
+        }
+
+        .summary-header h3 {
+            font-size: 18px;
+        }
+
+        .summary-content {
+            padding: 20px;
+        }
+
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 14px;
+        }
+
+        .summary-row.total {
+            border-bottom: none;
+            padding-top: 15px;
+            font-size: 18px;
+            font-weight: 700;
+            color: #4CAF50;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #d0d0d0;
+        }
+
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #45a049;
+        }
+
+        .app-popup {
+            position: fixed;
+            inset: 0;
+            background: rgba(22, 26, 38, 0.45);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 70;
+            padding: 16px;
+        }
+
+        .app-popup.show {
+            display: flex;
+        }
+
+        .app-popup-card {
+            background: #ffffff;
+            border-radius: 12px;
+            width: min(360px, 90vw);
+            box-shadow: 0 20px 50px rgba(12, 20, 36, 0.2);
+            padding: 16px;
+            display: grid;
+            gap: 12px;
+        }
+
+        .app-popup-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .app-popup-header h3 {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .app-popup-message {
+            font-size: 13px;
+            color: #4b5366;
+            line-height: 1.5;
+        }
+
+        .app-popup-actions {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .info-box {
+            background: linear-gradient(135deg, rgba(76, 175, 80, 0.1) 0%, rgba(69, 160, 73, 0.05) 100%);
+            border-left: 4px solid #4CAF50;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 12px;
+            }
+
+            .navbar {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+                padding: 12px 16px;
+            }
+
+            .navbar h1 {
+                font-size: 20px;
+                justify-content: center;
+                text-align: center;
+            }
+
+            .navbar .btn {
+                width: 100%;
+            }
+
+            .container {
+                grid-template-columns: 1fr;
+            }
+
+            .order-summary {
+                position: static;
+            }
+
+            .header {
+                padding: 20px;
+            }
+
+            .header h2 {
+                font-size: 24px;
+            }
+
+            .content {
+                padding: 20px;
+            }
+
+            .payment-method {
+                grid-template-columns: 1fr;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .btn-group {
+                flex-direction: column;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .header h2 {
+                font-size: 22px;
+            }
+
+            .summary-header h3 {
+                font-size: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1><span class="app-badge">BH</span> BizFlow - Thanh Toán</h1>
+        <button class="btn" onclick="logout()">Đăng Xuất</button>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <div class="header">
+                <h2>Chọn Phương Thức Thanh Toán</h2>
+                <p>Lựa chọn cách thanh toán thuận tiện nhất cho bạn</p>
+            </div>
+
+            <div class="content">
+                <div class="payment-method" id="paymentMethods">
+                    <div class="method-option active" onclick="selectPayment(this, 'cash')">
+                        <div class="method-icon">💵</div>
+                        <div class="method-name">Tiền Mặt</div>
+                    </div>
+                    <div class="method-option" onclick="selectPayment(this, 'card')">
+                        <div class="method-icon">💳</div>
+                        <div class="method-name">Thẻ Ngân Hàng</div>
+                    </div>
+                    <div class="method-option" onclick="selectPayment(this, 'transfer')">
+                        <div class="method-icon">🏦</div>
+                        <div class="method-name">Chuyển Khoản</div>
+                    </div>
+                    <div class="method-option" onclick="selectPayment(this, 'ewallet')">
+                        <div class="method-icon">📱</div>
+                        <div class="method-name">Ví Điện Tử</div>
+                    </div>
+                </div>
+
+                <div id="paymentForm">
+                    <div class="info-box">
+                        <strong>💡 Thông Tin Thanh Toán</strong>
+                        <p>Phương thức hiện tại: <strong id="selectedMethod">Tiền Mặt</strong></p>
+                    </div>
+
+                    <div id="cardSection" style="display:none;">
+                        <div class="form-group">
+                            <label>Số Thẻ</label>
+                            <input type="text" placeholder="1234 5678 9012 3456" maxlength="19">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Ngày Hết Hạn</label>
+                                <input type="text" placeholder="MM/YY">
+                            </div>
+                            <div class="form-group">
+                                <label>CVV</label>
+                                <input type="text" placeholder="123" maxlength="4">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="transferSection" style="display:none;">
+                        <div class="info-box">
+                            <strong>📋 Thông tin chuyển khoản:</strong>
+                            <p>Ngân hàng: VCB<br>
+                            Số tài khoản: 1021209511<br>
+                            Chủ tài khoản: BIZFLOW CO<br>
+                            Nội dung: Thanh toán đơn hàng</p>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Ghi Chú (Nếu Có)</label>
+                        <textarea placeholder="Ghi chú thêm cho đơn hàng..." rows="3"></textarea>
+                    </div>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-secondary" onclick="window.location.href='/pages/select-quantity.html'">← Quay Lại</button>
+                    <button class="btn btn-primary" onclick="confirmPayment()">Xác Nhận Thanh Toán</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="order-summary">
+            <div class="summary-header">
+                <h3>📦 Tóm Tắt Đơn Hàng</h3>
+            </div>
+            <div class="summary-content">
+                <div class="summary-row">
+                    <span>Sản phẩm:</span>
+                    <span id="summaryProduct">--</span>
+                </div>
+                <div class="summary-row">
+                    <span>Giá đơn vị:</span>
+                    <span id="summaryPrice">--</span>
+                </div>
+                <div class="summary-row">
+                    <span>Số lượng:</span>
+                    <span id="summaryQty">--</span>
+                </div>
+                <div class="summary-row">
+                    <span>Giảm giá:</span>
+                    <span id="summaryDiscount">0₫</span>
+                </div>
+                <div class="summary-row total">
+                    <span>Tổng:</span>
+                    <span id="summaryTotal">0₫</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedPaymentMethod = 'cash';
+
+        function showPopup(message, options = {}) {
+            const { title = 'Thông báo' } = options;
+            let modal = document.getElementById('appPopup');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'appPopup';
+                modal.className = 'app-popup';
+                modal.setAttribute('aria-hidden', 'true');
+                modal.innerHTML = `
+                    <div class="app-popup-card" role="dialog" aria-modal="true">
+                        <div class="app-popup-header">
+                            <h3 id="appPopupTitle"></h3>
+                            <button type="button" id="appPopupClose" aria-label="Đóng">×</button>
+                        </div>
+                        <div id="appPopupMessage" class="app-popup-message"></div>
+                        <div class="app-popup-actions">
+                            <button type="button" id="appPopupOk">Đóng</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+
+                const closePopup = () => {
+                    modal.classList.remove('show');
+                    modal.setAttribute('aria-hidden', 'true');
+                };
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        closePopup();
+                    }
+                });
+                modal.querySelector('#appPopupClose')?.addEventListener('click', closePopup);
+                modal.querySelector('#appPopupOk')?.addEventListener('click', closePopup);
+            }
+
+            const titleEl = modal.querySelector('#appPopupTitle');
+            const messageEl = modal.querySelector('#appPopupMessage');
+            if (titleEl) titleEl.textContent = title;
+            if (messageEl) messageEl.textContent = message || '';
+
+            modal.classList.add('show');
+            modal.setAttribute('aria-hidden', 'false');
+        }
+
+        function formatPrice(price) {
+            return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
+        }
+
+        function selectPayment(element, method) {
+            document.querySelectorAll('.method-option').forEach(el => {
+                el.classList.remove('active');
+            });
+            element.classList.add('active');
+            selectedPaymentMethod = method;
+
+            document.getElementById('selectedMethod').textContent = 
+                method === 'cash' ? 'Tiền Mặt' :
+                method === 'card' ? 'Thẻ Ngân Hàng' :
+                method === 'transfer' ? 'Chuyển Khoản' : 'Ví Điện Tử';
+
+            document.getElementById('cardSection').style.display = method === 'card' ? 'block' : 'none';
+            document.getElementById('transferSection').style.display = method === 'transfer' ? 'block' : 'none';
+        }
+
+        function loadOrderSummary() {
+            const product = JSON.parse(localStorage.getItem('selectedProduct'));
+            const qty = parseInt(localStorage.getItem('orderQuantity')) || 1;
+            const total = parseInt(localStorage.getItem('orderTotal')) || 0;
+
+            if (product) {
+                document.getElementById('summaryProduct').textContent = product.name;
+                document.getElementById('summaryPrice').textContent = formatPrice(product.price);
+                document.getElementById('summaryQty').textContent = qty;
+                document.getElementById('summaryTotal').textContent = formatPrice(total);
+            }
+        }
+
+        function confirmPayment() {
+            const notes = document.querySelector('textarea').value;
+            
+            if (selectedPaymentMethod === 'card') {
+                const cardNumber = document.querySelector('input[placeholder*="1234"]').value;
+                if (!cardNumber || cardNumber.length < 13) {
+                    showPopup('⚠️ Vui lòng nhập số thẻ hợp lệ');
+                    return;
+                }
+            }
+
+            showPopup('✅ Thanh toán thành công! Đơn hàng của bạn đã được xác nhận. Vui lòng chờ xác nhận từ nhân viên quầy.');
+            
+            // Clear order data and redirect
+            localStorage.removeItem('selectedProduct');
+            localStorage.removeItem('orderQuantity');
+            localStorage.removeItem('orderTotal');
+            
+            window.location.href = '/pages/employee-dashboard.html';
+        }
+
+        function logout() {
+            if (confirm('Bạn có chắc muốn đăng xuất?')) {
+                localStorage.clear();
+                window.location.href = '/pages/index.html';
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const role = localStorage.getItem('role');
+            if (!role) {
+                window.location.href = '/pages/index.html';
+            }
+            loadOrderSummary();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BizFlow - Quản lý Đơn hàng (Admin)</title>
+    <link rel="stylesheet" href="../assets/css/admin-base.css?v=20260204">
+    <style>
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            z-index: 1000;
+        }
+
+        .modal-backdrop.open {
+            display: flex;
+        }
+
+        .modal {
+            width: min(720px, 100%);
+            background: #0f172a;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 14px;
+            box-shadow: 0 18px 60px rgba(0,0,0,.55);
+            overflow: hidden;
+            color: #e2e8f0;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            border-bottom: 1px solid rgba(255,255,255,.06);
+        }
+
+        .modal-title {
+            font-weight: 700;
+            letter-spacing: .2px;
+            color: #e2e8f0;
+        }
+
+        .modal-body {
+            padding: 16px;
+            color: #e2e8f0;
+        }
+
+        .kv-grid {
+            display: grid;
+            grid-template-columns: 180px 1fr;
+            gap: 10px 14px;
+        }
+
+        .modal-section {
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,.06);
+        }
+
+        .modal-section-title {
+            font-weight: 700;
+            letter-spacing: .2px;
+            margin-bottom: 10px;
+        }
+
+        .modal-table {
+            width: 100%;
+            border-collapse: collapse;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,.08);
+        }
+
+        .modal-table th,
+        .modal-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(255,255,255,.06);
+            vertical-align: top;
+        }
+
+        .modal-table th {
+            font-size: 12px;
+            text-transform: uppercase;
+            opacity: .75;
+            letter-spacing: .2px;
+            background: rgba(255,255,255,.04);
+        }
+
+        .modal-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            opacity: .9;
+        }
+
+        .kv-key { opacity: .78; }
+        .kv-val { font-weight: 600; color: #e2e8f0; }
+
+        .row-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .mini-select {
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,.12);
+            background: rgba(255,255,255,.06);
+            color: #e2e8f0;
+        }
+
+        .action-btn.sm {
+            padding: 8px 10px;
+            border-radius: 10px;
+        }
+
+        .muted { opacity: .75; }
+    </style>
+</head>
+<body data-admin-page="orders">
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-mark">BF</div>
+                <div>
+                    <div class="brand-title">BizFlow</div>
+                    <div class="brand-subtitle">Admin Control</div>
+                </div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-title">Tổng quan</div>
+                <a class="nav-item" data-page="home" href="admin-home.html"><span class="icon" data-icon="H"></span><span>Trang chủ</span></a>
+                <a class="nav-item" data-page="users" href="admin-users.html"><span class="icon" data-icon="U"></span><span>Người dùng</span></a>
+                <a class="nav-item" data-page="products" href="admin-products.html"><span class="icon" data-icon="P"></span><span>Sản phẩm</span></a>
+                <a class="nav-item" data-page="orders" href="admin-orders.html"><span class="icon" data-icon="O"></span><span>Đơn hàng</span></a>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-title">Hệ thống</div>
+                <a class="nav-item" data-page="reports" href="admin-reports.html"><span class="icon" data-icon="B"></span><span>Báo cáo</span></a>
+            </div>
+
+            <div class="sidebar-footer">
+                <div>Trạng thái hệ thống: Online</div>
+                <div>Cập nhật: <span id="sidebarTime">--:--</span></div>
+            </div>
+        </aside>
+
+        <div class="content">
+            <header class="topbar">
+                <div class="top-left">
+                    <div class="page-title">Quản lý Đơn hàng</div>
+                    <div class="search">
+                        <span>🔍</span>
+                        <input id="searchInput" type="text" placeholder="Tìm đơn hàng theo mã, khách hàng..." />
+                    </div>
+                </div>
+                <div class="top-right">
+                    <span class="pill">ADMIN</span>
+                    <div class="user-chip">
+                        <div class="avatar" id="userAvatar">AD</div>
+                        <div>
+                            <div id="userGreeting">Admin</div>
+                            <small>Quản trị viên</small>
+                        </div>
+                        <button class="icon-btn" title="Đăng xuất" onclick="adminLayout.logout()">⎋</button>
+                    </div>
+                </div>
+            </header>
+
+            <main class="main">
+                <section class="card">
+                    <div class="card-title">Danh sách đơn hàng</div>
+                    <div class="card-subtitle">Dữ liệu lấy từ microservice Đơn hàng.</div>
+                    <div class="actions">
+                        <button class="action-btn" type="button" onclick="location.href='admin-home.html'">Quay lại</button>
+                        
+                        <div style="flex: 1;"></div>
+                        <select id="statusFilter" class="mini-select" aria-label="Lọc theo trạng thái">
+                            <option value="">Tất cả trạng thái</option>
+                            <option value="PENDING">PENDING</option>
+                            <option value="PROCESSING">PROCESSING</option>
+                            <option value="SHIPPED">SHIPPED</option>
+                            <option value="COMPLETED">COMPLETED</option>
+                            <option value="PAID">PAID</option>
+                            <option value="UNPAID">UNPAID</option>
+                            <option value="CANCELLED">CANCELLED</option>
+                            <option value="RETURNED">RETURNED</option>
+                        </select>
+                        <select id="pageSize" class="mini-select" aria-label="Số dòng mỗi trang">
+                            <option value="10">10 / trang</option>
+                            <option value="20" selected>20 / trang</option>
+                            <option value="50">50 / trang</option>
+                            <option value="100">100 / trang</option>
+                        </select>
+                    </div>
+                    <div class="muted" style="margin-top: 10px; display:flex; align-items:center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                        <div id="ordersMeta">—</div>
+                        <div style="display:flex; align-items:center; gap: 10px; flex-wrap: wrap;">
+                            <button class="action-btn sm" type="button" id="prevPageBtn" onclick="goPrevPage()">◀ Trước</button>
+                            <span id="pageInfo">Trang 1/1</span>
+                            <button class="action-btn sm" type="button" id="nextPageBtn" onclick="goNextPage()">Sau ▶</button>
+                        </div>
+                    </div>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Mã đơn</th>
+                                <th>Khách hàng</th>
+                                <th>Tổng tiền</th>
+                                <th>Trạng thái</th>
+                                <th>Hành động</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ordersBody">
+                            <tr>
+                                <td colspan="5" class="empty-box">Chưa có dữ liệu đơn hàng.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <div id="orderModalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true" onclick="closeOrderModal(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title" id="orderModalTitle">Chi tiết đơn hàng</div>
+                <button class="icon-btn" type="button" title="Đóng" onclick="closeOrderModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="orderModalContent" class="kv-grid"></div>
+                <div style="margin-top: 14px; display:flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;">
+                    <select id="orderModalStatus" class="mini-select" aria-label="Trạng thái đơn hàng">
+                        <option value="PENDING">PENDING</option>
+                        <option value="PROCESSING">PROCESSING</option>
+                        <option value="SHIPPED">SHIPPED</option>
+                        <option value="COMPLETED">COMPLETED</option>
+                        <option value="PAID">PAID</option>
+                        <option value="UNPAID">UNPAID</option>
+                        <option value="CANCELLED">CANCELLED</option>
+                        <option value="RETURNED">RETURNED</option>
+                    </select>
+                    <button id="orderModalUpdateBtn" class="action-btn primary" type="button" onclick="updateOrderStatusFromModal()">Cập nhật trạng thái</button>
+                </div>
+                <div id="orderModalHint" class="muted" style="margin-top:10px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="../assets/js/admin-layout.js"></script>
+    <script>
+        // API Configuration (through Nginx -> Gateway)
+        const API_BASE_URL = '/api/admin/orders';
+
+        function formatCurrency(amount) {
+            if (amount === null || amount === undefined) return '0 ₫';
+            return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
+        }
+
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+
+        function safeUpper(text) {
+            if (!text) return '';
+            return String(text).toUpperCase();
+        }
+
+        function formatDateTime(value) {
+            if (!value) return '—';
+            try {
+                const d = new Date(value);
+                if (Number.isNaN(d.getTime())) return '—';
+                return d.toLocaleString('vi-VN');
+            } catch {
+                return '—';
+            }
+        }
+
+        function setButtonLoading(btn, isLoading, textWhenLoading) {
+            if (!btn) return;
+            btn.disabled = !!isLoading;
+            btn.dataset.originalText = btn.dataset.originalText || btn.textContent;
+            btn.textContent = isLoading ? (textWhenLoading || 'Đang xử lý...') : btn.dataset.originalText;
+        }
+
+        function getStatusOptionsHtml(selected) {
+            const opts = ['PENDING','PROCESSING','SHIPPED','COMPLETED','PAID','UNPAID','CANCELLED','RETURNED'];
+            const sel = safeUpper(selected);
+            return opts.map(s => `<option value="${s}" ${s === sel ? 'selected' : ''}>${s}</option>`).join('');
+        }
+
+        let allOrders = [];
+        let ordersById = Object.create(null);
+        let currentQuery = '';
+        let currentStatus = '';
+        let currentPage = 1;
+        let currentPageSize = 20;
+        let totalCount = 0;
+        let totalPages = 1;
+
+        function pick(obj, ...keys) {
+            for (const k of keys) {
+                if (obj && obj[k] !== undefined && obj[k] !== null && obj[k] !== '') return obj[k];
+            }
+            return null;
+        }
+
+        function clampPage() {
+            const tp = Math.max(1, Number(totalPages || 1));
+            currentPage = Math.min(Math.max(1, currentPage), tp);
+            return tp;
+        }
+
+        function buildOrdersUrl() {
+            const params = new URLSearchParams();
+            if (currentStatus) params.set('status', currentStatus);
+            if (currentQuery) params.set('q', currentQuery);
+
+            // Server-side pagination (0-based page index on backend)
+            params.set('page', String(Math.max(0, (currentPage || 1) - 1)));
+            params.set('size', String(currentPageSize || 20));
+
+            const qs = params.toString();
+            return qs ? `${API_BASE_URL}?${qs}` : `${API_BASE_URL}`;
+        }
+
+        function renderPagination() {
+            const headerTotal = Number(totalCount);
+            const bodyTotal = Array.isArray(allOrders) ? allOrders.length : 0;
+            const total = headerTotal > 0 ? headerTotal : bodyTotal;
+            const totalPages = clampPage();
+            const pageInfo = document.getElementById('pageInfo');
+            const prevBtn = document.getElementById('prevPageBtn');
+            const nextBtn = document.getElementById('nextPageBtn');
+            const meta = document.getElementById('ordersMeta');
+
+            const shown = Array.isArray(allOrders) ? allOrders.length : 0;
+
+            const from = total === 0 ? 0 : (currentPage - 1) * currentPageSize + 1;
+            const to = total === 0 ? 0 : Math.min(total, (currentPage - 1) * currentPageSize + (allOrders?.length || 0));
+
+            if (pageInfo) pageInfo.textContent = `Trang ${currentPage}/${totalPages}`;
+            if (meta) meta.textContent = total === 0 ? 'Hiển thị 0 / 0 đơn' : `Hiển thị ${shown} / ${total} đơn`;
+            if (prevBtn) prevBtn.disabled = currentPage <= 1;
+            if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
+        }
+
+        function renderOrdersTable() {
+            const tbody = document.getElementById('ordersBody');
+            tbody.innerHTML = '';
+            ordersById = Object.create(null);
+
+            if (!allOrders || allOrders.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-box">Không có đơn hàng.</td></tr>';
+                renderPagination();
+                return;
+            }
+
+            allOrders.forEach(order => {
+                const row = document.createElement('tr');
+                const currentRowStatus = safeUpper(order.status || '');
+                if (order && order.id !== undefined && order.id !== null) {
+                    ordersById[String(order.id)] = order;
+                }
+                row.innerHTML = `
+                    <td><strong>${escapeHtml(order.invoiceNumber || order.orderNumber || order.id)}</strong></td>
+                    <td>${escapeHtml(order.customerName || '—')}</td>
+                    <td>${formatCurrency(order.totalAmount)}</td>
+                    <td>${escapeHtml(order.status || '—')}</td>
+                    <td>
+                        <div class="row-actions">
+                            <button class="action-btn sm" onclick="viewOrder(${order.id})" type="button">Xem</button>
+                            <select class="mini-select" aria-label="Trạng thái" onchange="updateOrderStatus(${order.id}, this.value, this)">
+                                ${getStatusOptionsHtml(currentRowStatus || 'PENDING')}
+                            </select>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            renderPagination();
+        }
+
+        async function fetchOrders() {
+            const tbody = document.getElementById('ordersBody');
+            try {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-box">Đang tải dữ liệu...</td></tr>';
+
+                const url = buildOrdersUrl();
+
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const headerTotalCount = Number(response.headers.get('X-Total-Count'));
+                const headerTotalPages = Number(response.headers.get('X-Total-Pages'));
+
+                allOrders = await response.json();
+                const bodyCount = Array.isArray(allOrders) ? allOrders.length : 0;
+
+                // Fallback when backend doesn't return pagination headers
+                totalCount = (Number.isFinite(headerTotalCount) && headerTotalCount > 0) ? headerTotalCount : bodyCount;
+                totalPages = (Number.isFinite(headerTotalPages) && headerTotalPages > 0)
+                    ? headerTotalPages
+                    : Math.max(1, Math.ceil((totalCount || 0) / (currentPageSize || 20)));
+
+                renderOrdersTable();
+            } catch (error) {
+                console.error('Error loading orders:', error);
+                tbody.innerHTML = `<tr><td colspan="5" class="empty-box" style="color: red;">
+                    Lỗi khi tải dữ liệu: ${escapeHtml(error.message)}<br>
+                    <small>Đảm bảo AdminOrderService đang chạy và gateway route hoạt động: ${escapeHtml(API_BASE_URL)}</small>
+                </td></tr>`;
+                allOrders = [];
+                totalCount = 0;
+                totalPages = 1;
+                renderPagination();
+            }
+        }
+
+        function goPrevPage() {
+            currentPage = Math.max(1, currentPage - 1);
+            fetchOrders();
+        }
+
+        function goNextPage() {
+            const tp = Math.max(1, Number(totalPages || 1));
+            currentPage = Math.min(tp, currentPage + 1);
+            fetchOrders();
+        }
+
+        async function viewOrder(id) {
+            const cached = ordersById[String(id)];
+            if (cached) {
+                openOrderModal(cached, { loading: true });
+            }
+            try {
+                const response = await fetch(`${API_BASE_URL}/${id}`);
+                if (!response.ok) {
+                    throw new Error('Không thể tải chi tiết đơn hàng');
+                }
+                const order = await response.json();
+
+                openOrderModal(order, { loading: false });
+            } catch (error) {
+                console.error('Error loading order:', error);
+                // Still keep modal open with cached data (if any)
+                if (!cached) {
+                    alert('Lỗi: ' + error.message);
+                } else {
+                    const hint = document.getElementById('orderModalHint');
+                    if (hint) hint.textContent = 'Không tải được chi tiết từ API, đang hiển thị dữ liệu tóm tắt từ danh sách.';
+                }
+            }
+        }
+
+        let currentModalOrderId = null;
+
+        function openOrderModal(order, opts = {}) {
+            currentModalOrderId = order?.id ?? null;
+
+            const backdrop = document.getElementById('orderModalBackdrop');
+            const title = document.getElementById('orderModalTitle');
+            const content = document.getElementById('orderModalContent');
+            const statusSelect = document.getElementById('orderModalStatus');
+            const hint = document.getElementById('orderModalHint');
+
+            const displayCode = pick(order, 'invoiceNumber', 'invoice_number', 'orderNumber', 'order_number', 'id');
+            const customerName = pick(order, 'customerName', 'customer_name', 'customer', 'fullName', 'full_name');
+            const totalAmount = pick(order, 'totalAmount', 'total_amount', 'amount', 'total');
+            const status = pick(order, 'status');
+            const createdAt = pick(order, 'createdAt', 'created_at', 'createdDate', 'created_date', 'time');
+            const updatedAt = pick(order, 'updatedAt', 'updated_at', 'lastUpdated', 'last_updated');
+            const paymentMethod = pick(order, 'paymentMethod', 'payment_method', 'payment');
+            const shippingAddress = pick(order, 'shippingAddress', 'shipping_address', 'address');
+            const note = pick(order, 'note', 'notes', 'remark', 'description');
+
+            const items = pick(order, 'items', 'orderItems', 'order_items') || [];
+            const payments = pick(order, 'payments', 'paymentRecords', 'payment_records') || [];
+
+            const itemsHtml = Array.isArray(items) && items.length
+                ? `
+                    <table class="modal-table" aria-label="Danh sách sản phẩm">
+                        <thead>
+                            <tr>
+                                <th>Sản phẩm</th>
+                                <th class="mono">SKU</th>
+                                <th>SL</th>
+                                <th>Đơn giá</th>
+                                <th>Thành tiền</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${items.map(it => {
+                                const name = pick(it, 'productName', 'product_name', 'name') || '—';
+                                const sku = pick(it, 'sku') || '—';
+                                const qty = pick(it, 'quantity', 'qty') ?? 0;
+                                const price = pick(it, 'price', 'unitPrice', 'unit_price');
+                                const lineTotal = pick(it, 'lineTotal', 'line_total');
+                                return `
+                                    <tr>
+                                        <td>${escapeHtml(name)}</td>
+                                        <td class="mono">${escapeHtml(sku)}</td>
+                                        <td>${escapeHtml(qty)}</td>
+                                        <td>${escapeHtml(formatCurrency(price))}</td>
+                                        <td>${escapeHtml(formatCurrency(lineTotal ?? (Number(price || 0) * Number(qty || 0))))}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `
+                : `<div class="muted">Không có sản phẩm trong đơn (items rỗng).</div>`;
+
+            const paymentsHtml = Array.isArray(payments) && payments.length
+                ? `
+                    <table class="modal-table" aria-label="Thanh toán">
+                        <thead>
+                            <tr>
+                                <th>Phương thức</th>
+                                <th>Số tiền</th>
+                                <th>Trạng thái</th>
+                                <th>Thời gian</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${payments.map(p => {
+                                const method = pick(p, 'method', 'paymentMethod', 'payment_method') || '—';
+                                const amount = pick(p, 'amount', 'paidAmount', 'paid_amount');
+                                const pStatus = pick(p, 'status') || '—';
+                                const paidAt = pick(p, 'paidAt', 'paid_at', 'time');
+                                return `
+                                    <tr>
+                                        <td>${escapeHtml(method)}</td>
+                                        <td>${escapeHtml(formatCurrency(amount))}</td>
+                                        <td>${escapeHtml(pStatus)}</td>
+                                        <td>${escapeHtml(formatDateTime(paidAt))}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `
+                : `<div class="muted">Chưa có thông tin thanh toán (payments rỗng).</div>`;
+
+            title.textContent = `Đơn hàng #${displayCode}`;
+            content.innerHTML = `
+                <div class="kv-key">Mã đơn</div><div class="kv-val">${escapeHtml(displayCode)}</div>
+                <div class="kv-key">Khách hàng</div><div class="kv-val">${escapeHtml(customerName || '—')}</div>
+                <div class="kv-key">Tổng tiền</div><div class="kv-val">${escapeHtml(formatCurrency(totalAmount))}</div>
+                <div class="kv-key">Trạng thái</div><div class="kv-val">${escapeHtml(status || '—')}</div>
+                <div class="kv-key">Thanh toán</div><div class="kv-val">${escapeHtml(paymentMethod || '—')}</div>
+                <div class="kv-key">Địa chỉ</div><div class="kv-val">${escapeHtml(shippingAddress || '—')}</div>
+                <div class="kv-key">Ghi chú</div><div class="kv-val">${escapeHtml(note || '—')}</div>
+                <div class="kv-key">Tạo lúc</div><div class="kv-val">${escapeHtml(formatDateTime(createdAt))}</div>
+                <div class="kv-key">Cập nhật</div><div class="kv-val">${escapeHtml(formatDateTime(updatedAt))}</div>
+
+                <div class="modal-section" style="grid-column: 1 / -1;">
+                    <div class="modal-section-title">Sản phẩm đã mua</div>
+                    ${itemsHtml}
+                </div>
+
+                <div class="modal-section" style="grid-column: 1 / -1;">
+                    <div class="modal-section-title">Thanh toán</div>
+                    ${paymentsHtml}
+                </div>
+            `;
+
+            statusSelect.innerHTML = getStatusOptionsHtml(status || 'PENDING');
+            hint.textContent = opts.loading
+                ? 'Đang tải chi tiết đơn hàng từ API...'
+                : 'Cập nhật trạng thái sẽ gọi API qua Gateway/Nginx.';
+
+            backdrop.classList.add('open');
+            backdrop.setAttribute('aria-hidden', 'false');
+        }
+
+        function closeOrderModal(evt) {
+            if (evt && evt.target && evt.target.id !== 'orderModalBackdrop') {
+                return;
+            }
+            const backdrop = document.getElementById('orderModalBackdrop');
+            backdrop.classList.remove('open');
+            backdrop.setAttribute('aria-hidden', 'true');
+            currentModalOrderId = null;
+        }
+
+        async function updateOrderStatus(orderId, newStatus, selectEl) {
+            if (!orderId) return;
+            try {
+                if (selectEl) selectEl.disabled = true;
+                const response = await fetch(`${API_BASE_URL}/${orderId}/status`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    throw new Error(`Không thể cập nhật trạng thái (HTTP ${response.status}) ${text}`);
+                }
+                await fetchOrders();
+            } catch (e) {
+                console.error('updateOrderStatus failed:', e);
+                alert('Lỗi cập nhật trạng thái: ' + e.message);
+            } finally {
+                if (selectEl) selectEl.disabled = false;
+            }
+        }
+
+        async function updateOrderStatusFromModal() {
+            if (!currentModalOrderId) return;
+            const btn = document.getElementById('orderModalUpdateBtn');
+            const status = document.getElementById('orderModalStatus')?.value;
+            try {
+                setButtonLoading(btn, true, 'Đang cập nhật...');
+                const response = await fetch(`${API_BASE_URL}/${currentModalOrderId}/status`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status })
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    throw new Error(`Không thể cập nhật trạng thái (HTTP ${response.status}) ${text}`);
+                }
+                const updated = await response.json().catch(() => null);
+                if (updated) {
+                    openOrderModal(updated);
+                }
+                await fetchOrders();
+            } catch (e) {
+                console.error('updateOrderStatusFromModal failed:', e);
+                alert('Lỗi cập nhật trạng thái: ' + e.message);
+            } finally {
+                setButtonLoading(btn, false);
+            }
+        }
+
+        window.addEventListener('load', () => {
+            adminLayout.enforceAuth();
+            adminLayout.renderHeader();
+            adminLayout.setActiveNav();
+
+            const searchInput = document.getElementById('searchInput');
+            const statusFilter = document.getElementById('statusFilter');
+            const pageSizeEl = document.getElementById('pageSize');
+
+            let searchTimeout;
+            searchInput.addEventListener('input', () => {
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    currentQuery = searchInput.value.trim();
+                    fetchOrders();
+                }, 400);
+            });
+
+            statusFilter.addEventListener('change', () => {
+                currentStatus = statusFilter.value;
+                currentPage = 1;
+                fetchOrders();
+            });
+
+            pageSizeEl.addEventListener('change', () => {
+                const val = parseInt(pageSizeEl.value, 10);
+                currentPageSize = Number.isFinite(val) && val > 0 ? val : 20;
+                currentPage = 1;
+                fetchOrders();
+            });
+
+            // Init state
+            currentQuery = '';
+            currentStatus = '';
+            currentPage = 1;
+            currentPageSize = parseInt(pageSizeEl.value, 10) || 20;
+
+            fetchOrders();
+        });
+    </script>
+</body>
+</html>

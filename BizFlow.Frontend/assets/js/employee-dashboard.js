@@ -1,0 +1,4434 @@
+const API_BASE = resolveApiBase();
+
+let products = [];
+let cart = [];
+let selectedCustomer = null;
+let selectedEmployee = null;
+let currentCategory = 'all';
+let topSearchTerm = '';
+let bottomSearchTerm = '';
+let currentSort = 'name';
+let customersLoaded = false;
+let customers = [];
+let customerSearchTerm = '';
+let currentPaymentMethod = 'CASH';
+let invoices = [];
+let savedInvoices = [];
+let activeInvoiceId = null;
+let invoiceSequence = 1;
+let cityCache = [];
+let districtCache = [];
+let wardCache = [];
+let employeesLoaded = false;
+let employees = [];
+let exchangeDraft = null;
+let promotionIndex = null;
+let activeInventoryProductId = null;
+let allPromotions = []; // Luu t?t c? khuy?n m×i cho AI combo
+let isAnalyzingCombo = false; // Flag d? tr×nh v×ng l?p v× h?n
+let activeCustomerDetailId = null;
+let editingCustomerId = null;
+const customerOrderCache = new Map();
+const TIER_DISCOUNT_BY_100 = {
+    DONG: 10000,
+    BAC: 12000,
+    VANG: 15000,
+    BACH_KIM: 22000,
+    KIM_CUONG: 30000
+};
+
+const PRODUCT_ICON = `
+    <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
+        <path d="M6 8h12l-1.2 11H7.2L6 8Z" />
+        <path d="M9 8V6a3 3 0 0 1 6 0v2" />
+    </svg>
+`;
+const PRODUCT_IMAGE_LIST_URL = `${API_BASE}/product-images`;
+const PRODUCT_IMAGE_LIST_FALLBACK_URL = '/assets/data/product-image-files.json';
+const productImageMap = new Map();
+const productImageEntries = [];
+let productImageMapReady = false;
+const POINTS_EARN_RATE_VND = 1000;
+const EARN_POLICY_POINTS = 100;
+
+const FALLBACK_PRODUCTS = [
+    {
+        id: 1,
+        name: 'Sữa tươi nguyên kem',
+        code: 'SGL330',
+        barcode: '8931234567012',
+        price: 15000,
+        unit: 'lon',
+        stock: 120,
+        description: 'Sữa tươi tiệt trùng 330ml'
+    },
+    {
+        id: 2,
+        name: 'Gạo thơm đóng gói',
+        code: 'CQ-DY160',
+        barcode: '8931234567029',
+        price: 18000,
+        unit: 'gói',
+        stock: 60,
+        description: 'Gạo thơm 1kg'
+    },
+    {
+        id: 3,
+        name: 'Cà phê hòa tan',
+        code: 'CC330',
+        barcode: '8931234567036',
+        price: 10000,
+        unit: 'lon',
+        stock: 200,
+        description: 'Cà phê sữa 330ml'
+    },
+    {
+        id: 4,
+        name: 'Nước ngọt có ga',
+        code: 'NGC240',
+        barcode: '8931234567043',
+        price: 12000,
+        unit: 'lon',
+        stock: 180,
+        description: 'Lon 240ml'
+    },
+    {
+        id: 5,
+        name: 'Bánh quy bơ',
+        code: 'BQB120',
+        barcode: '8931234567050',
+        price: 22000,
+        unit: 'hộp',
+        stock: 45,
+        description: 'Bánh quy bơ 120g'
+    },
+    {
+        id: 6,
+        name: 'Mì ly ăn liền',
+        code: 'MLY105',
+        barcode: '8931234567067',
+        price: 14000,
+        unit: 'ly',
+        stock: 90,
+        description: 'Mì ly 105g'
+    }
+];
+
+window.addEventListener('DOMContentLoaded', async () => {
+    checkAuth();
+    loadUserInfo();
+    await loadCurrentEmployee();
+    fixPaymentPanelText();
+    selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+    const selectedCustomerLabel = document.getElementById('selectedCustomer');
+    if (selectedCustomerLabel) {
+        selectedCustomerLabel.textContent = 'Khách lẻ';
+    }
+    setupEventListeners();
+    setupCustomerModal();
+    setupProductDetailModal();
+    setupInventoryModal();
+    setupCustomerDetailModal();
+    setupEmployeeSelector();
+    setupAppMenuModal();
+    setupInvoiceModal();
+    toggleCashPanel(true);
+    initInvoices();
+
+    document.getElementById('productsGrid').innerHTML =
+        '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
+
+    await Promise.all([loadProductImageMap(), loadProducts()]);
+    applyExchangeDraft();
+
+    const customerSearchInput = document.getElementById('customerSearch');
+    customerSearchInput?.addEventListener('focus', () => {
+        if (customerSearchInput.classList.contains('has-selection')) {
+            return;
+        }
+        const customerList = document.getElementById('customerList');
+        if (customerList) {
+            customerList.style.display = 'block';
+        }
+        if (!customersLoaded) {
+            loadCustomers().then(() => applyCustomerFilter());
+            return;
+        }
+        applyCustomerFilter();
+    });
+});
+
+function fixPaymentPanelText() {
+    const cashPanel = document.getElementById('cashPanel');
+    if (cashPanel) {
+        const rows = cashPanel.querySelectorAll('.summary-row');
+        const cashLabel = rows[0]?.querySelector('span');
+        const changeLabel = rows[1]?.querySelector('span');
+        if (cashLabel) cashLabel.textContent = 'Ti\u1ec1n kh\u00e1ch \u0111\u01b0a';
+        if (changeLabel) changeLabel.textContent = 'Tr\u1ea3 l\u1ea1i';
+    }
+
+    const noteLabel = document.querySelector('label[for=\"paymentNote\"]');
+    if (noteLabel) noteLabel.textContent = 'Ghi ch\u00fa thanh to\u00e1n';
+    const noteInput = document.getElementById('paymentNote');
+    if (noteInput) noteInput.placeholder = 'Nh\u1eadp ghi ch\u00fa...';
+
+    const saveBtn = document.getElementById('saveBillBtn');
+    if (saveBtn) saveBtn.textContent = 'L\u01b0u t\u1ea1m (F10)';
+    const checkoutBtn = document.getElementById('checkoutBtn');
+    if (checkoutBtn) checkoutBtn.textContent = 'Thu ti\u1ec1n (F9)';
+}
+
+function applyExchangeDraft() {
+    const raw = sessionStorage.getItem('exchangeDraft');
+    if (!raw) return;
+    try {
+        exchangeDraft = JSON.parse(raw);
+    } catch (err) {
+        console.error('Invalid exchange draft', err);
+        sessionStorage.removeItem('exchangeDraft');
+        exchangeDraft = null;
+        return;
+    }
+    if (!exchangeDraft || !Array.isArray(exchangeDraft.items) || exchangeDraft.items.length === 0) {
+        return;
+    }
+
+    cart = exchangeDraft.items.map(item => ({
+        productId: item.productId,
+        productName: item.productName,
+        productPrice: Number(item.price) || 0,
+        quantity: -Math.abs(Number(item.quantity) || 0),
+        productCode: item.productCode || '',
+        unit: item.unit || '',
+        stock: 1,
+        isReturnItem: true
+    })).filter(item => item.quantity !== 0);
+
+    if (exchangeDraft.customerId) {
+        selectedCustomer = {
+            id: exchangeDraft.customerId,
+            name: exchangeDraft.customerName || 'Kh×ch h×ng',
+            phone: exchangeDraft.customerPhone || '-',
+            totalPoints: 0,
+            monthlyPoints: 0,
+            tier: ''
+        };
+        const searchInput = document.getElementById('customerSearch');
+        if (searchInput) {
+            searchInput.value = selectedCustomer.name || selectedCustomer.phone || '';
+            searchInput.classList.add('has-selection');
+            searchInput.readOnly = true;
+        }
+        const addBtn = document.getElementById('addCustomerBtn');
+        if (addBtn) {
+            addBtn.style.display = 'none';
+        }
+        const clearBtn = document.getElementById('clearCustomerBtn');
+        if (clearBtn) {
+            clearBtn.style.display = 'inline-flex';
+        }
+    }
+
+    renderCart();
+    updateTotal();
+    sessionStorage.removeItem('exchangeDraft');
+}
+
+function resolveApiBase() {
+    const configured = window.API_BASE_URL || window.API_BASE;
+    if (configured) {
+        return configured.replace(/\/$/, '');
+    }
+
+    if (window.location.protocol === 'file:') {
+        return 'http://localhost:8000/api';
+    }
+
+    if (['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port !== '8080') {
+        return '/api';
+    }
+
+    return `${window.location.origin}/api`;
+}
+
+function setupAppMenuModal() {
+    const modal = document.getElementById('appMenuModal');
+    const openBtn = document.getElementById('appMenuBtn');
+    const closeBtn = document.getElementById('closeAppMenu');
+    if (!modal || !openBtn || !closeBtn) return;
+    const menuGrid = modal.querySelector('.app-menu-grid');
+
+    openBtn.addEventListener('click', () => {
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+    });
+
+    closeBtn.addEventListener('click', () => {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+    });
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.classList.remove('show');
+            modal.setAttribute('aria-hidden', 'true');
+        }
+    });
+
+    menuGrid?.addEventListener('click', (e) => {
+        const tile = e.target.closest('.app-tile[data-app]');
+        if (!tile) return;
+        const target = tile.dataset.app;
+        const route = resolveAppRoute(target);
+        if (route) {
+            window.location.href = route;
+        }
+    });
+}
+
+function resolveAppRoute(target) {
+    switch (target) {
+        case 'pos':
+            return '/pages/employee-dashboard.html';
+        case 'promotions':
+            return '/pages/promotions.html';
+        case 'orders':
+            return '/pages/order-list.html';
+        case 'invoices':
+            return '/pages/invoice-list.html';
+        case 'online-orders':
+            return '/pages/online-orders.html';
+        case 'returns':
+            return '/pages/return-orders.html';
+        case 'transfers':
+            return '/pages/transfer-requests.html';
+        case 'topup':
+            return '/pages/topup-wallet.html';
+        case 'cashflow':
+            return '/pages/cashflow.html';
+        case 'secondary':
+            return '/pages/secondary-screen.html';
+        case 'print':
+            return '/pages/print-templates.html';
+        case 'daily-report':
+            return '/pages/daily-report.html';
+        case 'access-log':
+            return '/pages/access-log.html';
+        case 'management':
+            return '/pages/management.html';
+        case 'guide':
+            return '/pages/guide.html';
+        case 'intro':
+            return '/pages/introduction.html';
+        default:
+            return '';
+    }
+}
+
+function checkAuth() {
+    const token = sessionStorage.getItem('accessToken');
+    const role = sessionStorage.getItem('role');
+
+    if (!token || role !== 'EMPLOYEE') {
+        window.location.href = '/pages/login.html';
+    }
+}
+
+function loadUserInfo() {
+    const username = sessionStorage.getItem('username');
+    const userInitial = (username ? username[0] : 'E').toUpperCase();
+
+    document.getElementById('userInitial').textContent = userInitial;
+    document.getElementById('userNameDropdown').textContent = username || 'Nhân viên';
+}
+
+async function loadCurrentEmployee() {
+    const userId = sessionStorage.getItem('userId');
+    if (!userId) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/users/${userId}`, {
+            headers: {
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+            }
+        });
+
+        if (!res.ok) {
+            if (res.status === 401) {
+                sessionStorage.clear();
+                window.location.href = '/pages/login.html';
+                return;
+            }
+            throw new Error('Không tải được thông tin nhân viên');
+        }
+
+        const data = await res.json();
+        selectedEmployee = {
+            id: data.id,
+            username: data.username,
+            name: data.fullName || data.username
+        };
+
+        const employeeNameEl = document.getElementById('selectedEmployeeName');
+        if (employeeNameEl) {
+            employeeNameEl.textContent = selectedEmployee.name || selectedEmployee.username;
+        }
+
+        const userNameDropdown = document.getElementById('userNameDropdown');
+        if (userNameDropdown) {
+            userNameDropdown.textContent = data.username || data.fullName || 'Nhân viên';
+        }
+
+        const userInitialEl = document.getElementById('userInitial');
+        if (userInitialEl) {
+            const initial = (data.fullName || data.username || 'E')[0]?.toUpperCase() || 'E';
+            userInitialEl.textContent = initial;
+        }
+    } catch (err) {
+    }
+}
+
+async function loadProducts() {
+    try {
+        // Cache-busting: thêm timestamp để luôn lấy data mới nhất
+        const timestamp = Date.now();
+        const response = await fetch(`${API_BASE}/inventory/shelves?_t=${timestamp}`, {
+            headers: { 
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}`,
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache'
+            }
+        });
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                sessionStorage.clear();
+                window.location.href = '/pages/login.html';
+                return;
+            }
+            throw new Error('Failed to load products');
+        }
+
+        const shelvesData = await response.json();
+        
+        console.log('[loadProducts] Raw shelves data:', shelvesData);
+        
+        // CHỈ map những sản phẩm có quantity > 0 (đang thực sự bán)
+        products = shelvesData
+            .filter(shelf => shelf.quantity > 0)
+            .map(shelf => ({
+                id: shelf.productId,
+                name: shelf.productName,
+                code: shelf.productCode,
+                barcode: shelf.productCode,
+                price: shelf.price || 0,
+                stock: shelf.quantity,
+                categoryId: shelf.categoryId,
+                unit: shelf.unit || 'cái',
+                status: 'active'
+            }));
+        
+        console.log('[loadProducts] Loaded from shelves (quantity > 0):', products.length);
+        console.log('[loadProducts] Products:', products.map(p => `${p.code} (${p.name}) - qty: ${p.stock}`));
+        
+        if (products.length === 0) {
+            console.warn('[loadProducts] No products on shelves with quantity > 0');
+            products = [];
+        }
+        
+        await loadPromotionIndex();
+        filterProducts();
+    } catch (err) {
+        console.error('[loadProducts] Error:', err);
+        products = [];
+        filterProducts();
+    }
+}
+
+async function loadProductImageMap() {
+    if (productImageMapReady) return;
+    productImageMapReady = true;
+    try {
+        const files = await fetchProductImageList();
+        if (!Array.isArray(files)) {
+            return;
+        }
+        files.forEach((filePath) => {
+            if (!filePath || typeof filePath !== 'string') return;
+            const filename = filePath.split('/').pop() || '';
+            const baseName = filename.replace(/\.[^.]+$/, '');
+            const key = normalizeProductKey(baseName);
+            if (!key) return;
+            if (!productImageMap.has(key)) {
+                productImageMap.set(key, filePath);
+            }
+            productImageEntries.push({ key, path: filePath });
+        });
+    } catch (err) {
+    }
+}
+
+async function fetchProductImageList() {
+    const token = sessionStorage.getItem('accessToken');
+    const candidates = [
+        {
+            url: PRODUCT_IMAGE_LIST_URL,
+            options: {
+                cache: 'no-store',
+                headers: token ? { 'Authorization': `Bearer ${token}` } : undefined
+            }
+        },
+        {
+            url: PRODUCT_IMAGE_LIST_FALLBACK_URL,
+            options: { cache: 'no-store' }
+        }
+    ];
+
+    const merged = [];
+    const seen = new Set();
+
+    for (const candidate of candidates) {
+        try {
+            const response = await fetch(candidate.url, candidate.options);
+            if (!response.ok) {
+                continue;
+            }
+            const data = await response.json();
+            if (!Array.isArray(data)) {
+                continue;
+            }
+            for (const entry of data) {
+                if (!entry || typeof entry !== 'string') continue;
+                if (seen.has(entry)) continue;
+                seen.add(entry);
+                merged.push(entry);
+            }
+        } catch (err) {
+        }
+    }
+
+    return merged.length > 0 ? merged : null;
+}
+
+function normalizeProductKey(value) {
+    return stripDiacritics((value || '').toString().trim().toLowerCase())
+        .replace(/[^a-z0-9]+/g, '');
+}
+
+function getProductImageSrc(product) {
+    if (!productImageMap || productImageMap.size === 0) return '';
+    const nameKey = normalizeProductKey(product?.name || '');
+    if (!nameKey) return '';
+
+    if (productImageMap.has(nameKey)) {
+        return productImageMap.get(nameKey);
+    }
+
+    // Fallback: try to match by containment (product name is a subset of filename or vice versa)
+    let bestMatch = null;
+    for (const entry of productImageEntries) {
+        if (!entry || !entry.key) continue;
+        if (entry.key.includes(nameKey) || nameKey.includes(entry.key)) {
+            if (!bestMatch || entry.key.length < bestMatch.key.length) {
+                bestMatch = entry;
+            }
+        }
+    }
+
+    return bestMatch ? bestMatch.path : '';
+}
+
+function buildProductImageMarkup(product) {
+    const imageSrc = getProductImageSrc(product);
+    if (!imageSrc) {
+        return PRODUCT_ICON;
+    }
+    const safeName = escapeHtml(product?.name || 'Sản phẩm');
+    return `<img src="${encodeURI(imageSrc)}" alt="${safeName}" loading="lazy" />`;
+}
+
+async function loadCustomers() {
+    if (customersLoaded) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/customers`, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
+        });
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                sessionStorage.clear();
+                window.location.href = '/pages/login.html';
+                return;
+            }
+            throw new Error('Failed to load customers');
+        }
+
+        const rawCustomers = await response.json();
+        customers = dedupeCustomers(rawCustomers);
+        applyCustomerFilter();
+        customersLoaded = true;
+    } catch (err) {
+    }
+}
+
+function renderCustomers(customers) {
+    const list = document.getElementById('customerList');
+    if (!list) return;
+
+    if (!customers || customers.length === 0) {
+        const emptyMessage = customerSearchTerm ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng';
+        list.innerHTML = `<div class="customer-empty">${emptyMessage}</div>`;
+        return;
+    }
+
+    const customersHtml = customers.map(c => {
+        const phone = c.phone || '-';
+        const secondary = c.email || c.address || '-';
+        const customerId = c.id ?? '';
+        return `
+        <div class="customer-item"
+            data-customer-id="${customerId}"
+            data-customer-name="${escapeHtml(c.name || '')}"
+            data-customer-phone="${escapeHtml(phone)}">
+            <div class="customer-info">
+                <p class="customer-name">
+                    <button type="button" class="customer-name-btn" data-customer-id="${customerId}" onclick="openCustomerDetailFromButton(event)">
+                        ${escapeHtml(c.name || 'Kh×ch h×ng')}
+                    </button>
+                </p>
+                <p class="customer-phone">${escapeHtml(phone)}</p>
+            </div>
+            <div class="customer-meta">
+                <span class="customer-phone">${escapeHtml(phone)}</span>
+                <span class="customer-sub">${escapeHtml(secondary)}</span>
+            </div>
+        </div>
+        `;
+    }).join('');
+
+    list.innerHTML = customersHtml || '<div class="customer-empty">Chua c× kh×ch h×ng</div>';
+}
+
+function applyCustomerFilter() {
+    const keyword = customerSearchTerm.trim().toLowerCase();
+    const searchInput = document.getElementById('customerSearch');
+    const list = document.getElementById('customerList');
+    if (searchInput?.classList.contains('has-selection')) {
+        if (list) {
+            list.style.display = 'none';
+        }
+        return;
+    }
+    if (list) {
+        list.style.display = 'block';
+    }
+    if (!keyword) {
+        renderCustomers(getSuggestedCustomers());
+        return;
+    }
+
+    const filtered = customers.filter(c => {
+        const name = (c.name || '').toLowerCase();
+        const phone = (c.phone || '').toLowerCase();
+        const email = (c.email || '').toLowerCase();
+        return name.includes(keyword) || phone.includes(keyword) || email.includes(keyword);
+    });
+
+    renderCustomers(filtered);
+}
+
+function getSuggestedCustomers() {
+    return customers.slice(0, 8);
+}
+
+function normalizeCustomerKey(customer) {
+    const phone = (customer.phone || '').replace(/\s+/g, '');
+    if (phone) return `phone:${phone}`;
+    return `id:${customer.id || Math.random()}`;
+}
+
+function dedupeCustomers(list) {
+    const seen = new Map();
+    (list || []).forEach(c => {
+        const key = normalizeCustomerKey(c);
+        if (!seen.has(key)) {
+            seen.set(key, c);
+        }
+    });
+    return Array.from(seen.values());
+}
+
+async function addToCart(productId, productName, productPrice) {
+    const qty = getCurrentQty();
+    const splitLine = document.getElementById('splitLine')?.checked;
+    const product = products.find(p => p.id === productId) || {};
+    const stock = getStockValue(product);
+    const basePrice = Number(product.price) || productPrice || 0;
+    
+    console.log('[addToCart] Input:', { productId, productName, productPrice, qty, basePrice, product });
+    
+    // Check if product has promotion
+    let effectivePrice = basePrice;
+    let promoId = null;
+    
+    if (promotionIndex && product.id != null) {
+        const promoInfo = promotionIndex.get(product.id);
+        console.log('[addToCart] promoInfo:', promoInfo);
+        
+        if (promoInfo?.promo) {
+            promoId = promoInfo.promo.id;
+            // For BUNDLE, must calculate with actual quantity
+            if (normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
+                effectivePrice = getPromoPrice(basePrice, promoInfo.promo, qty);
+                console.log('[addToCart] BUNDLE effectivePrice:', effectivePrice);
+            } else {
+                // For other promo types (PERCENT, FIXED), quantity doesn't matter
+                effectivePrice = getPromoPrice(basePrice, promoInfo.promo, 1);
+                console.log('[addToCart] Non-BUNDLE effectivePrice:', effectivePrice);
+            }
+        }
+    }
+    
+    const resolvedPrice = Number.isFinite(effectivePrice) ? effectivePrice : (productPrice || 0);
+    console.log('[addToCart] Final resolvedPrice:', resolvedPrice);
+
+    if (!splitLine) {
+        const existingItem = cart.find(item => item.productId === productId && !item.isFreeGift);
+        if (existingItem) {
+            const newQty = existingItem.quantity + qty;
+            existingItem.quantity = newQty;
+            existingItem.stock = stock;
+            
+            // Recalculate price for bundle promos
+            if (promotionIndex && product.id != null) {
+                const promoInfo = promotionIndex.get(product.id);
+                if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
+                    existingItem.productPrice = getPromoPrice(basePrice, promoInfo.promo, newQty);
+                } else {
+                    existingItem.productPrice = resolvedPrice;
+                }
+                existingItem.promoId = promoInfo?.promo?.id || null;
+            } else {
+                existingItem.productPrice = resolvedPrice;
+                existingItem.promoId = null;
+            }
+        } else {
+            cart.push({
+                productId,
+                productName,
+                productPrice: resolvedPrice,
+                quantity: qty,
+                productCode: product.code || product.barcode || '',
+                unit: product.unit || '',
+                stock,
+                promoId: promoId,
+                isFreeGift: false
+            });
+        }
+    } else {
+        cart.push({
+            productId,
+            productName,
+            productPrice: resolvedPrice,
+            quantity: qty,
+            productCode: product.code || product.barcode || '',
+            unit: product.unit || '',
+            stock,
+            promoId: promoId,
+            isFreeGift: false
+        });
+    }
+
+    renderCart();
+    updateTotal();
+    
+    // Ph×n t×ch combo sau khi th×m s?n ph?m
+    await analyzeCartForCombo();
+
+    const qtyInput = document.getElementById('qtyInput');
+    if (qtyInput) {
+        qtyInput.value = '1';
+        if (isToolbarSearchOpen()) {
+            renderToolbarSearchResults(document.getElementById('searchInput').value);
+        }
+    }
+}
+
+function clearCart(resetCustomer = true) {
+    cart = [];
+    renderCart();
+    updateTotal();
+    if (resetCustomer) {
+        clearSelectedCustomer();
+    }
+}
+
+async function createOrder(isPaid) {
+    if (cart.length === 0) {
+        showPopup('Giỏ hàng trống!', { type: 'error' });
+        return;
+    }
+    // Bỏ qua gift items khi check tồn kho (vì gift items có stock = 0)
+    const outOfStock = cart.find(item => !item.isReturnItem && !item.isFreeGift && (!Number.isFinite(Number(item.stock)) || Number(item.stock) < Number(item.quantity)));
+    if (outOfStock) {
+        showPopup('Có sản phẩm hết hàng. Vui lòng kiểm tra số lượng tồn.', { type: 'error' });
+        return;
+    }
+
+    const userId = parseInt(sessionStorage.getItem('userId'), 10) || null;
+    const customerId = selectedCustomer && selectedCustomer.id > 0 ? selectedCustomer.id : null;
+    const payload = {
+        userId,
+        customerId,
+        paid: isPaid,
+        // Always send the chosen payment method so backend can create pending transfer payments with tokens
+        paymentMethod: currentPaymentMethod,
+        usePoints: isPaid ? shouldUseMemberPoints() : false,
+        orderType: exchangeDraft ? 'EXCHANGE' : null,
+        originalOrderId: exchangeDraft?.originalOrderId || null,
+        items: cart.map(item => ({
+            productId: item.productId,
+            quantity: item.quantity
+        }))
+    };
+
+    try {
+        const res = await fetch(`${API_BASE}/orders`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+            const message = await res.text();
+            showPopup(message || 'Không thể tạo đơn hàng.', { type: 'error' });
+            return;
+        }
+
+        const data = await res.json();
+        const receiptData = buildReceiptData(data, { usePoints: isPaid && shouldUseMemberPoints() });
+        const invoiceCode = receiptData.invoiceNumber || '-';
+        if (isPaid) {
+            await openInvoiceModal(receiptData);
+            applyLocalStockAfterSale();
+        }
+        clearCart(true);
+        if (exchangeDraft) {
+            sessionStorage.removeItem('exchangeDraft');
+            exchangeDraft = null;
+        }
+        saveActiveInvoiceState();
+        return data;
+    } catch (err) {
+        showPopup('Lỗi kết nối khi tạo đơn hàng.', { type: 'error' });
+    }
+}
+
+function showTransferQrModal(orderId, amount, token) {
+    const modal = document.getElementById('transferQrModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    document.getElementById('transferOrderId').textContent = orderId;
+    document.getElementById('transferOrderIdSmall').textContent = orderId;
+    document.getElementById('transferAmount').textContent = formatPrice(amount);
+
+    // Ensure token is present (backend token preferred)
+    let displayToken = token;
+    if (displayToken) {
+        const tokenEl = document.getElementById('transferPaymentToken');
+        if (tokenEl) tokenEl.textContent = displayToken;
+    } else {
+        displayToken = 'SAMPLE-' + Math.random().toString(36).slice(2, 10).toUpperCase();
+        const tokenEl = document.getElementById('transferPaymentToken');
+        if (tokenEl) tokenEl.textContent = displayToken + ' (mã tượng trưng)';
+    }
+
+    const bankCode = 'VCB';
+    const account = '1021209511';
+    const accountName = 'BIZFLOW CO';
+
+    const payloadEl = document.getElementById('transferPayload');
+    if (payloadEl) {
+        payloadEl.textContent = `VietQR . ${bankCode} . ${account} . ${accountName} . ${formatPrice(amount)}`;
+    }
+
+    const bankLogos = {
+        VCB: 'https://img.vietqr.io/image/vietcombank-1021209511-compact.jpg'
+    };
+    const logoUrl = bankLogos[bankCode];
+    const logoEl = document.getElementById('transferBankLogo');
+    if (logoEl) {
+        if (logoUrl) {
+            logoEl.src = logoUrl;
+            logoEl.style.display = '';
+        } else {
+            logoEl.style.display = 'none';
+        }
+    }
+
+    const qrContainer = document.getElementById('qrCodeContainer');
+
+    const bankQuickId = 'VCB';
+    const template = 'compact';
+    const amountParam = Number.isFinite(Number(amount)) && amount > 0 ? `amount=${Math.round(amount)}` : '';
+    const addInfoParam = `addInfo=${encodeURIComponent('Thanh to×n don #' + orderId)}`;
+    const accountNameParam = `accountName=${encodeURIComponent(accountName)}`;
+    const qrQuicklinkBase = `https://img.vietqr.io/image/${bankQuickId}-${account}-${template}.png`;
+    const qrImgUrl = qrQuicklinkBase + (amountParam || addInfoParam || accountNameParam ? `?${[amountParam, addInfoParam, accountNameParam].filter(Boolean).join('&')}` : '');
+
+    if (qrContainer) {
+        qrContainer.innerHTML = '';
+        const img = document.createElement('img');
+        img.alt = 'VietQR';
+        img.width = 260;
+        img.height = 260;
+        img.style.maxWidth = '100%';
+        img.style.borderRadius = '8px';
+        img.src = qrImgUrl;
+
+        img.onload = () => {
+            qrContainer.innerHTML = '';
+            qrContainer.appendChild(img);
+        };
+
+        img.onerror = async () => {
+            qrContainer.innerHTML = '';
+            try {
+                const fallbackPayload = `VietQR|BANK:${bankCode}|ACC:${account}|NAME:${accountName}|AMOUNT:${formatPriceCompact(amount)}|ORDER:${orderId}|TOKEN:${displayToken}`;
+                if (window.QRCode) {
+                    new QRCode(qrContainer, { text: fallbackPayload, width: 260, height: 260 });
+                    const inner = qrContainer.querySelector('img,canvas');
+                    if (inner) inner.style.borderRadius = '8px';
+                } else {
+                    qrContainer.textContent = `Ma: ${displayToken}`;
+                }
+            } catch (e) {
+                qrContainer.textContent = `Ma: ${displayToken}`;
+            }
+        };
+
+        qrContainer.appendChild(img);
+    }
+
+    const downloadBtn = document.getElementById('downloadQrBtn');
+    if (downloadBtn) {
+        downloadBtn.onclick = async () => {
+            try {
+                const res = await fetch(qrImgUrl);
+                if (!res.ok) throw new Error('Failed to download QR image');
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `vietqr-order-${orderId}.png`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert('Không thể tải mã QR.');
+            }
+        };
+    }
+
+    // Copy token handler
+    const copyBtn = document.getElementById('copyTokenBtn');
+    if (copyBtn) {
+        copyBtn.onclick = async () => {
+            try {
+                await navigator.clipboard.writeText(displayToken);
+                alert('Đã sao chép mã thanh toán');
+            } catch (e) {
+                alert('Không thể sao chép mã.');
+            }
+        };
+    }
+}
+
+// Duplicate showTransferQrModal removed - using the enhanced implementation above.
+
+async function payOrder(orderId) {
+    try {
+        const token = document.getElementById('transferPaymentToken')?.textContent || null;
+        const body = { method: 'TRANSFER' };
+        if (token) body.token = token;
+
+        const res = await fetch(`${API_BASE}/orders/${orderId}/pay`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+            },
+            body: JSON.stringify(body)
+        });
+        if (!res.ok) {
+            const text = await res.text();
+            alert(text || 'Không thể xác nhận thanh toán.');
+            return;
+        }
+        alert('Đã thanh toán chuyển khoản được xác nhận.');
+        hideTransferQrModal();
+        clearCart(true);
+        saveActiveInvoiceState();
+    } catch (err) {
+        alert('Lỗi kết nối khi xác nhận thanh toán.');
+    }
+}
+
+function hideTransferQrModal() {
+    const modal = document.getElementById('transferQrModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+// Duplicate payOrder removed - using the token-aware implementation above.
+
+// wire modal buttons
+document.addEventListener('DOMContentLoaded', () => {
+    const confirmBtn = document.getElementById('transferConfirmBtn');
+    const closeBtn = document.getElementById('transferCloseBtn');
+    const cancelBtn = document.getElementById('transferCancelBtn');
+    if (confirmBtn) confirmBtn.addEventListener('click', async () => {
+        const orderId = document.getElementById('transferOrderId').textContent;
+        await payOrder(orderId);
+    });
+    if (closeBtn) closeBtn.addEventListener('click', hideTransferQrModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', hideTransferQrModal);
+});
+
+// Reload promotions khi quay lại trang để cập nhật trạng thái active/inactive
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        console.log('[visibilitychange] Page visible, reloading promotions...');
+        loadPromotionIndex(true); // forceRefresh = true
+    }
+});
+
+// Auto-refresh promotions mỗi 30 giây để sync với owner changes
+setInterval(() => {
+    console.log('[auto-refresh] Reloading promotions...');
+    loadPromotionIndex(true);
+}, 30000); // 30 seconds
+
+function setupInvoiceModal() {
+    const modal = document.getElementById('invoiceModal');
+    const closeBtn = document.getElementById('closeInvoiceModal');
+    const footerCloseBtn = document.getElementById('closeInvoiceBtn');
+    const printBtn = document.getElementById('printInvoiceBtn');
+    const printAltBtn = document.getElementById('printInvoiceBtnAlt');
+    if (!modal) return;
+
+    const close = () => closeInvoiceModal();
+    closeBtn?.addEventListener('click', close);
+    footerCloseBtn?.addEventListener('click', close);
+    printBtn?.addEventListener('click', () => printInvoiceReceipt());
+    printAltBtn?.addEventListener('click', () => printInvoiceReceipt());
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            close();
+        }
+    });
+}
+
+async function updateInvoiceReceipt(receiptData) {
+    if (!receiptData) return;
+    const promoMap = await loadPromotionIndex();
+    const itemsEl = document.getElementById('invoiceItems');
+    if (itemsEl) {
+        itemsEl.innerHTML = receiptData.items.map(item => `
+            <div class="receipt-item">
+                <span class="name">
+                    ${escapeHtml(item.name)}
+                    ${renderReceiptPromo(item.productId, promoMap)}
+                </span>
+                <span>${item.quantity}</span>
+                <span>${formatPrice(item.price)}</span>
+                <span>${formatPrice(item.total)}</span>
+            </div>
+        `).join('');
+    }
+
+    setText('invoiceCode', receiptData.invoiceNumber || '-');
+    setText('invoiceDate', formatDateTime(receiptData.createdAt));
+    setText('invoiceCashier', receiptData.cashier || '-');
+    setText('invoiceCustomer', receiptData.customerName || 'Khách lẻ');
+    setText('invoicePhone', receiptData.customerPhone || '-');
+    setText('invoiceMethod', mapPaymentMethod(receiptData.paymentMethod));
+    setText('invoiceSubtotal', formatPrice(receiptData.subtotal || 0));
+    setText('invoiceMemberDiscount', formatPrice(receiptData.memberDiscount || 0));
+    setText('invoicePointsUsed', formatCompactNumber(receiptData.pointsUsed || 0));
+    setText('invoiceTotal', formatPrice(receiptData.total || 0));
+    setText('invoiceCashReceived', formatPrice(receiptData.cashReceived || 0));
+    setText('invoiceChange', formatPrice(receiptData.change || 0));
+
+    const noteWrap = document.getElementById('invoiceNoteWrap');
+    const noteValue = receiptData.note || '';
+    setText('invoiceNote', noteValue || '-');
+    if (noteWrap) {
+        noteWrap.style.display = noteValue ? 'grid' : 'none';
+    }
+}
+
+async function openInvoiceModal(receiptData) {
+    const modal = document.getElementById('invoiceModal');
+    if (!modal || !receiptData) return;
+
+    await updateInvoiceReceipt(receiptData);
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function renderReceiptPromo(productId, promoMap) {
+    if (!productId || !promoMap) return '';
+    const info = promoMap.get(productId);
+    if (!info) return '';
+    return `<small class="receipt-promo">KM: ${escapeHtml(info.label)}</small>`;
+}
+
+function closeInvoiceModal() {
+    const modal = document.getElementById('invoiceModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.textContent = value;
+    }
+}
+
+function buildReceiptData(orderResponse, options = {}) {
+    const { usePoints = false } = options;
+    const subtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
+    const memberSummary = getMemberDiscountForTotal(subtotal);
+    const memberDiscount = usePoints ? memberSummary.discount : 0;
+    const total = Math.max(0, subtotal - memberDiscount);
+    const cashReceived = parseInt(document.getElementById('cashReceivedInput')?.value, 10) || 0;
+    const change = currentPaymentMethod === 'CASH' ? Math.max(0, cashReceived - total) : 0;
+
+    let invoiceNumber = orderResponse?.invoiceNumber || '';
+    if (!invoiceNumber && orderResponse?.orderId) {
+        invoiceNumber = `HD-${orderResponse.orderId}`;
+    }
+    if (!invoiceNumber) {
+        invoiceNumber = '-';
+    }
+
+    return {
+        invoiceNumber,
+        createdAt: new Date(),
+        customerName: selectedCustomer?.name || 'Khách lẻ',
+        customerPhone: selectedCustomer?.phone || '-',
+        cashier: selectedEmployee?.name || sessionStorage.getItem('username') || 'Nhân viên',
+        paymentMethod: currentPaymentMethod,
+        note: document.getElementById('paymentNote')?.value?.trim() || '',
+        subtotal,
+        memberDiscount,
+        pointsUsed: usePoints ? memberSummary.pointsUsed : 0,
+        total,
+        cashReceived,
+        change,
+        items: cart.map(item => ({
+            productId: item.productId,
+            name: item.productName || '-',
+            quantity: item.quantity || 0,
+            price: item.productPrice || 0,
+            total: (item.productPrice || 0) * (item.quantity || 0)
+        }))
+    };
+}
+
+function formatDateTime(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString('vi-VN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function mapPaymentMethod(method) {
+    switch (method) {
+        case 'CASH':
+            return 'Tiền mặt';
+        case 'TRANSFER':
+            return 'Chuyển khoản';
+        case 'CARD':
+            return 'Thẻ';
+        default:
+            return method || '-';
+    }
+}
+
+async function loadPromotionIndex(forceRefresh = false) {
+    if (promotionIndex && !forceRefresh) {
+        return promotionIndex;
+    }
+
+    console.log('[loadPromotionIndex] Loading promotions...', { forceRefresh });
+
+    const headers = { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` };
+
+    try {
+        const promoPromise = fetch(`${API_BASE}/v1/promotions`, { headers })
+            .then(res => (res.ok ? res.json() : []));
+        const productPromise = (products && products.length > 0)
+            ? Promise.resolve(products)
+            : fetch(`${API_BASE}/inventory/shelves`, { headers })
+                .then(res => {
+                    if (!res.ok) return [];
+                    return res.json();
+                })
+                .then(shelvesData => shelvesData.map(shelf => ({
+                    id: shelf.productId,
+                    name: shelf.productName,
+                    code: shelf.productCode,
+                    barcode: shelf.productCode,
+                    price: shelf.price || 0,
+                    stock: shelf.quantity,
+                    categoryId: shelf.categoryId,
+                    unit: shelf.unit || 'cái',
+                    status: 'active'
+                })));
+
+        const [promoList, productList] = await Promise.all([promoPromise, productPromise]);
+        
+        console.log('[loadPromotionIndex] Loaded promotions:', promoList.length);
+        
+        const activePromos = (promoList || []).filter(isPromotionActive);
+        
+        // Luu t?t c? promotions cho AI combo
+        allPromotions = activePromos;
+        console.log('[loadPromotionIndex] Saved allPromotions for AI:', allPromotions.length);
+        
+        promotionIndex = buildPromotionIndex(activePromos, productList || []);
+        
+        console.log('[loadPromotionIndex] Built index size:', promotionIndex.size);
+        
+        return promotionIndex;
+    } catch (err) {
+        console.error('[loadPromotionIndex] Error:', err);
+        promotionIndex = new Map();
+        allPromotions = [];
+        return promotionIndex;
+    }
+}
+
+function buildPromotionIndex(promos, productList) {
+    const productMap = new Map((productList || []).map((p) => [p.id, p]));
+    const targetMap = new Map();
+
+    (promos || []).forEach((promo) => {
+        const targetIds = new Set();
+        const targets = promo.targets || [];
+        const bundles = promo.bundleItems || [];
+
+        targets.forEach((target) => {
+            if (!target || target.targetId == null) return;
+            if (target.targetType === 'PRODUCT') {
+                targetIds.add(target.targetId);
+            }
+            if (target.targetType === 'CATEGORY') {
+                (productList || []).forEach((product) => {
+                    if (product.categoryId === target.targetId) {
+                        targetIds.add(product.id);
+                    }
+                });
+            }
+        });
+
+        bundles.forEach((item) => {
+            if (item?.productId != null) {
+                targetIds.add(item.productId);
+            }
+        });
+
+        targetIds.forEach((id) => {
+            if (!targetMap.has(id)) {
+                targetMap.set(id, []);
+            }
+            targetMap.get(id).push(promo);
+        });
+    });
+
+    const index = new Map();
+    targetMap.forEach((promoList, productId) => {
+        const product = productMap.get(productId);
+        if (!product) return;
+        const best = selectBestPromotion(product, promoList);
+        if (best?.promo) {
+            index.set(productId, {
+                promo: best.promo,
+                label: formatPromotionLabel(best.promo)
+            });
+        }
+    });
+
+    return index;
+}
+
+function selectBestPromotion(product, promos) {
+    const basePrice = Number(product?.price);
+    
+    // Prioritize BUNDLE promotions since they depend on quantity
+    const bundlePromo = (promos || []).find(p => normalizeDiscountType(p.discountType) === 'BUNDLE');
+    if (bundlePromo) {
+        console.log('[selectBestPromotion] Found BUNDLE promo, prioritizing it');
+        return { promo: bundlePromo, price: basePrice }; // Return base price, will recalc with quantity later
+    }
+    
+    // For other promo types, select best price
+    const candidates = (promos || []).map((promo) => {
+        const price = getPromoPrice(basePrice, promo);
+        return { promo, price };
+    });
+
+    const priced = candidates.filter((c) => Number.isFinite(c.price));
+    if (priced.length > 0) {
+        priced.sort((a, b) => a.price - b.price);
+        return { promo: priced[0].promo, price: priced[0].price };
+    }
+
+    return { promo: candidates[0]?.promo || null, price: NaN };
+}
+
+function getPromoPrice(basePrice, promo, quantity = 1) {
+    console.log('[getPromoPrice] FULL INPUT:', JSON.stringify({ 
+        basePrice, 
+        promoType: promo?.discountType, 
+        promoCode: promo?.code,
+        promoName: promo?.name,
+        bundleItems: promo?.bundleItems,
+        quantity 
+    }, null, 2));
+    
+    if (!Number.isFinite(basePrice) || !promo) {
+        console.log('[getPromoPrice] Invalid input - basePrice:', basePrice, 'promo:', promo);
+        return NaN;
+    }
+    const value = Number(promo.discountValue);
+    const qty = Math.max(1, Number(quantity) || 1);
+    
+    switch (normalizeDiscountType(promo.discountType)) {
+        case 'PERCENT':
+            if (!Number.isFinite(value)) return NaN;
+            return Math.max(0, basePrice * (1 - value / 100));
+        case 'FIXED':
+            if (!Number.isFinite(value)) return NaN;
+            return Math.max(0, basePrice - value);
+        case 'BUNDLE':
+            // Bundle logic: "Mua X tặng Y"
+            // Example: Mua 3 t?ng 1 (value = 1)
+            // - mainQuantity: 3 (s? lu?ng c?n mua)
+            // - giftQuantity: 1 (s? lu?ng du?c t?ng)
+            console.log('[getPromoPrice BUNDLE] bundleItems:', promo.bundleItems);
+            
+            if (!promo.bundleItems || promo.bundleItems.length === 0) {
+                console.log('[getPromoPrice BUNDLE] No bundleItems, returning basePrice:', basePrice);
+                return basePrice;
+            }
+            // Get first bundle item (assume 1 bundle per promo)
+            const bundle = promo.bundleItems[0];
+            const mainQty = Number(bundle.mainQuantity) || 3;  // Mua 3
+            const giftQty = Number(bundle.giftQuantity) || 1;  // T?ng 1
+            const setSize = mainQty + giftQty;  // 1 set = 4 chai
+            
+            console.log('[getPromoPrice BUNDLE] bundle config:', { mainQty, giftQty, setSize, qty });
+            
+            // Calculate number of complete sets
+            const completeSets = Math.floor(qty / setSize);
+            const remainingQty = qty % setSize;
+            
+            // Price = (complete sets * price of mainQty) + (remaining * full price)
+            const bundlePrice = (completeSets * mainQty * basePrice) + (remainingQty * basePrice);
+            const unitPrice = bundlePrice / qty;
+            
+            console.log('[getPromoPrice BUNDLE] calculation:', { 
+                completeSets, 
+                remainingQty, 
+                bundlePrice, 
+                unitPrice 
+            });
+            
+            return Math.max(0, unitPrice);  // Return unit price
+        case 'FREE_GIFT':
+            return basePrice;
+        default:
+            return NaN;
+    }
+}
+
+function normalizeDiscountType(value) {
+    if (!value) return value;
+    if (value === 'FIXED_AMOUNT') return 'FIXED';
+    if (value === 'FREE_GIFT') return 'BUNDLE';
+    return value;
+}
+
+function formatPromotionLabel(promo) {
+    if (!promo) return 'Khuyến mãi';
+    const value = Number(promo.discountValue);
+    const type = normalizeDiscountType(promo.discountType);
+    if (type === 'PERCENT' && Number.isFinite(value)) {
+        return `Giảm ${value}%`;
+    }
+    if (type === 'FIXED' && Number.isFinite(value)) {
+        return `Giảm ${formatPrice(value)}`;
+    }
+    if (type === 'BUNDLE') {
+        return 'Combo';
+    }
+    if (type === 'FREE_GIFT') {
+        return 'Tặng kèm';
+    }
+    return promo.discountType || 'Khuyến mãi';
+}
+
+function isPromotionActive(promo) {
+    if (!promo) return false;
+    if (promo.active === false) return false;
+    const now = new Date();
+    const start = parsePromotionDate(promo.startDate);
+    const end = parsePromotionDate(promo.endDate);
+    if (start && now < start) return false;
+    if (end && now > end) return false;
+    return true;
+}
+
+function parsePromotionDate(value) {
+    if (!value) return null;
+    if (Array.isArray(value)) {
+        const [year, month, day, hour = 0, minute = 0, second = 0] = value;
+        const date = new Date(year, (month || 1) - 1, day || 1, hour, minute, second);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+
+function ensureEmptyStateBrand(target) {
+    const emptyState = target || document.getElementById('emptyState');
+    if (!emptyState || emptyState.querySelector('.empty-brand')) return;
+    const brand = document.createElement('div');
+    brand.className = 'empty-brand';
+    brand.innerHTML = `
+        <div class="empty-brand-badge">BF</div>
+        <div class="empty-brand-text">
+            <div class="empty-brand-title">BizFlow</div>
+            <div class="empty-brand-sub">Smart Retail POS</div>
+        </div>
+    `;
+    emptyState.prepend(brand);
+}
+
+function renderCart() {
+    const cartContainer = document.getElementById('cartItems');
+    const emptyState = document.getElementById('emptyState');
+    ensureEmptyStateBrand(emptyState);
+    if (cart.length === 0) {
+        if (cartContainer) {
+            cartContainer.innerHTML = '';
+        }
+        if (emptyState) {
+            emptyState.style.display = 'grid';
+        }
+        toggleEmptyState(true);
+        return;
+    }
+
+    toggleEmptyState(false);
+    if (emptyState) {
+        emptyState.style.display = 'none';
+    }
+    cartContainer.innerHTML = cart.map((item, idx) => {
+        if (item.isReturnItem) {
+            return `
+            <div class="cart-row return-item">
+                <span>${idx + 1}</span>
+                <span>${item.productCode || '-'}</span>
+                <span class="cart-name">${item.productName}</span>
+                <span class="cart-qty">
+                    <input type="number" class="qty-input" value="${item.quantity}" disabled>
+                </span>
+                <span>${item.unit || '-'}</span>
+                <span>${formatPrice(item.productPrice)}</span>
+                <span>${formatPrice(item.productPrice * item.quantity)}</span>
+                <div class="cart-item-actions">
+                    <span class="cart-item-locked">Đổi</span>
+                    <button class="cart-item-remove" onclick="removeReturnItem(${idx})">×</button>
+                </div>
+            </div>
+        `;
+        }
+        
+        // Kiểm tra nếu là quà tặng
+        if (item.isFreeGift) {
+            // Tự động lookup tên nếu là Unknown
+            let displayName = item.productName;
+            if (!displayName || displayName === 'Unknown') {
+                const product = products.find(p => Number(p.id) === Number(item.productId) || Number(p.productId) === Number(item.productId));
+                if (product) {
+                    displayName = product.name || product.productName || product.product_name || displayName;
+                    // Cập nhật lại tên trong cart
+                    item.productName = displayName;
+                } else {
+                    displayName = `Sản phẩm #${item.productId}`;
+                }
+            }
+            
+            return `
+            <div class="cart-row gift-item">
+                <span>${idx + 1}</span>
+                <span class="gift-badge">🎁 TẶNG</span>
+                <span class="cart-name">${displayName}</span>
+                <span class="cart-qty">
+                    <input type="number" class="qty-input" value="${item.quantity}" disabled>
+                </span>
+                <span>${item.unit || '-'}</span>
+                <span style="text-decoration: line-through; color: #999;">${formatPrice(item.productPrice)}</span>
+                <span style="color: #ff6b9d; font-weight: 600;">0d</span>
+                <span class="gift-label" style="grid-column: span 2; text-align: right; color: #ff6b9d; font-size: 12px; font-style: italic;">${item.promoLabel || 'Quà tặng'}</span>
+            </div>
+        `;
+        }
+
+        return `
+        <div class="cart-row">
+            <span>${idx + 1}</span>
+            <span>${item.productCode || '-'}</span>
+            <span class="cart-name">${item.productName}</span>
+            <span class="cart-qty ${Number(item.stock) <= 0 ? 'is-out' : ''}">
+                <input type="number" class="qty-input" value="${item.quantity}" onchange="setQty(${idx}, this.value)">
+            </span>
+            <span>${item.unit || '-'}</span>
+            <span>${formatPrice(item.productPrice)}</span>
+            <span>${formatPrice(item.productPrice * item.quantity)}</span>
+            <button class="cart-item-remove" onclick="removeFromCart(${idx})">×</button>
+        </div>
+    `;
+    }).join('');
+}
+
+function updateQty(idx, change) {
+    if (cart[idx] && !cart[idx].isReturnItem) {
+        cart[idx].quantity = Math.max(1, cart[idx].quantity + change);
+        
+        // Recalculate bundle price if this item has a bundle promotion
+        const item = cart[idx];
+        if (item.promoId) {
+            const promoInfo = promotionIndex.get(item.productId);
+            if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
+                // Get base price from product
+                const product = products.find(p => p.id === item.productId);
+                const basePrice = product ? Number(product.price) : item.productPrice;
+                console.log('[updateQty] Recalculating BUNDLE:', { productId: item.productId, basePrice, newQty: item.quantity });
+                // Recalculate price with new quantity
+                item.productPrice = getPromoPrice(basePrice, promoInfo.promo, item.quantity);
+            }
+        }
+        
+        renderCart();
+        updateTotal();
+    }
+}
+
+function setQty(idx, value) {
+    const qty = parseInt(value, 10) || 1;
+    if (cart[idx] && !cart[idx].isReturnItem) {
+        const oldQty = cart[idx].quantity;
+        cart[idx].quantity = Math.max(1, qty);
+        
+        // Recalculate bundle price if this item has a bundle promotion
+        const item = cart[idx];
+        if (item.promoId) {
+            const promoInfo = promotionIndex.get(item.productId);
+            if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
+                // Get base price from product
+                const product = products.find(p => p.id === item.productId);
+                const basePrice = product ? Number(product.price) : item.productPrice;
+                console.log('[setQty] Recalculating BUNDLE:', { productId: item.productId, basePrice, newQty: item.quantity });
+                // Recalculate price with new quantity
+                item.productPrice = getPromoPrice(basePrice, promoInfo.promo, item.quantity);
+            }
+        }
+        
+        // Nếu giảm số lượng, kiểm tra và xóa quà tặng không hợp lệ ngay
+        if (qty < oldQty) {
+            console.log('[setQty] Quantity decreased, checking gifts...');
+            // Tạm thời đánh dấu cần kiểm tra lại
+            setTimeout(() => {
+                // Phân tích lại và AI sẽ tự động xóa quà không hợp lệ
+                analyzeCartForCombo();
+            }, 50);
+        }
+        
+        renderCart();
+        updateTotal();
+        
+        // Phân tích lại combo sau khi thay đổi số lượng
+        setTimeout(() => analyzeCartForCombo(), 100);
+    }
+}
+
+function removeFromCart(idx) {
+    if (cart[idx]?.isReturnItem) return;
+    
+    const removedItem = cart[idx];
+    const removedProductId = removedItem.productId;
+    
+    // Xóa sản phẩm
+    cart.splice(idx, 1);
+    
+    // Kiểm tra xem còn sản phẩm này trong giỏ không
+    const hasRemainingProduct = cart.some(item => 
+        item.productId === removedProductId && !item.isFreeGift
+    );
+    
+    // Nếu không còn sản phẩm này, xóa luôn quà tặng liên quan
+    if (!hasRemainingProduct) {
+        // Tìm và xóa các quà tặng có thể liên quan đến sản phẩm này
+        const giftsToRemove = [];
+        cart.forEach((item, i) => {
+            if (item.isFreeGift) {
+                // Kiểm tra xem quà này có liên quan đến sản phẩm bị xóa không
+                // Bằng cách kiểm tra xem còn đủ điều kiện không
+                giftsToRemove.push(i);
+            }
+        });
+        
+        // Xóa các quà từ cuối lên để không bị lỗi index
+        giftsToRemove.sort((a, b) => b - a).forEach(i => {
+            const giftName = cart[i].productName;
+            cart.splice(i, 1);
+            console.log('[removeFromCart] ❌ Removed gift:', giftName);
+        });
+        
+        if (giftsToRemove.length > 0) {
+            ComboPromotionUI.showNotification(
+                `⚠️ Đã xóa ${giftsToRemove.length} quà tặng (không đủ điều kiện)`,
+                'warning'
+            );
+        }
+    }
+    
+    renderCart();
+    updateTotal();
+    
+    // Phân tích lại combo sau khi xóa sản phẩm
+    setTimeout(() => analyzeCartForCombo(), 100);
+}
+
+function removeReturnItem(idx) {
+    if (!cart[idx]?.isReturnItem) return;
+    cart.splice(idx, 1);
+    renderCart();
+    updateTotal();
+}
+
+function selectCustomer(evt, customerId, customerName, customerPhone) {
+    const fullCustomer = customers.find(c => c.id === customerId);
+    applyCustomerSelection(
+        fullCustomer || { id: customerId, name: customerName, phone: customerPhone },
+        { openDetail: false, highlightEvent: evt }
+    );
+}
+
+function openCustomerDetailFromButton(evt) {
+    evt?.preventDefault?.();
+    evt?.stopPropagation?.();
+    const target = evt?.currentTarget;
+    const customerId = Number(target?.dataset?.customerId);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        showPopup('Không tìm thấy khách hàng.', { type: 'error' });
+        return;
+    }
+    openCustomerDetail(customerId);
+}
+
+function clearSelectedCustomer(options = {}) {
+    const { showList = true } = options;
+    selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+    const selectedView = document.getElementById('selectedCustomer');
+    if (selectedView) {
+        selectedView.textContent = 'Khách lẻ';
+    }
+
+    const searchInput = document.getElementById('customerSearch');
+    if (searchInput) {
+        searchInput.value = '';
+        searchInput.classList.remove('has-selection');
+        searchInput.readOnly = false;
+    }
+
+    const addBtn = document.getElementById('addCustomerBtn');
+    if (addBtn) {
+        addBtn.style.display = '';
+    }
+    const clearBtn = document.getElementById('clearCustomerBtn');
+    if (clearBtn) {
+        clearBtn.style.display = 'none';
+    }
+
+    customerSearchTerm = '';
+    const customerList = document.getElementById('customerList');
+    if (customerList) {
+        customerList.style.display = showList ? 'block' : 'none';
+    }
+    if (showList) {
+        applyCustomerFilter();
+    }
+
+    updateTotal();
+}
+
+function updateTotal() {
+    const memberSummary = getMemberDiscountForTotal(getTotalAmount());
+    const toggle = document.getElementById('usePointsToggle');
+    const canUsePoints = memberSummary.points >= 100 && Boolean(TIER_DISCOUNT_BY_100[getEffectiveTier(selectedCustomer)]);
+    if (toggle) {
+        toggle.disabled = !canUsePoints;
+        if (!canUsePoints) {
+            toggle.checked = false;
+        }
+    }
+    const baseSubtotal = cart.reduce((sum, item) => {
+        const qty = item.quantity || 0;
+        if (qty <= 0) {
+            return sum + (item.productPrice * qty);
+        }
+        const product = products.find(p => p.id === item.productId) || {};
+        const basePrice = Number(product.price);
+        if (!Number.isFinite(basePrice)) {
+            return sum + (item.productPrice * qty);
+        }
+        return sum + (basePrice * qty);
+    }, 0);
+    const discountedSubtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
+    const promoValue = Math.max(0, baseSubtotal - discountedSubtotal);
+    const usePoints = shouldUseMemberPoints();
+    const memberDiscount = usePoints ? memberSummary.discount : 0;
+    const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
+    const total = Math.max(0, discountedSubtotal - memberDiscount);
+
+    document.getElementById('subtotal').textContent = formatPrice(baseSubtotal);
+    document.getElementById('promoAmount').textContent = formatPrice(promoValue);
+    document.getElementById('totalAmount').textContent = formatPrice(total);
+    document.getElementById('amountDue').textContent = formatPrice(total);
+    setText('memberPoints', formatCompactNumber(memberSummary.points));
+    setText('memberDiscountAmount', formatPrice(memberDiscount));
+    setText('memberPointsUsed', formatCompactNumber(pointsUsed));
+    updateChangeDue(total);
+    setDefaultTierByTotal(total);
+}
+
+function getTotalAmount() {
+    return cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
+}
+
+function formatPrice(price) {
+    return new Intl.NumberFormat('vi-VN', {
+        style: 'currency',
+        currency: 'VND',
+        minimumFractionDigits: 0
+    }).format(price).replace('₫', 'đ');
+}
+
+function formatCompactNumber(value) {
+    return new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
+}
+
+function normalizeTier(value) {
+    return (value || '').toString().trim().toUpperCase();
+}
+
+function getTierByPoints(points) {
+    if (points >= 25000) return 'KIM_CUONG';
+    if (points >= 15000) return 'BACH_KIM';
+    if (points >= 9000) return 'VANG';
+    if (points >= 3000) return 'BAC';
+    if (points >= 1000) return 'DONG';
+    return 'DONG'; // Default tier for members with < 1000 points
+}
+
+function getEffectiveTier(customer) {
+    const tier = normalizeTier(customer?.tier);
+    if (tier) return tier;
+    const points = getCustomerPoints(customer);
+    return getTierByPoints(points);
+}
+
+function formatTierLabel(tier) {
+    switch (normalizeTier(tier)) {
+        case 'KIM_CUONG':
+            return 'Diamond';
+        case 'BACH_KIM':
+            return 'Platinum';
+        case 'VANG':
+            return 'Gold';
+        case 'BAC':
+            return 'Silver';
+        case 'DONG':
+            return 'Bronze';
+        default:
+            return '-';
+    }
+}
+
+function getCustomerPoints(customer) {
+    const points =
+        customer?.totalPoints ??
+        customer?.total_points ??
+        customer?.monthlyPoints ??
+        customer?.monthly_points ??
+        customer?.points ??
+        0;
+    return Number.isFinite(Number(points)) ? Number(points) : 0;
+}
+
+function getMemberDiscountForTotal(total) {
+    const points = getCustomerPoints(selectedCustomer);
+    const tier = getEffectiveTier(selectedCustomer);
+    const rate = TIER_DISCOUNT_BY_100[tier] || 0;
+    if (!points || points < 100 || rate <= 0) {
+        return { points, pointsUsed: 0, discount: 0 };
+    }
+
+    const stepsByPoints = Math.floor(points / 100);
+    const stepsByTotal = total > 0 ? Math.floor(total / rate) : 0;
+    const stepsUsed = Math.max(0, Math.min(stepsByPoints, stepsByTotal));
+    const pointsUsed = stepsUsed * 100;
+    const discount = stepsUsed * rate;
+    return { points, pointsUsed, discount };
+}
+
+function shouldUseMemberPoints() {
+    const toggle = document.getElementById('usePointsToggle');
+    if (toggle && toggle.checked === false) {
+        return false;
+    }
+    const points = getCustomerPoints(selectedCustomer);
+    const tier = getEffectiveTier(selectedCustomer);
+    return points >= 100 && Boolean(TIER_DISCOUNT_BY_100[tier]);
+}
+
+function showPopup(message, options = {}) {
+    const { title = 'Thông báo', type = 'info' } = options;
+    let modal = document.getElementById('appPopup');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'appPopup';
+        modal.className = 'app-popup';
+        modal.setAttribute('aria-hidden', 'true');
+        modal.innerHTML = `
+            <div class="app-popup-card" role="dialog" aria-modal="true">
+                <div class="app-popup-header">
+                    <h3 id="appPopupTitle"></h3>
+                    <button type="button" class="icon-btn small" id="appPopupClose" aria-label="Đóng">✕</button>
+                </div>
+                <div id="appPopupMessage" class="app-popup-message"></div>
+                <div class="app-popup-actions">
+                    <button type="button" class="primary-btn" id="appPopupOk">Đóng</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const closePopup = () => {
+            modal.classList.remove('show');
+            modal.setAttribute('aria-hidden', 'true');
+        };
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closePopup();
+            }
+        });
+        modal.querySelector('#appPopupClose')?.addEventListener('click', closePopup);
+        modal.querySelector('#appPopupOk')?.addEventListener('click', closePopup);
+    }
+
+    const titleEl = modal.querySelector('#appPopupTitle');
+    const messageEl = modal.querySelector('#appPopupMessage');
+    if (titleEl) titleEl.textContent = title;
+    if (messageEl) messageEl.textContent = message || '';
+
+    modal.classList.remove('type-info', 'type-success', 'type-error');
+    modal.classList.add(`type-${type}`);
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function formatPriceCompact(price) {
+    return new Intl.NumberFormat('vi-VN', {
+        minimumFractionDigits: 0
+    }).format(price);
+}
+
+function printInvoiceReceipt() {
+    const receipt = document.getElementById('invoiceReceipt');
+    if (!receipt) {
+        window.print();
+        return;
+    }
+
+    const printSize = localStorage.getItem('bizflow_print_size') || 'K80';
+    let pageWidth = '80mm';
+    let pageHeight = '200mm';
+    if (printSize === 'K58') {
+        pageWidth = '58mm';
+        pageHeight = '160mm';
+    } else if (printSize === 'A6') {
+        pageWidth = '100mm';
+        pageHeight = '150mm';
+    }
+
+    const printWindow = window.open('', '_blank', 'width=480,height=700');
+    if (!printWindow) {
+        window.print();
+        return;
+    }
+
+    const receiptHtml = receipt.outerHTML;
+    const content = `
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <title>In hoa don</title>
+    <style>
+        @page { size: ${pageWidth} ${pageHeight}; margin: 0; }
+        html, body { width: ${pageWidth}; margin: 0; }
+        body { font-family: Arial, sans-serif; }
+        * { box-sizing: border-box; }
+        .print-sheet { width: ${pageWidth}; margin: 0; display: flex; justify-content: center; padding-top: 2mm; box-sizing: border-box; }
+        .invoice-receipt { width: 74mm; font-size: 10.5px; line-height: 1.15; color: #2f3644; display: grid; gap: 4px; }
+        .invoice-receipt div, .invoice-receipt span { margin: 0; padding: 0; }
+        .receipt-header { text-align: center; display: grid; gap: 1px; }
+        .receipt-brand { font-weight: 800; letter-spacing: 0.4px; }
+        .receipt-meta { font-size: 9px; color: #5b6274; display: grid; gap: 0; }
+        .receipt-divider { border-top: 1px dashed #c9ceda; margin: 1px 0; }
+        .receipt-items { display: grid; gap: 2px; }
+        .receipt-item { display: grid; grid-template-columns: 1.4fr 0.5fr 0.8fr 1fr; gap: 3px; }
+        .receipt-item.header { font-weight: 700; font-size: 9.5px; color: #2f3644; }
+        .receipt-item span:nth-child(2),
+        .receipt-item span:nth-child(3),
+        .receipt-item span:nth-child(4) { text-align: right; }
+        .receipt-totals { display: grid; gap: 1px; }
+        .receipt-totals div { display: flex; justify-content: space-between; }
+        .receipt-note { font-size: 9px; color: #4b5366; display: grid; gap: 0; }
+    </style>
+</head>
+<body>
+<div class="print-sheet">
+${receiptHtml}
+</div>
+<script>
+    window.onload = () => {
+        window.focus();
+        window.print();
+        setTimeout(() => window.close(), 200);
+    };
+</script>
+</body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(content);
+    printWindow.document.close();
+}
+
+function updateChangeDue(forcedTotal = null) {
+    const changeLabel = document.getElementById('changeAmount');
+    if (!changeLabel) return;
+
+    if (currentPaymentMethod !== 'CASH') {
+        changeLabel.textContent = formatPrice(0);
+        return;
+    }
+
+    const totalAmount = forcedTotal !== null
+        ? forcedTotal
+        : parseInt(document.getElementById('totalAmount').textContent.replace(/\D/g, ''), 10) || 0;
+    const cashReceived = parseInt(document.getElementById('cashReceivedInput')?.value, 10) || 0;
+    const change = Math.max(0, cashReceived - totalAmount);
+    changeLabel.textContent = formatPrice(change);
+}
+
+function toggleCashPanel(show) {
+    const panel = document.getElementById('cashPanel');
+    if (!panel) return;
+    panel.style.display = show ? 'block' : 'none';
+}
+
+function setDefaultTierByTotal(total) {
+    const tierSelect = document.getElementById('customerTierSelect');
+    if (!tierSelect) return;
+    if (total >= 1000000) return;
+    if (!tierSelect.value) {
+        tierSelect.value = 'member';
+    }
+}
+
+function setTierByPoints(points) {
+    const tierSelect = document.getElementById('customerTierSelect');
+    if (!tierSelect) return;
+
+    let tier = 'member';
+    if (points >= 25000) {
+        tier = 'diamond';
+    } else if (points >= 15000) {
+        tier = 'platinum';
+    } else if (points >= 9000) {
+        tier = 'gold';
+    } else if (points >= 3000) {
+        tier = 'silver';
+    }
+
+    tierSelect.value = tier;
+}
+
+function setupEventListeners() {
+    document.getElementById('inventoryBtn')?.addEventListener('click', () => {
+        openInventoryModal();
+    });
+
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', (e) => {
+        topSearchTerm = e.target.value;
+        renderToolbarSearchResults(e.target.value);
+    });
+    searchInput.addEventListener('focus', () => {
+        if (searchInput.value.trim()) {
+            renderToolbarSearchResults(searchInput.value);
+        }
+    });
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleBarcodeSearch();
+        }
+    });
+
+    document.getElementById('suggestionSearchInput')?.addEventListener('input', (e) => {
+        bottomSearchTerm = e.target.value;
+        filterProducts();
+    });
+
+    document.getElementById('sortSelect').addEventListener('change', (e) => {
+        currentSort = e.target.value;
+        sortProducts(currentSort);
+    });
+
+    document.getElementById('qtyInput').addEventListener('change', () => {
+        const val = getCurrentQty();
+        document.getElementById('qtyInput').value = val;
+        if (isToolbarSearchOpen()) {
+            renderToolbarSearchResults(document.getElementById('searchInput').value);
+        }
+    });
+
+    document.getElementById('cashReceivedInput')?.addEventListener('input', () => {
+        updateChangeDue();
+    });
+
+    document.getElementById('usePointsToggle')?.addEventListener('change', () => {
+        updateTotal();
+    });
+
+    document.querySelectorAll('input[name="paymentMethod"]').forEach(input => {
+        input.addEventListener('change', () => {
+            currentPaymentMethod = input.value;
+            toggleCashPanel(currentPaymentMethod === 'CASH');
+            updateChangeDue();
+        });
+    });
+
+    const customerSearch = document.getElementById('customerSearch');
+    const clearCustomerBtn = document.getElementById('clearCustomerBtn');
+    clearCustomerBtn?.addEventListener('click', () => {
+        clearSelectedCustomer();
+    });
+    const customerList = document.getElementById('customerList');
+    customerList?.addEventListener('click', (e) => {
+        const row = e.target.closest('.customer-item');
+        if (!row) return;
+        const customerId = Number(row.dataset.customerId);
+        if (!Number.isFinite(customerId)) {
+            showPopup('Không tìm thấy khách hàng.', { type: 'error' });
+            return;
+        }
+        const customerName = row.dataset.customerName || '';
+        const customerPhone = row.dataset.customerPhone || '-';
+        selectCustomer(e, customerId, customerName, customerPhone);
+    });
+    document.addEventListener('click', (e) => {
+        const panel = document.querySelector('.customer-panel');
+        if (!panel || !customerList) return;
+        if (!panel.contains(e.target)) {
+            customerList.style.display = 'none';
+        }
+    });
+    document.addEventListener('click', (e) => {
+        const toolbar = document.querySelector('.toolbar-search');
+        if (!toolbar) return;
+        if (!toolbar.contains(e.target)) {
+            hideToolbarSearchResults();
+        }
+    });
+    customerSearch?.addEventListener('click', () => {
+        if (customerSearch.classList.contains('has-selection') && selectedCustomer?.id) {
+            openCustomerDetail(selectedCustomer.id);
+        }
+    });
+    customerSearch?.addEventListener('input', (e) => {
+        customerSearchTerm = e.target.value || '';
+        e.target.classList.remove('has-selection');
+        const addBtn = document.getElementById('addCustomerBtn');
+        if (addBtn) {
+            addBtn.style.display = '';
+        }
+        const clearBtn = document.getElementById('clearCustomerBtn');
+        if (clearBtn) {
+            clearBtn.style.display = 'none';
+        }
+        const customerList = document.getElementById('customerList');
+        if (customerList) {
+            customerList.style.display = 'block';
+        }
+        if (!customersLoaded) {
+            loadCustomers().then(() => applyCustomerFilter());
+            return;
+        }
+        applyCustomerFilter();
+    });
+
+    document.querySelectorAll('.quick-cash .chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const cashInput = document.getElementById('cashReceivedInput');
+            if (cashInput) {
+                cashInput.value = btn.dataset.cash;
+            }
+            updateChangeDue();
+        });
+    });
+
+    const clearCartBtn = document.getElementById('clearCartBtn');
+    clearCartBtn?.addEventListener('click', () => {
+        if (confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
+            clearCart(false);
+        }
+    });
+
+    setupInvoiceTabs();
+
+    document.getElementById('saveBillBtn').addEventListener('click', () => {
+        saveDraftInvoice();
+    });
+
+    document.getElementById('checkoutBtn').addEventListener('click', async () => {
+        // If transfer selected, create unpaid order then show QR code
+        if (currentPaymentMethod === 'TRANSFER') {
+            const res = await createOrder(false);
+            if (res && res.orderId) {
+                const amount = res.totalAmount ? parseFloat(res.totalAmount) : getTotalAmount();
+                const token = res.paymentToken || res.token || null;
+                showTransferQrModal(res.orderId, amount, token);
+            }
+            return;
+        }
+
+        // Other methods proceed as before
+        createOrder(true);
+    });
+
+
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+        if (confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
+            sessionStorage.clear();
+            window.location.href = '/pages/login.html';
+        }
+    });
+
+    const toolbarList = document.getElementById('toolbarSearchList');
+    toolbarList?.addEventListener('click', (e) => {
+        const row = e.target.closest('.toolbar-search-row.item');
+        if (!row) return;
+        const productId = parseInt(row.dataset.productId, 10);
+        const productName = row.dataset.productName || '';
+        const productPrice = parseFloat(row.dataset.productPrice) || 0;
+        if (Number.isFinite(productId)) {
+            addToCart(productId, productName, productPrice);
+            clearToolbarSearch();
+        }
+    });
+}
+
+function initInvoices() {
+    invoices = [];
+    savedInvoices = [];
+    invoiceSequence = 1;
+    const initial = createInvoiceState();
+    invoices.push(initial);
+    activeInvoiceId = initial.id;
+    renderInvoiceTabs();
+    applyInvoiceState(initial);
+}
+
+function getNextInvoiceNumber() {
+    let max = 0;
+    invoices.forEach(inv => {
+        const match = String(inv.name || '').match(/H\u00f3a \u0111\u01a1n\s+(\d+)/i);
+        if (match) {
+            max = Math.max(max, Number(match[1]));
+        }
+    });
+    return max + 1;
+}
+
+function getNextInvoiceNumberFromAll() {
+    let max = 0;
+    const collect = (list) => {
+        (list || []).forEach(inv => {
+            const match = String(inv.name || '').match(/H\u00f3a \u0111\u01a1n\s+(\d+)/i);
+            if (match) {
+                max = Math.max(max, Number(match[1]));
+            }
+        });
+    };
+    collect(invoices);
+    collect(savedInvoices);
+    return max + 1;
+}
+
+function createInvoiceState(name) {
+    const id = `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const nextNumber = getNextInvoiceNumber();
+    invoiceSequence = Math.max(invoiceSequence, nextNumber + 1);
+    return {
+        id,
+        name: name || `H\u00f3a \u0111\u01a1n ${nextNumber}`,
+        cart: [],
+        selectedCustomer: { id: 0, name: 'Khách lẻ', phone: '-' },
+        paymentMethod: 'CASH',
+        cashReceived: '',
+        paymentNote: '',
+        splitLine: false,
+        topSearchTerm: '',
+        bottomSearchTerm: ''
+    };
+}
+
+
+function getActiveInvoice() {
+    return invoices.find(inv => inv.id === activeInvoiceId) || null;
+}
+
+function cloneCart(items) {
+    return (items || []).map(item => ({ ...item }));
+}
+
+function saveActiveInvoiceState() {
+    const invoice = getActiveInvoice();
+    if (!invoice) return;
+    invoice.cart = cloneCart(cart);
+    invoice.selectedCustomer = selectedCustomer
+        ? { ...selectedCustomer }
+        : { id: 0, name: 'Khách lẻ', phone: '-' };
+    invoice.paymentMethod = currentPaymentMethod;
+    invoice.cashReceived = document.getElementById('cashReceivedInput')?.value || '';
+    invoice.paymentNote = document.getElementById('paymentNote')?.value || '';
+    invoice.splitLine = document.getElementById('splitLine')?.checked || false;
+    invoice.topSearchTerm = topSearchTerm || '';
+    invoice.bottomSearchTerm = bottomSearchTerm || '';
+}
+
+function applyInvoiceState(invoice) {
+    cart = cloneCart(invoice.cart);
+    currentPaymentMethod = invoice.paymentMethod || 'CASH';
+    topSearchTerm = invoice.topSearchTerm || '';
+    bottomSearchTerm = invoice.bottomSearchTerm || '';
+    const topSearchInput = document.getElementById('searchInput');
+    if (topSearchInput) {
+        topSearchInput.value = topSearchTerm;
+    }
+    const bottomSearchInput = document.getElementById('suggestionSearchInput');
+    if (bottomSearchInput) {
+        bottomSearchInput.value = bottomSearchTerm;
+    }
+    const splitLine = document.getElementById('splitLine');
+    if (splitLine) {
+        splitLine.checked = !!invoice.splitLine;
+    }
+
+    const cashInput = document.getElementById('cashReceivedInput');
+    if (cashInput) {
+        cashInput.value = invoice.cashReceived || '';
+    }
+    const noteInput = document.getElementById('paymentNote');
+    if (noteInput) {
+        noteInput.value = invoice.paymentNote || '';
+    }
+
+    const methodInputs = document.querySelectorAll('input[name="paymentMethod"]');
+    methodInputs.forEach(input => {
+        input.checked = input.value === currentPaymentMethod;
+    });
+    toggleCashPanel(currentPaymentMethod === 'CASH');
+    updateChangeDue();
+
+    if (invoice.selectedCustomer && invoice.selectedCustomer.id > 0) {
+        applyCustomerSelection(invoice.selectedCustomer, { openDetail: false });
+    } else {
+        clearSelectedCustomer({ showList: false });
+    }
+
+    renderCart();
+    updateTotal();
+    filterProducts();
+}
+
+function renderInvoiceTabs() {
+    const container = document.getElementById('orderTabs');
+    if (!container) return;
+    const tabs = invoices.map(invoice => `
+        <button class="order-tab ${invoice.id === activeInvoiceId ? 'active' : ''}" data-invoice-id="${invoice.id}">
+            ${invoice.name} <span class="tab-close" data-close="${invoice.id}">\u00d7</span>
+        </button>
+    `).join('');
+    container.innerHTML = `
+        ${tabs}
+        <button class="order-tab ghost" id="addInvoiceBtn" title="Th\u00eam h\u00f3a \u0111\u01a1n">+</button>
+        <button class="order-tab ghost" id="savedInvoiceBtn">H\u0110 l\u01b0u t\u1ea1m</button>
+    `;
+}
+
+function setupInvoiceTabs() {
+    const container = document.getElementById('orderTabs');
+    if (!container) return;
+
+    container.addEventListener('click', (e) => {
+        const addBtn = e.target.closest('#addInvoiceBtn');
+        if (addBtn) {
+            createAndSwitchInvoice();
+            return;
+        }
+
+        const savedBtn = e.target.closest('#savedInvoiceBtn');
+        if (savedBtn) {
+            toggleSavedBillsPanel();
+            return;
+        }
+
+        const closeBtn = e.target.closest('.tab-close');
+        if (closeBtn) {
+            e.stopPropagation();
+            const invoiceId = closeBtn.getAttribute('data-close');
+            if (invoiceId && confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
+                removeInvoice(invoiceId);
+            }
+            return;
+        }
+
+        const tab = e.target.closest('.order-tab[data-invoice-id]');
+        if (tab) {
+            const invoiceId = tab.getAttribute('data-invoice-id');
+            if (invoiceId) {
+                switchInvoice(invoiceId);
+            }
+        }
+    });
+
+    const savedPanel = document.getElementById('savedBillsPanel');
+    const closeSavedBtn = document.getElementById('closeSavedBills');
+    closeSavedBtn?.addEventListener('click', () => toggleSavedBillsPanel(false));
+
+    document.addEventListener('click', (e) => {
+        if (!savedPanel || savedPanel.getAttribute('aria-hidden') === 'true') return;
+        const savedBtn = document.getElementById('savedInvoiceBtn');
+        if (savedPanel.contains(e.target) || savedBtn?.contains(e.target)) return;
+        toggleSavedBillsPanel(false);
+    });
+
+    savedPanel?.addEventListener('click', (e) => {
+        const openBtn = e.target.closest('[data-open-draft]');
+        if (openBtn) {
+            const draftId = openBtn.getAttribute('data-open-draft');
+            if (draftId) {
+                openSavedInvoice(draftId);
+            }
+        }
+        const removeBtn = e.target.closest('[data-remove-draft]');
+        if (removeBtn) {
+            const draftId = removeBtn.getAttribute('data-remove-draft');
+            if (draftId) {
+                removeSavedInvoice(draftId);
+            }
+        }
+    });
+}
+
+function createAndSwitchInvoice() {
+    saveActiveInvoiceState();
+    const invoice = createInvoiceState();
+    invoices.push(invoice);
+    activeInvoiceId = invoice.id;
+    renderInvoiceTabs();
+    applyInvoiceState(invoice);
+}
+
+function switchInvoice(invoiceId) {
+    if (invoiceId === activeInvoiceId) return;
+    saveActiveInvoiceState();
+    activeInvoiceId = invoiceId;
+    const invoice = getActiveInvoice();
+    if (invoice) {
+        renderInvoiceTabs();
+        applyInvoiceState(invoice);
+    }
+}
+
+function removeInvoice(invoiceId, options = {}) {
+    const { resetSequence = true } = options;
+    if (!invoiceId) return;
+    const index = invoices.findIndex(inv => inv.id === invoiceId);
+    if (index === -1) return;
+    const wasActive = invoiceId === activeInvoiceId;
+    invoices.splice(index, 1);
+    if (invoices.length === 0) {
+        if (resetSequence) {
+            invoiceSequence = 1;
+        }
+        const fresh = createInvoiceState();
+        invoices.push(fresh);
+        activeInvoiceId = fresh.id;
+        renderInvoiceTabs();
+        applyInvoiceState(fresh);
+        return;
+    }
+    invoiceSequence = Math.max(invoiceSequence, getNextInvoiceNumber());
+    if (wasActive) {
+        activeInvoiceId = invoices[0].id;
+        renderInvoiceTabs();
+        applyInvoiceState(invoices[0]);
+    } else {
+        renderInvoiceTabs();
+    }
+}
+
+function saveDraftInvoice() {
+    if (cart.length === 0) {
+        showPopup('Giỏ hàng trống, không thể lưu tạm.', { type: 'error' });
+        return;
+    }
+    saveActiveInvoiceState();
+    const invoice = getActiveInvoice();
+    if (!invoice) return;
+    const draft = {
+        ...invoice,
+        name: `H\u00f3a \u0111\u01a1n ${getNextInvoiceNumberFromAll()}`,
+        cart: cloneCart(invoice.cart),
+        savedAt: new Date().toISOString()
+    };
+    savedInvoices.unshift(draft);
+    removeInvoice(invoice.id, { resetSequence: false });
+    renderSavedBills();
+    toggleSavedBillsPanel(false);
+}
+
+function renderSavedBills() {
+    const list = document.getElementById('savedBillsList');
+    const empty = document.getElementById('savedBillsEmpty');
+    if (!list || !empty) return;
+    if (savedInvoices.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+    }
+    empty.style.display = 'none';
+    list.innerHTML = savedInvoices.map(draft => {
+        const total = draft.cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
+        const customerName = draft.selectedCustomer?.name || 'Khách lẻ';
+        return `
+            <div class="saved-bill-item">
+                <button class="saved-bill-open" data-open-draft="${draft.id}">
+                    <strong>${draft.name}</strong>
+                    <span>${customerName}</span>
+                    <span>${formatPrice(total)}</span>
+                </button>
+                <button class="saved-bill-remove" data-remove-draft="${draft.id}">×</button>
+            </div>
+        `;
+    }).join('');
+}
+
+function toggleSavedBillsPanel(forceState) {
+    const panel = document.getElementById('savedBillsPanel');
+    const button = document.getElementById('savedInvoiceBtn');
+    if (!panel || !button) return;
+    const show = typeof forceState === 'boolean' ? forceState : panel.getAttribute('aria-hidden') === 'true';
+    if (show) {
+        renderSavedBills();
+        const rect = button.getBoundingClientRect();
+        panel.style.top = `${rect.bottom + window.scrollY + 8}px`;
+        panel.style.left = `${rect.left + window.scrollX}px`;
+        panel.classList.add('show');
+        panel.setAttribute('aria-hidden', 'false');
+    } else {
+        panel.classList.remove('show');
+        panel.setAttribute('aria-hidden', 'true');
+    }
+}
+
+function openSavedInvoice(draftId) {
+    const index = savedInvoices.findIndex(draft => draft.id === draftId);
+    if (index === -1) return;
+    saveActiveInvoiceState();
+    const draft = savedInvoices.splice(index, 1)[0];
+    const emptyTarget = invoices.find(inv => isInvoiceEmpty(inv));
+    if (emptyTarget) {
+        emptyTarget.cart = cloneCart(draft.cart);
+        emptyTarget.selectedCustomer = draft.selectedCustomer ? { ...draft.selectedCustomer } : { id: 0, name: 'Khách lẻ', phone: '-' };
+        emptyTarget.paymentMethod = draft.paymentMethod || 'CASH';
+        emptyTarget.cashReceived = draft.cashReceived || '';
+        emptyTarget.paymentNote = draft.paymentNote || '';
+        emptyTarget.splitLine = !!draft.splitLine;
+        emptyTarget.topSearchTerm = draft.topSearchTerm || '';
+        emptyTarget.bottomSearchTerm = draft.bottomSearchTerm || '';
+        activeInvoiceId = emptyTarget.id;
+    } else {
+        const nextNumber = getNextInvoiceNumber();
+        draft.name = `H\u00f3a \u0111\u01a1n ${nextNumber}`;
+        invoiceSequence = Math.max(invoiceSequence, nextNumber + 1);
+        invoices.push(draft);
+        activeInvoiceId = draft.id;
+    }
+    renderInvoiceTabs();
+    applyInvoiceState(getActiveInvoice());
+    renderSavedBills();
+    toggleSavedBillsPanel(false);
+}
+
+function isInvoiceEmpty(invoice) {
+    if (!invoice) return false;
+    const hasItems = Array.isArray(invoice.cart) && invoice.cart.length > 0;
+    const hasCustomer = invoice.selectedCustomer && invoice.selectedCustomer.id > 0;
+    const hasNote = (invoice.paymentNote || '').trim().length > 0;
+    const hasCash = (invoice.cashReceived || '').toString().trim().length > 0;
+    const hasSearch = (invoice.topSearchTerm || '').trim().length > 0 || (invoice.bottomSearchTerm || '').trim().length > 0;
+    return !hasItems && !hasCustomer && !hasNote && !hasCash && !hasSearch;
+}
+
+function removeSavedInvoice(draftId) {
+    const index = savedInvoices.findIndex(draft => draft.id === draftId);
+    if (index === -1) return;
+    savedInvoices.splice(index, 1);
+    renderSavedBills();
+}
+
+function applyCustomerSelection(customer, options = {}) {
+    const { openDetail = false, highlightEvent = null } = options;
+    const effectiveTier = getEffectiveTier(customer);
+    selectedCustomer = {
+        id: customer.id,
+        name: customer.name,
+        phone: customer.phone,
+        totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
+        monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
+        tier: effectiveTier || customer.tier || ''
+    };
+
+    document.querySelectorAll('.customer-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    const row = highlightEvent?.target?.closest?.('.customer-item');
+    if (row) row.classList.add('active');
+
+    const searchInput = document.getElementById('customerSearch');
+    if (searchInput) {
+        searchInput.value = customer.name || customer.phone || '';
+        searchInput.classList.add('has-selection');
+        searchInput.readOnly = true;
+    }
+
+    customerSearchTerm = '';
+    const customerList = document.getElementById('customerList');
+    if (customerList) {
+        customerList.innerHTML = '';
+        customerList.style.display = 'none';
+    }
+
+    const addBtn = document.getElementById('addCustomerBtn');
+    if (addBtn) {
+        addBtn.style.display = 'none';
+    }
+    const clearBtn = document.getElementById('clearCustomerBtn');
+    if (clearBtn) {
+        clearBtn.style.display = 'inline-flex';
+    }
+
+    if (openDetail && customer.id) {
+        openCustomerDetail(customer.id);
+    }
+
+    updateTotal();
+}
+
+function setupCustomerModal() {
+    const addButton = document.getElementById('addCustomerBtn');
+    const modal = document.getElementById('customerModal');
+    const closeBtn = document.getElementById('closeCustomerModal');
+    const cancelBtn = document.getElementById('cancelCustomerModal');
+    const form = document.getElementById('customerForm');
+    const pointsInput = document.getElementById('customerPointsInput');
+    const cityInput = document.getElementById('customerCityInput');
+    const districtInput = document.getElementById('customerDistrictInput');
+    const wardInput = document.getElementById('customerWardInput');
+
+    if (!addButton || !modal || !closeBtn || !form) return;
+
+    addButton.addEventListener('click', () => {
+        const searchValue = document.getElementById('customerSearch')?.value.trim();
+        const normalized = (searchValue || '').replace(/\s+/g, '');
+        if (normalized) {
+            const existing = customers.find(c => (c.phone || '').replace(/\s+/g, '') === normalized);
+            if (existing) {
+                selectCustomer(null, existing.id, existing.name, existing.phone || '-');
+                return;
+            }
+        }
+        openCustomerModalWithPhone(searchValue || '');
+    });
+
+    closeBtn.addEventListener('click', () => closeCustomerModal());
+    cancelBtn?.addEventListener('click', () => closeCustomerModal());
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeCustomerModal();
+        }
+    });
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await createCustomerFromForm();
+    });
+
+    pointsInput?.addEventListener('input', () => {
+        const raw = parseInt(pointsInput.value, 10) || 0;
+        setTierByPoints(raw);
+    });
+
+    cityInput?.addEventListener('focus', () => {
+        renderDatalistOptions(document.getElementById('customerCityList'), cityCache);
+    });
+
+    cityInput?.addEventListener('input', () => {
+        filterDatalist('customerCityList', cityCache, cityInput.value);
+        const match = findMatchByName(cityCache, cityInput.value);
+        if (match && cityInput.dataset.code !== String(match.code)) {
+            cityInput.value = match.displayName || match.name;
+            cityInput.dataset.code = match.code;
+            resetAddressInput(districtInput);
+            resetAddressInput(wardInput);
+            loadDistricts(match.code);
+            return;
+        }
+        if (!match) {
+            cityInput.dataset.code = '';
+            resetAddressInput(districtInput);
+            resetAddressInput(wardInput);
+        }
+    });
+
+    districtInput?.addEventListener('focus', () => {
+        renderDatalistOptions(document.getElementById('customerDistrictList'), districtCache);
+    });
+
+    districtInput?.addEventListener('input', () => {
+        filterDatalist('customerDistrictList', districtCache, districtInput.value);
+        const match = findMatchByName(districtCache, districtInput.value);
+        if (match && districtInput.dataset.code !== String(match.code)) {
+            districtInput.value = match.displayName || match.name;
+            districtInput.dataset.code = match.code;
+            resetAddressInput(wardInput);
+            loadWards(match.code);
+            return;
+        }
+        if (!match) {
+            districtInput.dataset.code = '';
+            resetAddressInput(wardInput);
+        }
+    });
+
+    wardInput?.addEventListener('focus', () => {
+        renderDatalistOptions(document.getElementById('customerWardList'), wardCache);
+    });
+
+    wardInput?.addEventListener('input', () => {
+        filterDatalist('customerWardList', wardCache, wardInput.value);
+        const match = findMatchByName(wardCache, wardInput.value);
+        if (match) {
+            wardInput.value = match.displayName || match.name;
+            wardInput.dataset.code = match.code;
+        } else {
+            wardInput.dataset.code = '';
+        }
+    });
+}
+
+function setupProductDetailModal() {
+    const modal = document.getElementById('productDetailModal');
+    if (!modal) return;
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeProductDetail();
+        }
+    });
+}
+
+function setupInventoryModal() {
+    const modal = document.getElementById('inventoryModal');
+    if (!modal) return;
+
+    const closeBtn = document.getElementById('closeInventoryModal');
+    const cancelBtn = document.getElementById('cancelInventoryBtn');
+    const saveBtn = document.getElementById('saveInventoryBtn');
+    const productSelect = document.getElementById('inventoryProductSelect');
+
+    closeBtn?.addEventListener('click', closeInventoryModal);
+    cancelBtn?.addEventListener('click', closeInventoryModal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeInventoryModal();
+        }
+    });
+
+    productSelect?.addEventListener('change', () => {
+        const selected = parseInt(productSelect.value, 10);
+        if (!Number.isFinite(selected)) return;
+        activeInventoryProductId = selected;
+        updateInventoryStockDisplay(selected);
+        loadInventoryHistory(selected);
+    });
+
+    saveBtn?.addEventListener('click', submitInventoryReceipt);
+}
+
+function setupCustomerDetailModal() {
+    const modal = document.getElementById('customerDetailModal');
+    if (!modal) return;
+    const selectedView = document.getElementById('selectedCustomer');
+
+    selectedView?.addEventListener('click', () => {
+        if (!selectedCustomer || !selectedCustomer.id) return;
+        openCustomerDetail(selectedCustomer.id);
+    });
+
+    const tabs = modal.querySelectorAll('.detail-tabs .tab[data-tab]');
+    tabs.forEach((tab) => {
+        tab.addEventListener('click', () => {
+            const key = tab.dataset.tab;
+            if (!key) return;
+            switchCustomerDetailTab(key);
+        });
+    });
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeCustomerDetail();
+        }
+    });
+}
+
+function openCustomerModalWithPhone(phone) {
+    const modal = document.getElementById('customerModal');
+    const form = document.getElementById('customerForm');
+    if (!modal || !form) return;
+
+    editingCustomerId = null;
+    setAddressRequired(true);
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    form.reset();
+    const phoneInput = document.getElementById('customerPhoneInput');
+    if (phoneInput) {
+        phoneInput.value = phone || document.getElementById('customerSearch')?.value.trim() || '';
+    }
+    const confirmInput = document.getElementById('customerConfirmInput');
+    if (confirmInput) {
+        confirmInput.checked = false;
+    }
+    const cityInput = document.getElementById('customerCityInput');
+    const districtInput = document.getElementById('customerDistrictInput');
+    const wardInput = document.getElementById('customerWardInput');
+    if (cityInput) {
+        cityInput.value = '';
+        cityInput.dataset.code = '';
+    }
+    resetAddressInput(districtInput);
+    resetAddressInput(wardInput);
+    const districtList = document.getElementById('customerDistrictList');
+    const wardList = document.getElementById('customerWardList');
+    if (districtList) districtList.innerHTML = '';
+    if (wardList) wardList.innerHTML = '';
+
+    document.getElementById('customerNameInput')?.focus();
+    loadCities();
+}
+
+function closeCustomerModal() {
+    const modal = document.getElementById('customerModal');
+    if (!modal) return;
+    editingCustomerId = null;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function setAddressRequired(required) {
+    const cityInput = document.getElementById('customerCityInput');
+    const districtInput = document.getElementById('customerDistrictInput');
+    const wardInput = document.getElementById('customerWardInput');
+    if (cityInput) cityInput.required = required;
+    if (districtInput) districtInput.required = required;
+    if (wardInput) wardInput.required = required;
+}
+
+async function createCustomerFromForm() {
+    const name = document.getElementById('customerNameInput')?.value.trim();
+    const phone = document.getElementById('customerPhoneInput')?.value.trim();
+    const email = document.getElementById('customerEmailInput')?.value.trim();
+    const address = document.getElementById('customerAddressInput')?.value.trim();
+    const cccd = document.getElementById('customerCccdInput')?.value.trim();
+    const dob = document.getElementById('customerDobInput')?.value;
+    const gender = document.querySelector('input[name="customerGender"]:checked')?.value || 'UNKNOWN';
+    const cityInput = document.getElementById('customerCityInput');
+    const districtInput = document.getElementById('customerDistrictInput');
+    const wardInput = document.getElementById('customerWardInput');
+    const confirmed = document.getElementById('customerConfirmInput')?.checked;
+    const isEditing = Boolean(editingCustomerId);
+
+    if (!name) {
+        showPopup('Vui lòng nhập tên khách hàng.', { type: 'error' });
+        return;
+    }
+
+    const normalizedPhone = (phone || '').replace(/\s+/g, '');
+    if (normalizedPhone) {
+        const existing = customers.find(c => (c.phone || '').replace(/\s+/g, '') === normalizedPhone);
+        if (existing) {
+            selectCustomer(null, existing.id, existing.name, existing.phone || '-');
+            closeCustomerModal();
+            return;
+        }
+    }
+
+    if (!phone) {
+        showPopup('Vui lòng nhập số điện thoại.', { type: 'error' });
+        return;
+    }
+    if (!/^\d{9,11}$/.test(phone)) {
+        showPopup('Số điện thoại phải là 9-11 chữ số.', { type: 'error' });
+        return;
+    }
+
+    const cityCode = cityInput?.dataset.code || '';
+    const districtCode = districtInput?.dataset.code || '';
+    const wardCode = wardInput?.dataset.code || '';
+    if (!isEditing) {
+        if (!cityInput?.value || !districtInput?.value || !wardInput?.value || !address || !cityCode || !districtCode || !wardCode) {
+            showPopup('Vui lòng nhập đầy đủ địa chỉ.', { type: 'error' });
+            return;
+        }
+        if (!confirmed) {
+            showPopup('Vui lòng xác nhận thông tin khách hàng.', { type: 'error' });
+            return;
+        }
+    } else if (!address) {
+        showPopup('Vui lòng nhập địa chỉ.', { type: 'error' });
+        return;
+    }
+
+    const hasFullAddressParts = cityInput?.value && districtInput?.value && wardInput?.value;
+    const mergedAddress = hasFullAddressParts
+        ? `${address}, ${wardInput.value}, ${districtInput.value}, ${cityInput.value}`
+        : address;
+
+    try {
+        const url = isEditing ? `${API_BASE}/customers/${editingCustomerId}` : `${API_BASE}/customers`;
+        const res = await fetch(url, {
+            method: isEditing ? 'PUT' : 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+            },
+            body: JSON.stringify({
+                name,
+                phone: phone || null,
+                email: email || null,
+                address: mergedAddress || null,
+                cccd: cccd || null,
+                dob: dob || null,
+                gender: gender || null
+            })
+        });
+
+        if (!res.ok) {
+            const message = await res.text();
+            showPopup(message || (isEditing ? 'Không thể cập nhật khách hàng.' : 'Không thể tạo khách hàng.'), { type: 'error' });
+            return;
+        }
+
+        const saved = await res.json();
+        const index = customers.findIndex(c => c.id === saved.id);
+        if (index >= 0) {
+            customers[index] = saved;
+        } else {
+            customers.unshift(saved);
+        }
+        customersLoaded = true;
+        customerSearchTerm = '';
+        const searchInput = document.getElementById('customerSearch');
+        if (searchInput) searchInput.value = '';
+        applyCustomerFilter();
+        closeCustomerModal();
+        selectCustomer(null, saved.id, saved.name, saved.phone || '-');
+        if (searchInput) {
+            searchInput.value = saved.name || saved.phone || '';
+            searchInput.classList.add('has-selection');
+        }
+        if (activeCustomerDetailId === saved.id) {
+            applyCustomerDetailData(saved);
+        }
+    } catch (err) {
+        showPopup(isEditing ? 'Lỗi kết nối khi cập nhật khách hàng.' : 'Lỗi kết nối khi tạo khách hàng.', { type: 'error' });
+    }
+}
+
+async function loadCities() {
+    const cityList = document.getElementById('customerCityList');
+    if (!cityList || cityList.children.length > 0) return;
+
+    try {
+        const res = await fetch('https://provinces.open-api.vn/api/p/');
+        if (!res.ok) return;
+        const data = await res.json();
+        cityCache = data || [];
+        renderDatalistOptions(cityList, cityCache);
+    } catch (err) {
+    }
+}
+
+async function loadDistricts(cityCode) {
+    const districtInput = document.getElementById('customerDistrictInput');
+    const districtList = document.getElementById('customerDistrictList');
+    if (!districtInput || !districtList) return;
+    districtInput.disabled = true;
+    try {
+        const res = await fetch(`https://provinces.open-api.vn/api/p/${cityCode}?depth=2`);
+        if (!res.ok) return;
+        const data = await res.json();
+        districtCache = data.districts || [];
+        renderDatalistOptions(districtList, districtCache);
+        districtInput.disabled = false;
+    } catch (err) {
+    }
+}
+
+async function loadWards(districtCode) {
+    const wardInput = document.getElementById('customerWardInput');
+    const wardList = document.getElementById('customerWardList');
+    if (!wardInput || !wardList) return;
+    wardInput.disabled = true;
+    try {
+        const res = await fetch(`https://provinces.open-api.vn/api/d/${districtCode}?depth=2`);
+        if (!res.ok) return;
+        const data = await res.json();
+        wardCache = data.wards || [];
+        renderDatalistOptions(wardList, wardCache);
+        wardInput.disabled = false;
+    } catch (err) {
+    }
+}
+
+function resetAddressInput(input) {
+    if (!input) return;
+    input.value = '';
+    input.dataset.code = '';
+    input.disabled = true;
+}
+
+function getAddressDisplayName(item) {
+    const rawName = item?.name || '';
+    const cleaned = rawName.replace(/^(Tỉnh|Thành phố)\s+/i, '').trim();
+    return cleaned || rawName;
+}
+
+function getAddressVariants(item) {
+    const rawName = item?.name || '';
+    const displayName = getAddressDisplayName(item);
+    const variants = [displayName];
+    if (displayName !== rawName) {
+        variants.push(rawName);
+    }
+    return variants;
+}
+
+function renderDatalistOptions(listEl, items) {
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const seen = new Set();
+    (items || []).forEach(item => {
+        const displayName = getAddressDisplayName(item);
+        if (!displayName || seen.has(displayName)) return;
+        const option = document.createElement('option');
+        option.value = displayName;
+        listEl.appendChild(option);
+        seen.add(displayName);
+    });
+}
+
+function findMatchByName(items, value) {
+    const normalized = normalizeKeyword(value);
+    if (!normalized) return null;
+    const list = items || [];
+    for (const item of list) {
+        const variants = getAddressVariants(item);
+        for (const variant of variants) {
+            if (normalizeKeyword(variant) === normalized) {
+                return {
+                    ...item,
+                    displayName: variant
+                };
+            }
+        }
+    }
+    return null;
+}
+
+function filterDatalist(listId, items, query) {
+    const listEl = document.getElementById(listId);
+    if (!listEl) return;
+    const normalizedQuery = normalizeKeyword(query);
+    listEl.innerHTML = '';
+    const seen = new Set();
+    (items || []).forEach(item => {
+        const variants = getAddressVariants(item);
+        const matches = !normalizedQuery || variants.some(variant => (
+            normalizeKeyword(variant).includes(normalizedQuery)
+        ));
+        if (!matches) return;
+        const displayName = getAddressDisplayName(item);
+        if (!displayName || seen.has(displayName)) return;
+        const option = document.createElement('option');
+        option.value = displayName;
+        listEl.appendChild(option);
+        seen.add(displayName);
+    });
+}
+
+function filterProducts(searchTerm = '') {
+    const explicitKeyword = normalizeKeyword(searchTerm);
+    const bottomKeyword = normalizeKeyword(bottomSearchTerm);
+
+    if (bottomKeyword) {
+        const filtered = applySort(filterProductList(products, bottomKeyword));
+        setSuggestionMode('bottom');
+        renderProducts(filtered, 'detailed');
+        return;
+    }
+
+    setSuggestionMode('default');
+    renderProducts(applySort(getBestSellerProducts()), 'default');
+}
+
+function sortProducts(sortBy) {
+    currentSort = sortBy;
+    filterProducts();
+}
+
+function getBestSellerProducts() {
+    return [...products]
+        .sort((a, b) => (a.id || 0) - (b.id || 0))
+        .slice(0, 10);
+}
+
+function applySort(list) {
+    const sorted = [...(list || [])];
+    switch (currentSort) {
+        case 'price-low':
+            sorted.sort((a, b) => (a.price || 0) - (b.price || 0));
+            break;
+        case 'price-high':
+            sorted.sort((a, b) => (b.price || 0) - (a.price || 0));
+            break;
+        case 'name':
+        default:
+            sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            break;
+    }
+    return sorted;
+}
+
+function getCurrentQty() {
+    const raw = parseInt(document.getElementById('qtyInput').value, 10);
+    return Number.isFinite(raw) && raw > 0 ? raw : 1;
+}
+
+function stripDiacritics(value) {
+    return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function normalizeKeyword(value) {
+    return stripDiacritics((value || '').toString().trim().toLowerCase());
+}
+
+function escapeHtml(value) {
+    return (value || '').replace(/[&<>"']/g, (char) => {
+        switch (char) {
+            case '&':
+                return '&amp;';
+            case '<':
+                return '&lt;';
+            case '>':
+                return '&gt;';
+            case '"':
+                return '&quot;';
+            case '\'':
+                return '&#39;';
+            default:
+                return char;
+        }
+    });
+}
+
+function escapeForSingleQuote(value) {
+    return (value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function getEffectivePrice(product) {
+    const basePrice = Number(product?.price);
+    const direct = Number(
+        product?.promoPrice ??
+        product?.promotionPrice ??
+        product?.discountPrice ??
+        product?.salePrice ??
+        product?.discountedPrice
+    );
+    const percent = Number(
+        product?.discountPercent ??
+        product?.discountRate ??
+        product?.promoPercent ??
+        product?.salePercent
+    );
+
+    if (Number.isFinite(direct)) {
+        return direct;
+    }
+
+    if (Number.isFinite(basePrice) && Number.isFinite(percent) && percent > 0) {
+        return Math.max(0, basePrice * (1 - percent / 100));
+    }
+
+    return Number.isFinite(basePrice) ? basePrice : NaN;
+}
+
+function getProductPricing(product) {
+    const basePrice = Number(product?.price);
+    let promoPrice = NaN;
+    let promoLabel = '';
+
+    if (promotionIndex && product?.id != null) {
+        const promoInfo = promotionIndex.get(product.id);
+        if (promoInfo?.promo) {
+            promoPrice = getPromoPrice(basePrice, promoInfo.promo);
+            promoLabel = promoInfo.label || formatPromotionLabel(promoInfo.promo);
+        }
+    }
+
+    if (!Number.isFinite(promoPrice)) {
+        const directPromo = Number(
+            product?.promoPrice ??
+            product?.promotionPrice ??
+            product?.discountPrice ??
+            product?.salePrice ??
+            product?.discountedPrice
+        );
+        if (Number.isFinite(directPromo)) {
+            promoPrice = directPromo;
+        } else {
+            const percent = Number(
+                product?.discountPercent ??
+                product?.discountRate ??
+                product?.promoPercent ??
+                product?.salePercent
+            );
+            if (Number.isFinite(basePrice) && Number.isFinite(percent) && percent > 0) {
+                promoPrice = Math.max(0, basePrice * (1 - percent / 100));
+            }
+        }
+    }
+
+    const hasPromo = Number.isFinite(basePrice)
+        && Number.isFinite(promoPrice)
+        && promoPrice < basePrice;
+
+    return {
+        basePrice: Number.isFinite(basePrice) ? basePrice : NaN,
+        promoPrice,
+        hasPromo,
+        label: promoLabel
+    };
+}
+
+function buildProductPriceParts(product) {
+    const pricing = getProductPricing(product);
+    const basePrice = Number.isFinite(pricing.basePrice) ? pricing.basePrice : 0;
+    const promoPrice = Number.isFinite(pricing.promoPrice) ? pricing.promoPrice : basePrice;
+    const hasPromo = pricing.hasPromo && promoPrice < basePrice;
+    const badge = hasPromo ? '<span class="promo-badge">KM</span>' : '';
+    const tagClass = hasPromo ? 'origin' : 'hidden';
+    const priceTag = formatPriceCompact(basePrice);
+    const label = hasPromo && pricing.label ? `<span class="price-label">${escapeHtml(pricing.label)}</span>` : '';
+    const priceBlock = hasPromo
+        ? `
+            <div class="product-pricing">
+                <span class="price-new">${formatPrice(promoPrice)}</span>
+                ${label}
+            </div>
+        `
+        : `
+            <div class="product-pricing">
+                <span class="price-new">${formatPrice(basePrice)}</span>
+            </div>
+        `;
+
+    return {
+        hasPromo,
+        badge,
+        tagClass,
+        priceTag,
+        priceBlock
+    };
+}
+
+function filterProductList(list, keyword) {
+    return list.filter(p => {
+        const matchCategory = currentCategory === 'all' || p.categoryId === parseInt(currentCategory, 10);
+        const matchSearch = productMatchesKeyword(p, keyword);
+        return matchCategory && matchSearch;
+    });
+}
+
+function productMatchesKeyword(product, keyword) {
+    const normalized = normalizeKeyword(keyword);
+    if (!normalized) return true;
+    const name = normalizeKeyword(product.name);
+    const code = normalizeKeyword(product.code);
+    const barcode = normalizeKeyword(product.barcode);
+    return name.includes(normalized) || code.includes(normalized) || barcode.includes(normalized);
+}
+
+function handleBarcodeSearch() {
+    const input = document.getElementById('searchInput');
+    if (!input) return;
+    const keyword = normalizeKeyword(input.value);
+    if (!keyword) return;
+
+    const exactMatch = products.find(p =>
+        normalizeKeyword(p.code) === keyword ||
+        normalizeKeyword(p.barcode) === keyword
+    );
+    if (exactMatch) {
+        addToCart(exactMatch.id, exactMatch.name, exactMatch.price || 0);
+        clearToolbarSearch();
+        return;
+    }
+
+    const nameMatch = products.find(p => normalizeKeyword(p.name) === keyword);
+    if (nameMatch) {
+        addToCart(nameMatch.id, nameMatch.name, nameMatch.price || 0);
+        clearToolbarSearch();
+        return;
+    }
+
+    renderToolbarSearchResults(input.value);
+}
+
+function getStockValue(product) {
+    const candidates = [product.stock, product.quantity, product.inventory, product.onHand];
+    const found = candidates.find(val => Number.isFinite(Number(val)));
+    return Number.isFinite(Number(found)) ? Number(found) : 0;
+}
+
+function renderProducts(filteredProducts = null, viewMode = 'default') {
+    const displayProducts = filteredProducts || products;
+    const grid = document.getElementById('productsGrid');
+
+    if (!displayProducts || displayProducts.length === 0) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Kh\u00f4ng c\u00f3 s\u1ea3n ph\u1ea9m</div>';
+        return;
+    }
+
+    if (viewMode === 'compact') {
+        grid.innerHTML = displayProducts.map(p => {
+            const priceParts = buildProductPriceParts(p);
+            return `
+                <div class="product-card compact" onclick="addToCart(${p.id}, '${p.name}', ${p.price || 0})">
+                    ${priceParts.badge}
+                    <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
+                    <div class="product-image">${buildProductImageMarkup(p)}</div>
+                    <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
+                    <div class="product-stock">T\u1ed3n: ${getStockValue(p)}</div>
+                    ${priceParts.priceBlock}
+                </div>
+            `;
+        }).join('');
+        return;
+    }
+
+    if (viewMode === 'detailed') {
+        grid.innerHTML = displayProducts.map(p => {
+            const priceParts = buildProductPriceParts(p);
+            return `
+                <div class="product-card detailed" onclick="openProductDetail(${p.id})">
+                    ${priceParts.badge}
+                    <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
+                    <div class="product-image">${buildProductImageMarkup(p)}</div>
+                    ${priceParts.priceBlock}
+                    <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
+                    <div class="product-meta">
+                        <span>${p.unit ? '\u0110VT: ' + p.unit : '\u0110VT: -'}</span>
+                        <span>T\u1ed3n: ${getStockValue(p)}</span>
+                    </div>
+                    <div class="product-description">${p.description || 'Ch\u01b0a c\u00f3 m\u00f4 t\u1ea3'}</div>
+                </div>
+            `;
+        }).join('');
+        return;
+    }
+
+    grid.innerHTML = displayProducts.map(p => {
+        const priceParts = buildProductPriceParts(p);
+        return `
+            <div class="product-card" onclick="addToCart(${p.id}, '${p.name}', ${p.price || 0})">
+                ${priceParts.badge}
+                <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
+                <div class="product-image">${buildProductImageMarkup(p)}</div>
+                ${priceParts.priceBlock}
+                <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                <div class="product-sku">${p.code || 'SKU'}</div>
+                <div class="product-stock">T\u1ed3n: ${getStockValue(p)}</div>
+            </div>
+        `;
+    }).join('');
+}
+function setSuggestionMode(mode) {
+    const title = document.getElementById('suggestionTitle');
+    const controls = document.getElementById('suggestionControls');
+
+    if (!controls || !title) return;
+
+    if (mode === 'bottom') {
+        controls.style.display = 'flex';
+        title.textContent = 'TƯ VẤN BÁN HÀNG';
+        return;
+    }
+
+    if (mode === 'top') {
+        controls.style.display = 'none';
+        title.textContent = 'KẾT QUẢ TÌM KIẾM';
+        return;
+    }
+
+    controls.style.display = 'flex';
+    title.textContent = 'SẢN PHẨM BÁN CHẠY';
+}
+
+function openProductDetail(productId) {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+
+    const modal = document.getElementById('productDetailModal');
+    if (!modal) return;
+
+    document.getElementById('detailProductName').textContent = product.name || 'Sản phẩm';
+    document.getElementById('detailProductSku').textContent = product.code || product.barcode || '-';
+    document.getElementById('detailProductBarcode').textContent = product.barcode || '-';
+    document.getElementById('detailProductUnit').textContent = product.unit || '-';
+    const pricing = getProductPricing(product);
+    const basePrice = Number.isFinite(pricing.basePrice) ? pricing.basePrice : 0;
+    const promoPrice = pricing.hasPromo ? pricing.promoPrice : basePrice;
+    const promoLabel = pricing.hasPromo && pricing.label ? ` (${pricing.label})` : '';
+    const detailPrice = pricing.hasPromo
+        ? `${formatPrice(promoPrice)} (gốc ${formatPrice(basePrice)})${promoLabel}`
+        : formatPrice(basePrice);
+    document.getElementById('detailProductPrice').textContent = detailPrice;
+    document.getElementById('detailProductStock').textContent = getStockValue(product);
+    document.getElementById('detailProductDescription').textContent = product.description || 'Chưa có mô tả';
+
+    const detailImage = modal.querySelector('.detail-image');
+    if (detailImage) {
+        const imageSrc = getProductImageSrc(product);
+        if (imageSrc) {
+            const safeName = escapeHtml(product?.name || 'Sản phẩm');
+            detailImage.innerHTML = `<img src="${encodeURI(imageSrc)}" alt="${safeName}" />`;
+        } else {
+            detailImage.innerHTML = '<div class="detail-image-placeholder">Anh san pham</div>';
+        }
+    }
+
+    const addBtn = document.getElementById('detailAddToCart');
+    if (addBtn) {
+        addBtn.onclick = () => {
+            addToCart(product.id, product.name, product.price || 0);
+            closeProductDetail();
+        };
+    }
+
+    const inventoryBtn = document.getElementById('detailInventoryBtn');
+    if (inventoryBtn) {
+        inventoryBtn.onclick = () => openInventoryModal(product.id);
+    }
+
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeProductDetail() {
+    const modal = document.getElementById('productDetailModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function openInventoryModal(productId = null) {
+    const modal = document.getElementById('inventoryModal');
+    if (!modal) return;
+
+    const resolvedId = resolveInventoryProductId(productId);
+    populateInventoryProducts(resolvedId);
+    activeInventoryProductId = resolvedId;
+    updateInventoryStockDisplay(resolvedId);
+    loadInventoryHistory(resolvedId);
+
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeInventoryModal() {
+    const modal = document.getElementById('inventoryModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function resolveInventoryProductId(productId) {
+    if (Number.isFinite(Number(productId))) {
+        return Number(productId);
+    }
+    const first = products && products.length > 0 ? products[0] : null;
+    return first?.id || null;
+}
+
+function populateInventoryProducts(selectedId) {
+    const select = document.getElementById('inventoryProductSelect');
+    if (!select) return;
+    const options = (products || []).map((product) => {
+        const label = `${product.name || 'San pham'} (${product.code || product.barcode || '-'})`;
+        return `<option value="${product.id}">${escapeHtml(label)}</option>`;
+    }).join('');
+    select.innerHTML = options;
+    if (selectedId && select.querySelector(`option[value="${selectedId}"]`)) {
+        select.value = String(selectedId);
+    }
+}
+
+function updateInventoryStockDisplay(productId) {
+    const stockEl = document.getElementById('inventoryCurrentStock');
+    if (!stockEl) return;
+    const product = products.find(p => p.id === productId);
+    stockEl.textContent = formatCompactNumber(getStockValue(product || {}));
+}
+
+async function loadInventoryHistory(productId) {
+    const list = document.getElementById('inventoryHistoryList');
+    const empty = document.getElementById('inventoryHistoryEmpty');
+    if (!list || !empty || !productId) return;
+
+    list.innerHTML = '';
+    empty.style.display = 'none';
+
+    try {
+        const res = await fetch(`${API_BASE}/inventory/history?productId=${productId}`, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+        });
+        if (!res.ok) {
+            throw new Error('Failed to load inventory history');
+        }
+        const data = await res.json();
+        renderInventoryHistory(Array.isArray(data) ? data : []);
+    } catch (err) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+    }
+}
+
+function renderInventoryHistory(items) {
+    const list = document.getElementById('inventoryHistoryList');
+    const empty = document.getElementById('inventoryHistoryEmpty');
+    if (!list || !empty) return;
+
+    if (!items || items.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+    }
+
+    empty.style.display = 'none';
+    list.innerHTML = items.map((item) => {
+        const qty = Number(item.quantity) || 0;
+        const label = formatInventoryType(item.type);
+        const when = item.createdAt ? ` - ${escapeHtml(item.createdAt)}` : '';
+        return `
+            <div class="summary-row">
+                <span>${escapeHtml(label)}${when}</span>
+                <strong>${formatCompactNumber(qty)}</strong>
+            </div>
+        `;
+    }).join('');
+}
+
+function formatInventoryType(type) {
+    switch ((type || '').toUpperCase()) {
+        case 'IN':
+            return '\u004e\u0068\u1ead\u0070';
+        case 'SALE':
+            return '\u0042\u00e1\u006e';
+        case 'OUT':
+            return '\u0058\u0075\u1ea5\u0074';
+        case 'RETURN':
+            return '\u0054\u0072\u1ea3';
+        case 'ADJUST':
+            return '\u0110\u0069\u1ec1\u0075\u0020\u0063\u0068\u1ec9\u006e\u0068';
+        default:
+            return '\u004b\u0068\u00e1\u0063';
+    }
+}
+
+async function submitInventoryReceipt() {
+    const productId = activeInventoryProductId;
+    if (!productId) {
+        showPopup('Vui l\u00f2ng ch\u1ecdn s\u1ea3n ph\u1ea9m.', { type: 'error' });
+        return;
+    }
+    const qtyInput = document.getElementById('inventoryQtyInput');
+    const unitPriceInput = document.getElementById('inventoryUnitPriceInput');
+    const noteInput = document.getElementById('inventoryNoteInput');
+    const qty = parseInt(qtyInput?.value || '0', 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+        showPopup('Vui l\u00f2ng nh\u1eadp s\u1ed1 l\u01b0\u1ee3ng h\u1ee3p l\u1ec7.', { type: 'error' });
+        return;
+    }
+
+    const rawUnitPrice = Number(unitPriceInput?.value || '');
+    const unitPrice = Number.isFinite(rawUnitPrice) && rawUnitPrice > 0 ? rawUnitPrice : null;
+    const note = (noteInput?.value || '').trim();
+    const userId = parseInt(sessionStorage.getItem('userId'), 10) || null;
+
+    try {
+        const res = await fetch(`${API_BASE}/inventory/receipts`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+            },
+            body: JSON.stringify({
+                productId,
+                quantity: qty,
+                unitPrice,
+                note: note || null,
+                userId
+            })
+        });
+
+        if (!res.ok) {
+            const message = await res.text();
+            showPopup(message || 'Kh\u00f4ng th\u1ec3 nh\u1eadp kho.', { type: 'error' });
+            return;
+        }
+
+        const data = await res.json();
+        updateLocalProductStock(productId, data?.newStock);
+        loadInventoryHistory(productId);
+        if (qtyInput) qtyInput.value = '1';
+        if (unitPriceInput) unitPriceInput.value = '';
+        if (noteInput) noteInput.value = '';
+        showPopup('\u0110\u00e3 nh\u1eadp kho th\u00e0nh c\u00f4ng.', { type: 'success' });
+    } catch (err) {
+        showPopup('L\u1ed7i k\u1ebft n\u1ed1i khi nh\u1eadp kho.', { type: 'error' });
+    }
+}
+
+function updateLocalProductStock(productId, newStock) {
+    const product = products.find(p => p.id === productId);
+    if (product) {
+        const stockValue = Number.isFinite(Number(newStock)) ? Number(newStock) : getStockValue(product);
+        product.stock = stockValue;
+    }
+    cart.forEach(item => {
+        if (item.productId === productId) {
+            item.stock = Number.isFinite(Number(newStock)) ? Number(newStock) : item.stock;
+        }
+    });
+    updateInventoryStockDisplay(productId);
+    filterProducts();
+    updateProductDetailStock(productId);
+}
+
+function applyLocalStockAfterSale() {
+    if (!cart || cart.length === 0) return;
+    const updates = new Map();
+    cart.forEach(item => {
+        if (!item || item.isReturnItem || !Number.isFinite(Number(item.productId))) return;
+        const product = products.find(p => p.id === item.productId);
+        if (!product) return;
+        const current = getStockValue(product);
+        const qty = Math.max(0, Number(item.quantity) || 0);
+        const next = Math.max(0, current - qty);
+        updates.set(product.id, next);
+    });
+
+    if (updates.size === 0) return;
+    updates.forEach((stock, productId) => {
+        const product = products.find(p => p.id === productId);
+        if (product) {
+            product.stock = stock;
+        }
+    });
+    filterProducts();
+}
+
+function updateProductDetailStock(productId) {
+    const modal = document.getElementById('productDetailModal');
+    if (!modal || !modal.classList.contains('show')) return;
+    const detailName = document.getElementById('detailProductName')?.textContent || '';
+    const product = products.find(p => p.id === productId);
+    if (!product || (detailName && product.name && detailName !== product.name)) {
+        return;
+    }
+    const stockEl = document.getElementById('detailProductStock');
+    if (stockEl) {
+        stockEl.textContent = formatCompactNumber(getStockValue(product));
+    }
+}
+
+function isToolbarSearchOpen() {
+    const panel = document.getElementById('toolbarSearchResults');
+    return panel?.classList.contains('show');
+}
+
+function showToolbarSearchResults() {
+    const panel = document.getElementById('toolbarSearchResults');
+    if (!panel) return;
+    panel.classList.add('show');
+    panel.setAttribute('aria-hidden', 'false');
+}
+
+function hideToolbarSearchResults() {
+    const panel = document.getElementById('toolbarSearchResults');
+    if (!panel) return;
+    panel.classList.remove('show');
+    panel.setAttribute('aria-hidden', 'true');
+}
+
+function clearToolbarSearch() {
+    const input = document.getElementById('searchInput');
+    if (input) {
+        input.value = '';
+    }
+    topSearchTerm = '';
+    hideToolbarSearchResults();
+}
+
+function renderToolbarSearchResults(rawKeyword) {
+    const keyword = normalizeKeyword(rawKeyword);
+    const panel = document.getElementById('toolbarSearchResults');
+    const list = document.getElementById('toolbarSearchList');
+    const empty = document.getElementById('toolbarSearchEmpty');
+    if (!panel || !list || !empty) return;
+
+    if (!keyword) {
+        list.innerHTML = '';
+        empty.style.display = 'none';
+        hideToolbarSearchResults();
+        return;
+    }
+
+    const matches = applySort(filterProductList(products, keyword));
+    const qty = getCurrentQty();
+    if (!matches || matches.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        showToolbarSearchResults();
+        return;
+    }
+
+    empty.style.display = 'none';
+    list.innerHTML = matches.map((p, idx) => {
+        const name = p.name || 'Sản phẩm';
+        const code = p.code || p.barcode || '-';
+        const sku = p.sku || p.skuCode || p.skuId || p.code || p.barcode || '-';
+        const unit = p.unit || '-';
+        const pricing = getProductPricing(p);
+        const price = pricing.hasPromo ? pricing.promoPrice : (Number.isFinite(pricing.basePrice) ? pricing.basePrice : 0);
+        const total = price * qty;
+        return `
+            <button type="button" class="toolbar-search-row item"
+                data-product-id="${p.id}"
+                data-product-name="${escapeHtml(name)}"
+                data-product-price="${price}">
+                <span>${idx + 1}</span>
+                <span>${escapeHtml(code)}</span>
+                <span>${escapeHtml(sku)}</span>
+                <span class="toolbar-search-name">${escapeHtml(name)}</span>
+                <span>${qty}</span>
+                <span>${escapeHtml(unit)}</span>
+                <span>${formatPrice(price)}</span>
+                <span>${formatPrice(total)}</span>
+            </button>
+        `;
+    }).join('');
+    showToolbarSearchResults();
+}
+
+function openCustomerDetail(customerId) {
+    const modal = document.getElementById('customerDetailModal');
+    if (!modal) return;
+
+    const cachedCustomer = customers.find(c => c.id === customerId);
+    if (!cachedCustomer) {
+        showPopup('Không tìm thấy khách hàng.', { type: 'error' });
+        return;
+    }
+
+    activeCustomerDetailId = customerId;
+    switchCustomerDetailTab('overview');
+
+    applyCustomerDetailData(cachedCustomer);
+    refreshCustomerDetailFromApi(customerId);
+
+    resetCustomerHistoryView();
+    if (activeCustomerDetailId) {
+        loadCustomerOrderHistory(activeCustomerDetailId);
+    }
+    updateCustomerDetailActions('overview');
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function applyCustomerDetailData(customer) {
+    if (!customer) return;
+    const customerCode = customer.id ? `KH${customer.id}` : '--';
+    setText('detailCustomerMemberCode', customerCode);
+    setText('detailCustomerCodeInfo', customerCode);
+
+    document.getElementById('detailCustomerName').textContent = (customer.name || '').toUpperCase();
+    const nameCard = document.getElementById('detailCustomerNameCard');
+    if (nameCard) {
+        nameCard.textContent = customer.name || '-';
+    }
+    setText('detailCustomerPhone', customer.phone || '-');
+    setText('detailCustomerEmail', customer.email || '-');
+    setText('detailCustomerAddress', customer.address || '-');
+    setText('detailCustomerNameInfo', customer.name || '-');
+    setText('detailCustomerPhoneInfo', customer.phone || '-');
+    setText('detailCustomerEmailInfo', customer.email || '-');
+    setText('detailCustomerAddressInfo', customer.address || '-');
+    setText('detailCustomerCccdInfo', customer.cccd || '-');
+    setText('detailCustomerDobInfo', customer.dob ? formatDateTime(customer.dob) : '-');
+    setText('detailCustomerGenderInfo', formatGenderLabel(customer.gender));
+
+    const detailPoints = getCustomerPoints(customer);
+    const detailTier = getEffectiveTier(customer);
+    const redeemRate = TIER_DISCOUNT_BY_100[detailTier] || 0;
+    setText('detailCustomerTier', formatTierLabel(detailTier));
+    setText('detailCustomerPoints', formatCompactNumber(detailPoints));
+    setText('detailCustomerPointsUsed', formatCompactNumber(getCustomerPointsUsed(customer)));
+    const earnPolicyAmount = POINTS_EARN_RATE_VND * EARN_POLICY_POINTS;
+    setText('detailEarnPolicy', `${formatCompactNumber(earnPolicyAmount)}đ = ${formatCompactNumber(EARN_POLICY_POINTS)} điểm`);
+    setText('detailRedeemPolicy', redeemRate ? `100 điểm = ${formatCompactNumber(redeemRate)}d` : '-');
+}
+
+function formatGenderLabel(value) {
+    const normalized = (value || '').toString().trim().toUpperCase();
+    if (!normalized) return 'Chưa có thông tin';
+    if (normalized === 'MALE' || normalized === 'NAM') return 'Nam';
+    if (normalized === 'FEMALE' || normalized === 'NU' || normalized === 'NỮ') return 'Nữ';
+    return 'Không xác định';
+}
+
+async function refreshCustomerDetailFromApi(customerId) {
+    if (!customerId) return;
+    try {
+        const response = await fetch(`${API_BASE}/customers/${customerId}`, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+        });
+        if (!response.ok) return;
+        const customer = await response.json();
+        if (!customer) return;
+        applyCustomerDetailData(customer);
+
+        const index = customers.findIndex(c => c.id === customerId);
+        if (index >= 0) {
+            customers[index] = customer;
+        }
+        if (selectedCustomer?.id === customerId) {
+            applyCustomerSelection(customer, { openDetail: false });
+        }
+    } catch (err) {
+    }
+}
+
+function getCustomerPointsUsed(customer) {
+    const used =
+        customer?.pointsUsed ??
+        customer?.usedPoints ??
+        customer?.redeemedPoints ??
+        customer?.monthlyPoints ??
+        customer?.monthly_points;
+    return Number.isFinite(Number(used)) ? Number(used) : 0;
+}
+
+function closeCustomerDetail() {
+    const modal = document.getElementById('customerDetailModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function switchCustomerDetailTab(key) {
+    const modal = document.getElementById('customerDetailModal');
+    if (!modal) return;
+
+    modal.querySelectorAll('.detail-tabs .tab').forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.tab === key);
+    });
+    modal.querySelectorAll('.detail-panel').forEach((panel) => {
+        panel.classList.toggle('active', panel.dataset.panel === key);
+    });
+
+    updateCustomerDetailActions(key);
+
+    if (key === 'history' && activeCustomerDetailId) {
+        loadCustomerOrderHistory(activeCustomerDetailId);
+    }
+}
+
+function updateCustomerDetailActions(key) {
+    const primary = document.getElementById('detailPrimaryAction');
+    const secondary = document.getElementById('detailSecondaryAction');
+    if (!primary || !secondary) return;
+
+    secondary.style.display = '';
+    primary.onclick = null;
+
+    if (key === 'info') {
+        primary.textContent = 'Sửa';
+        primary.onclick = () => {
+            const customer = customers.find(c => c.id === activeCustomerDetailId);
+            if (customer) {
+                openCustomerModalForEdit(customer);
+            }
+        };
+        return;
+    }
+    if (key === 'history') {
+        primary.textContent = 'Đóng';
+        secondary.style.display = 'none';
+        primary.onclick = closeCustomerDetail;
+        return;
+    }
+    if (key === 'debt') {
+        primary.textContent = 'Xác nhận';
+        return;
+    }
+    primary.textContent = 'Xác nhận';
+}
+
+function openCustomerModalForEdit(customer) {
+    if (!customer || !customer.id) return;
+    editingCustomerId = customer.id;
+    const modal = document.getElementById('customerModal');
+    const form = document.getElementById('customerForm');
+    if (!modal || !form) return;
+
+    setAddressRequired(false);
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    form.reset();
+
+    document.getElementById('customerNameInput').value = customer.name || '';
+    document.getElementById('customerPhoneInput').value = customer.phone || '';
+    document.getElementById('customerEmailInput').value = customer.email || '';
+    document.getElementById('customerCccdInput').value = customer.cccd || '';
+    const dobInput = document.getElementById('customerDobInput');
+    if (dobInput) {
+        dobInput.value = customer.dob ? String(customer.dob).slice(0, 10) : '';
+    }
+
+    const genderValue = (customer.gender || 'UNKNOWN').toString().toUpperCase();
+    const genderInputs = document.querySelectorAll('input[name="customerGender"]');
+    genderInputs.forEach(input => {
+        input.checked = input.value === genderValue;
+    });
+
+    const addressInput = document.getElementById('customerAddressInput');
+    if (addressInput) addressInput.value = customer.address || '';
+
+    const confirmInput = document.getElementById('customerConfirmInput');
+    if (confirmInput) confirmInput.checked = true;
+
+    // Không bắt buộc địa chỉ theo tỉnh/huyện/xã khi sửa
+    const cityInput = document.getElementById('customerCityInput');
+    const districtInput = document.getElementById('customerDistrictInput');
+    const wardInput = document.getElementById('customerWardInput');
+    if (cityInput) {
+        cityInput.value = '';
+        cityInput.dataset.code = '';
+    }
+    resetAddressInput(districtInput);
+    resetAddressInput(wardInput);
+    const districtList = document.getElementById('customerDistrictList');
+    const wardList = document.getElementById('customerWardList');
+    if (districtList) districtList.innerHTML = '';
+    if (wardList) wardList.innerHTML = '';
+}
+
+function resetCustomerHistoryView() {
+    const list = document.getElementById('detailCustomerHistoryList');
+    if (list) {
+        list.innerHTML = '<div class="history-empty">Chưa có lịch sử mua hàng</div>';
+    }
+    setText('detailCustomerSpend', '0');
+    setText('detailCustomerOrders', '0');
+    setText('detailCustomerSpendHistory', '0');
+    setText('detailCustomerOrdersHistory', '0');
+}
+
+async function loadCustomerOrderHistory(customerId, force = false) {
+    if (!customerId) return;
+    const list = document.getElementById('detailCustomerHistoryList');
+    if (list) {
+        list.innerHTML = '<div class="history-empty">Đang tải lịch sử mua hàng...</div>';
+    }
+
+    if (!force && customerOrderCache.has(customerId)) {
+        renderCustomerOrderHistory(customerOrderCache.get(customerId));
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/customers/${customerId}/orders`, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
+        });
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                sessionStorage.clear();
+                window.location.href = '/pages/login.html';
+                return;
+            }
+            throw new Error('Failed to load customer order history');
+        }
+
+        const data = await response.json();
+        const orders = Array.isArray(data) ? data : [];
+        customerOrderCache.set(customerId, orders);
+        renderCustomerOrderHistory(orders);
+    } catch (err) {
+        if (list) {
+            list.innerHTML = '<div class="history-empty">Không tải được lịch sử mua hàng.</div>';
+        }
+    }
+}
+
+function renderCustomerOrderHistory(orders) {
+    const list = document.getElementById('detailCustomerHistoryList');
+    if (!list) return;
+
+    if (!orders || orders.length === 0) {
+        list.innerHTML = '<div class="history-empty">Chưa có lịch sử mua hàng</div>';
+        updateCustomerOrderSummary([], 0);
+        return;
+    }
+
+    const totalSpent = orders.reduce((sum, order) => sum + (Number(order.totalAmount) || 0), 0);
+    updateCustomerOrderSummary(orders, totalSpent);
+
+    list.innerHTML = orders.map((order) => {
+        const createdAt = formatDateTime(order.createdAt);
+        const invoice = order.invoiceNumber || `HD-${order.id || '-'}`;
+        const statusText = getOrderStatusText(order.status);
+        const statusClass = getOrderStatusClass(order.status);
+        const storeName = order.storeName || order.branchName || '-';
+        const total = formatPrice(order.totalAmount || 0);
+        const note = order.note || '-';
+        return `
+            <div class="history-item">
+                <span>${escapeHtml(createdAt)}</span>
+                <strong>${escapeHtml(invoice)}</strong>
+                <span>${escapeHtml(storeName)}</span>
+                <span class="status-badge ${statusClass}">${escapeHtml(statusText)}</span>
+                <span>${escapeHtml(total)}</span>
+                <span>${escapeHtml(note)}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateCustomerOrderSummary(orders, totalSpent) {
+    const count = orders.length;
+    setText('detailCustomerSpend', formatPrice(totalSpent));
+    setText('detailCustomerOrders', formatCompactNumber(count));
+    setText('detailCustomerSpendHistory', formatPrice(totalSpent));
+    setText('detailCustomerOrdersHistory', formatCompactNumber(count));
+}
+
+function getOrderStatusText(status) {
+    if (!status) return 'Đã thanh toán';
+    const textMap = {
+        COMPLETED: 'Đã thanh toán',
+        PAID: 'Đã thanh toán',
+        PENDING: 'Chờ xử lý',
+        CANCELLED: 'Đã hủy'
+    };
+    return textMap[status] || 'Đã thanh toán';
+}
+
+function getOrderStatusClass(status) {
+    if (!status) return 'success';
+    const classMap = {
+        COMPLETED: 'success',
+        PAID: 'success',
+        PENDING: 'pending',
+        CANCELLED: 'cancelled'
+    };
+    return classMap[status] || 'success';
+}
+
+function toggleEmptyState(isEmpty) {
+    const emptyState = document.getElementById('emptyState');
+    if (!emptyState) return;
+    emptyState.style.display = isEmpty ? 'grid' : 'none';
+}
+
+function setupEmployeeSelector() {
+    const button = document.getElementById('employeeSelector');
+    const dropdown = document.getElementById('employeeList');
+    
+    if (!button || !dropdown) return;
+
+    button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = dropdown.style.display !== 'none';
+        dropdown.style.display = isOpen ? 'none' : 'block';
+        
+        if (!isOpen && !employeesLoaded) {
+            loadEmployees();
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!dropdown || !button) return;
+        if (!button.contains(e.target) && !dropdown.contains(e.target)) {
+            dropdown.style.display = 'none';
+        }
+    });
+}
+
+async function loadEmployees() {
+    if (employeesLoaded) return;
+
+    const dropdown = document.getElementById('employeeList');
+    if (!dropdown) return;
+
+    dropdown.innerHTML = '<div class="employee-empty">Đang tải...</div>';
+
+    try {
+        const response = await fetch(`${API_BASE}/users`, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
+        });
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                sessionStorage.clear();
+                window.location.href = '/pages/login.html';
+                return;
+            }
+            throw new Error('Failed to load employees');
+        }
+
+        const allUsers = await response.json();
+        // Filter for users with EMPLOYEE role (exclude ADMIN, OWNER, MANAGER)
+        employees = allUsers.filter(u => {
+            const userRole = u.role ? (typeof u.role === 'string' ? u.role : u.role.name || '') : '';
+            return userRole === 'EMPLOYEE';
+        });
+        employeesLoaded = true;
+        renderEmployees();
+    } catch (err) {
+        dropdown.innerHTML = '<div class="employee-empty">Lỗi tải danh sách nhân viên</div>';
+    }
+}
+
+function renderEmployees() {
+    const dropdown = document.getElementById('employeeList');
+    if (!dropdown) return;
+
+    if (!employees || employees.length === 0) {
+        dropdown.innerHTML = '<div class="employee-empty">Chưa có nhân viên</div>';
+        return;
+    }
+
+    const employeesHtml = employees.map(emp => {
+        const roleDisplay = emp.role ? (typeof emp.role === 'object' && emp.role.displayName ? emp.role.displayName : 'Nhân viên') : 'Nhân viên';
+        return `
+        <div class="employee-item" data-employee-id="${emp.id}" onclick="selectEmployee(event, ${emp.id}, '${emp.username.replace(/'/g, "\\'")}', '${(emp.fullName || emp.username).replace(/'/g, "\\'")}')">
+            <div class="employee-info">
+                <p class="employee-name">${emp.fullName || emp.username}</p>
+                <p class="employee-role">${roleDisplay}</p>
+            </div>
+        </div>
+        `;
+    }).join('');
+
+    dropdown.innerHTML = employeesHtml || '<div class="employee-empty">Chưa có nhân viên</div>';
+}
+
+function selectEmployee(evt, employeeId, employeeUsername, employeeName) {
+    selectedEmployee = { id: employeeId, username: employeeUsername, name: employeeName };
+
+    const button = document.getElementById('employeeSelector');
+    if (button) {
+        const nameSpan = button.querySelector('span:not(.chip-caret)');
+        if (nameSpan) {
+            nameSpan.textContent = employeeName || employeeUsername;
+        }
+    }
+
+    const dropdown = document.getElementById('employeeList');
+    if (dropdown) {
+        dropdown.style.display = 'none';
+    }
+
+    document.querySelectorAll('.employee-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    const row = evt?.target?.closest('.employee-item');
+    if (row) row.classList.add('active');
+}
+
+// ==================== AI COMBO PROMOTION FUNCTIONS ====================
+
+// ComboPromotionAI v× ComboPromotionUI du?c load t? file combo-promotion-ai.js
+
+/**
+ * Ph×n t×ch gi? h×ng v× t? d?ng th×m qu× t?ng combo
+ */
+async function analyzeCartForCombo() {
+    // Tr×nh v×ng l?p v× h?n
+    if (isAnalyzingCombo) {
+        return;
+    }
+    
+    // Ki?m tra c× promotions kh×ng
+    if (!allPromotions || allPromotions.length === 0) {
+        return;
+    }
+    
+    isAnalyzingCombo = true;
+    
+    try {
+        // Chuy?n d?i gi? h×ng sang format cho AI (ch? s?n ph?m th?t)
+        const cartItems = cart
+            .filter(item => !item.isFreeGift)
+            .map(item => ({
+                product_id: item.productId,
+                product_name: item.productName,
+                quantity: item.quantity,
+                price: item.productPrice
+            }));
+        
+        if (cartItems.length === 0) {
+            console.log('[analyzeCartForCombo] Cart is empty');
+            isAnalyzingCombo = false;
+            return;
+        }
+        
+        // Format promotions cho AI (truyền products để lookup tên)
+        const formattedPromotions = ComboPromotionAI.formatPromotions(allPromotions, products);
+        
+        console.log('[analyzeCartForCombo] Analyzing:', {
+            cartItems: cartItems.length,
+            promotions: formattedPromotions.length,
+            cart: cartItems
+        });
+        
+        // G?i AI ph×n t×ch
+        const result = await ComboPromotionAI.analyzeCart(cartItems, formattedPromotions);
+        
+        console.log('[analyzeCartForCombo] AI result:', result);
+        
+        // Hi?n th? suggestions (ELIGIBLE ho?c UPSELL)
+        if (result.suggestions && result.suggestions.length > 0) {
+            displayComboSuggestions(result.suggestions);
+        }
+        
+        // T? d?ng th×m/c?p nh?t qu× t?ng
+        if (result.auto_add_gifts && result.auto_add_gifts.length > 0) {
+            result.auto_add_gifts.forEach(gift => {
+                autoAddGiftToCart(gift);
+            });
+        }
+        
+        // X×a qu× t?ng kh×ng hộp l?
+        await removeIneligibleGifts(result.auto_add_gifts || []);
+        
+    } catch (error) {
+        console.error('[analyzeCartForCombo] Error:', error);
+    } finally {
+        isAnalyzingCombo = false;
+    }
+}
+
+/**
+ * Hi?n th? g?i × combo
+ */
+function displayComboSuggestions(suggestions) {
+    suggestions.forEach(suggestion => {
+        if (suggestion.suggestion_type === 'ELIGIBLE') {
+            // ×? di?u ki?n - Hi?n th? th×ng b×o th×nh c×ng
+            ComboPromotionUI.showNotification(suggestion.message, 'success');
+        } else if (suggestion.suggestion_type === 'UPSELL') {
+            // G?n d? - Hi?n th? modal g?i × (ch? hi?n th? 1 l?n)
+            if (!document.querySelector('.upsell-modal')) {
+                ComboPromotionUI.showUpsellModal(suggestion, handleUpsellAddMore);
+            }
+        }
+    });
+}
+
+/**
+ * X? l× khi ngu?i d×ng nh?n "Th×m ngay" trong modal upsell
+ */
+function handleUpsellAddMore(suggestion) {
+    console.log('[handleUpsellAddMore] Adding more:', suggestion);
+    
+    // T×m s?n ph?m trong gi?
+    const cartItem = cart.find(item => 
+        item.productId === suggestion.main_product_id && !item.isFreeGift
+    );
+    
+    if (cartItem) {
+        // Tang s? lu?ng l×n d? d? nh?n qu×
+        const needed = suggestion.required_quantity - suggestion.current_quantity;
+        cartItem.quantity += needed;
+        
+        renderCart();
+        updateTotal();
+        
+        // Ph×n t×ch l?i d? t? d?ng th×m qu×
+        setTimeout(() => analyzeCartForCombo(), 300);
+    }
+}
+
+/**
+ * Tự động thêm quà tặng vào giỏ
+ */
+async function autoAddGiftToCart(gift) {
+    console.log('[autoAddGiftToCart] Adding gift:', gift);
+    console.log('[autoAddGiftToCart] Products cache:', products?.length || 0, 'items');
+    
+    // Lookup tên sản phẩm từ cache hoặc API
+    let productName = gift.product_name || null;
+    
+    if (!productName && gift.product_id) {
+        // Thử tìm trong cache products trước
+        const cachedProduct = products.find(p => 
+            Number(p.productId) === Number(gift.product_id) || 
+            Number(p.id) === Number(gift.product_id)
+        );
+        
+        if (cachedProduct) {
+            productName = cachedProduct.name || cachedProduct.productName || cachedProduct.product_name;
+            console.log('[autoAddGiftToCart] ✓ Found in cache:', productName);
+        } else {
+            console.log('[autoAddGiftToCart] ⚠️ Not found in cache, trying API...');
+            // Không có trong cache, gọi API
+            try {
+                const res = await fetch(`${API_BASE}/products/${gift.product_id}`, {
+                    headers: {
+                        'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+                    }
+                });
+                if (res.ok) {
+                    const product = await res.json();
+                    productName = product.name || product.productName || product.product_name;
+                    console.log('[autoAddGiftToCart] ✓ Fetched from API:', productName);
+                } else {
+                    console.error('[autoAddGiftToCart] ❌ API returned:', res.status);
+                }
+            } catch (err) {
+                console.error('[autoAddGiftToCart] ❌ Failed to fetch:', err);
+            }
+        }
+    }
+    
+    // Fallback cuối cùng
+    if (!productName) {
+        productName = `Sản phẩm #${gift.product_id}`;
+        console.warn('[autoAddGiftToCart] ⚠️ Using fallback name:', productName);
+    }
+    
+    // Kiểm tra xem quà đã có trong giỏ chưa
+    const existingGift = cart.find(item => 
+        item.productId === gift.product_id && 
+        item.isFreeGift === true &&
+        item.promoId === gift.promo_id
+    );
+    
+    if (existingGift) {
+        // Cập nhật số lượng và tên nếu khác
+        if (existingGift.quantity !== gift.quantity) {
+            console.log('[autoAddGiftToCart] Updating gift quantity:', gift.quantity);
+            existingGift.quantity = gift.quantity;
+        }
+        if (existingGift.productName !== productName) {
+            existingGift.productName = productName;
+        }
+        renderCart();
+        updateTotal();
+    } else {
+        // Thêm quà mới
+        console.log('[autoAddGiftToCart] Adding new gift');
+        cart.push({
+            productId: gift.product_id,
+            productName: productName,
+            productPrice: 0, // Miễn phí
+            quantity: gift.quantity,
+            productCode: '',
+            unit: '',
+            stock: 999, // Set stock cao để không bị check "out of stock"
+            isFreeGift: true,
+            promoId: gift.promo_id,
+            promoCode: gift.promo_code,
+            promoLabel: `🎁 ${gift.promo_name}`
+        });
+        
+        renderCart();
+        updateTotal();
+        
+        // Hiển thị thông báo
+        ComboPromotionUI.showNotification(
+            `✨ Đã thêm ${gift.quantity} ${productName} (Quà tặng)`,
+            'success'
+        );
+    }
+}
+
+/**
+ * Xóa quà tặng không hợp lệ và cập nhật số lượng
+ */
+async function removeIneligibleGifts(validGifts) {
+    // Tạo Map các gift hợp lệ với số lượng
+    const validGiftMap = new Map();
+    (validGifts || []).forEach(g => {
+        const key = `${g.product_id}-${g.promo_id}`;
+        validGiftMap.set(key, {
+            quantity: g.quantity,
+            productName: g.product_name
+        });
+    });
+    
+    let hasChanges = false;
+    const itemsToRemove = [];
+    
+    // Kiểm tra từng quà tặng trong giỏ
+    cart.forEach((item, idx) => {
+        if (item.isFreeGift) {
+            const key = `${item.productId}-${item.promoId}`;
+            const validGift = validGiftMap.get(key);
+            
+            if (!validGift) {
+                // Quà không hợp lệ nữa - đánh dấu xóa
+                console.log('[removeIneligibleGifts] ❌ Removing ineligible gift:', item.productName);
+                itemsToRemove.push(idx);
+                hasChanges = true;
+                
+                // Hiển thị thông báo
+                ComboPromotionUI.showNotification(
+                    `⚠️ Đã xóa quà tặng: ${item.productName} (không đủ điều kiện)`,
+                    'warning'
+                );
+            } else if (item.quantity !== validGift.quantity) {
+                // Cập nhật số lượng nếu thay đổi
+                console.log('[removeIneligibleGifts] 🔄 Updating gift quantity:', {
+                    product: item.productName,
+                    old: item.quantity,
+                    new: validGift.quantity
+                });
+                item.quantity = validGift.quantity;
+                hasChanges = true;
+            }
+        }
+    });
+    
+    // Xóa các item từ cuối lên đầu để không bị lỗi index
+    itemsToRemove.sort((a, b) => b - a).forEach(idx => {
+        cart.splice(idx, 1);
+    });
+    
+    // Nếu có thay đổi, render lại
+    if (hasChanges) {
+        console.log('[removeIneligibleGifts] ✅ Cart updated, rendering...');
+        renderCart();
+        updateTotal();
+    }
+}
+
+/**
+ * X? l× khi thay d?i s? lu?ng trong gi?
+ */
+async function onCartItemQuantityChange() {
+    // Ph×n t×ch l?i gi? h×ng
+    await analyzeCartForCombo();
+}
+
+// G?i khi load trang d? ki?m tra AI Service
+window.addEventListener('load', async () => {
+    try {
+        const response = await fetch('/ai/health');
+        const data = await response.json();
+        if (data.status === 'ok') {
+            console.log('[AI Combo] Service ready');
+        }
+    } catch (error) {
+        console.log('[AI Combo] Service offline (combo features disabled)');
+    }
+});
