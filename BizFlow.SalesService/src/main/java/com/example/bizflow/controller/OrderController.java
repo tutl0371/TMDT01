@@ -2,6 +2,8 @@ package com.example.bizflow.controller;
 
 import com.example.bizflow.dto.CreateOrderRequest;
 import com.example.bizflow.dto.CreateOrderResponse;
+import com.example.bizflow.dto.CartStateRequest;
+import com.example.bizflow.dto.CartStateResponse;
 import com.example.bizflow.dto.OrderItemRequest;
 import com.example.bizflow.dto.OrderItemResponse;
 import com.example.bizflow.dto.OrderMessage;
@@ -22,6 +24,7 @@ import com.example.bizflow.repository.OrderRepository;
 import com.example.bizflow.repository.PaymentRepository;
 import com.example.bizflow.service.OrderMessageProducer;
 import com.example.bizflow.service.OrderService;
+import com.example.bizflow.service.UserCartService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -59,6 +62,7 @@ public class OrderController {
     private final UserClient userClient;
     private final PromotionClient promotionClient;
     private final OrderMessageProducer orderMessageProducer;
+    private final UserCartService userCartService;
 
     public OrderController(
             OrderRepository orderRepository,
@@ -70,7 +74,8 @@ public class OrderController {
             CustomerClient customerClient,
             UserClient userClient,
             PromotionClient promotionClient,
-            OrderMessageProducer orderMessageProducer
+                OrderMessageProducer orderMessageProducer,
+                UserCartService userCartService
     ) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
@@ -82,6 +87,56 @@ public class OrderController {
         this.userClient = userClient;
         this.promotionClient = promotionClient;
         this.orderMessageProducer = orderMessageProducer;
+        this.userCartService = userCartService;
+    }
+
+    @GetMapping("/cart/{userId}")
+    public ResponseEntity<?> getUserCart(@PathVariable("userId") Long userId) {
+        if (userId == null) {
+            return ResponseEntity.badRequest().body("User id is required");
+        }
+
+        UserClient.UserSnapshot user = userClient.getUser(userId);
+        if (user == null) {
+            return ResponseEntity.badRequest().body("User not found");
+        }
+
+        return userCartService.getCartState(userId)
+                .<ResponseEntity<?>>map(snapshot -> ResponseEntity.ok(new CartStateResponse(
+                        snapshot.getUserId(),
+                        snapshot.getUsername(),
+                        snapshot.getState(),
+                        snapshot.getUpdatedAt()
+                )))
+                .orElseGet(() -> ResponseEntity.ok(new CartStateResponse(
+                        userId,
+                        resolveUserName(user),
+                        null,
+                        null
+                )));
+    }
+
+    @PostMapping("/cart/{userId}")
+    public ResponseEntity<?> saveUserCart(@PathVariable("userId") Long userId,
+                                          @RequestBody(required = false) CartStateRequest request) {
+        if (userId == null) {
+            return ResponseEntity.badRequest().body("User id is required");
+        }
+
+        UserClient.UserSnapshot user = userClient.getUser(userId);
+        if (user == null) {
+            return ResponseEntity.badRequest().body("User not found");
+        }
+
+        Object state = request == null ? null : request.getState();
+        UserCartService.UserCartSnapshot snapshot = userCartService.saveCartState(userId, resolveUserName(user), state);
+
+        return ResponseEntity.ok(new CartStateResponse(
+                snapshot.getUserId(),
+                snapshot.getUsername(),
+                snapshot.getState(),
+                snapshot.getUpdatedAt()
+        ));
     }
 
     @PostMapping("/{id}/pay")
