@@ -157,6 +157,26 @@
     .conv-item.active { background: #e8f2ff; }
     .conv-item small { color: var(--muted); }
 
+    .conv-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .conv-pending {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: #fff1f2;
+      color: #be123c;
+      border: 1px solid #fecdd3;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      line-height: 1.2;
+    }
+
     .chat-box {
       border: 1px solid #dbe4f3;
       border-radius: 12px;
@@ -394,11 +414,15 @@ async function loadConversations() {
 
   list.innerHTML = rows.map(item => {
     const displayName = resolveCustomerDisplayName(item.userName, item.userId);
+    const hasUnread = Number(item.unreadCount) > 0;
     return `
     <button class="conv-item ${Number(item.userId) === Number(activeUserId) ? 'active' : ''}" type="button" data-user-id="${item.userId}" data-user-name="${escapeAttr(displayName)}">
-      <strong>${displayName.replace(/</g,'&lt;')}</strong>
+      <div class="conv-title">
+        <strong>${displayName.replace(/</g,'&lt;')}</strong>
+        ${hasUnread ? '<span class="conv-pending">chờ phản hồi</span>' : ''}
+      </div>
       <span>${(item.lastMessage || '').replace(/</g,'&lt;')}</span>
-      <small>${formatTime(item.lastMessageAt)} ${item.unreadCount > 0 ? `<strong style="color:#ef4444;margin-left:4px;">(${item.unreadCount})</strong>` : ''}</small>
+      <small>${formatTime(item.lastMessageAt)} ${hasUnread ? `<strong style="color:#ef4444;margin-left:4px;">(${item.unreadCount})</strong>` : ''}</small>
     </button>
   `;
   }).join('');

@@ -243,7 +243,7 @@ public class OrderController {
                     if (product == null) {
                         return null;
                     }
-                    int promoQty = Math.abs(item.getQuantity());
+                    int promoQty = item.getQuantity();
                     if (promoQty <= 0) {
                         return null;
                     }
@@ -257,7 +257,7 @@ public class OrderController {
                 .filter(item -> item != null)
                 .collect(Collectors.toList());
 
-        Map<Long, PromotionClient.CartItemPriceResponse> promoPrices = promotionClient.calculatePrices(promoItems);
+            Map<Long, PromotionClient.CartItemPriceResponse> promoPrices = promotionClient.calculateAndConsumePrices(promoItems);
 
         BigDecimal total = BigDecimal.ZERO;
         List<OrderItem> items = new ArrayList<>();

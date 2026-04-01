@@ -49,6 +49,12 @@ public class Promotion {
     @Column(nullable = false)
     private Boolean active = true;
 
+    @Column(name = "max_quantity")
+    private Integer maxQuantity;
+
+    @Column(name = "used_quantity", nullable = false, columnDefinition = "INT NOT NULL DEFAULT 0")
+    private Integer usedQuantity = 0;
+
     @OneToMany(mappedBy = "promotion", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<PromotionTarget> targets;
 
@@ -85,6 +91,12 @@ public class Promotion {
 
     public Boolean getActive() { return active; }
     public void setActive(Boolean active) { this.active = active; }
+
+    public Integer getMaxQuantity() { return maxQuantity; }
+    public void setMaxQuantity(Integer maxQuantity) { this.maxQuantity = maxQuantity; }
+
+    public Integer getUsedQuantity() { return usedQuantity; }
+    public void setUsedQuantity(Integer usedQuantity) { this.usedQuantity = usedQuantity; }
 
     public List<PromotionTarget> getTargets() { return targets; }
     public void setTargets(List<PromotionTarget> targets) { this.targets = targets; }

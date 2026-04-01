@@ -985,6 +985,8 @@ async function createOrder(isPaid) {
             await openInvoiceModal(receiptData);
             applyLocalStockAfterSale();
         }
+        await loadPromotionIndex(true);
+        filterProducts(document.getElementById('searchInput')?.value || '');
         clearCart(true);
         if (exchangeDraft) {
             sessionStorage.removeItem('exchangeDraft');
@@ -1911,6 +1913,11 @@ function formatPromotionLabel(promo) {
 function isPromotionActive(promo) {
     if (!promo) return false;
     if (promo.active === false) return false;
+    const maxQty = Number(promo.maxQuantity);
+    if (Number.isFinite(maxQty) && maxQty > 0) {
+        const usedQty = Math.max(0, Number(promo.usedQuantity || 0));
+        if (usedQty >= maxQty) return false;
+    }
     const now = new Date();
     const start = parsePromotionDate(promo.startDate);
     const end = parsePromotionDate(promo.endDate);
@@ -3737,10 +3744,12 @@ function getProductPricing(product) {
     let promoPrice = NaN;
     let promoLabel = '';
     let promoType = null;
+    let promo = null;
 
     if (promotionIndex && product?.id != null) {
         const promoInfo = promotionIndex.get(product.id);
         if (promoInfo?.promo) {
+            promo = promoInfo.promo;
             promoPrice = getPromoPrice(basePrice, promoInfo.promo);
             promoLabel = promoInfo.label || formatPromotionLabel(promoInfo.promo);
             promoType = normalizeDiscountType(promoInfo.promo.discountType);
@@ -3782,8 +3791,21 @@ function getProductPricing(product) {
         promoPrice,
         hasPromo: hasPromo || hasBundlePromo,
         promoType,
-        label: promoLabel
+        label: promoLabel,
+        promo
     };
+}
+
+function getRemainingPromoText(promo) {
+    if (!promo) return '';
+    const maxQty = Number(promo.maxQuantity);
+    if (!Number.isFinite(maxQty) || maxQty <= 0) {
+        return '';
+    }
+    const remaining = Number.isFinite(Number(promo.remainingQuantity))
+        ? Math.max(0, Number(promo.remainingQuantity))
+        : Math.max(0, maxQty - Math.max(0, Number(promo.usedQuantity || 0)));
+    return `SL ${remaining}`;
 }
 
 function buildProductPriceParts(product) {
@@ -3794,7 +3816,9 @@ function buildProductPriceParts(product) {
     const isBundlePromo = pricing.promoType === 'BUNDLE';
     
     // Show badge for both price discounts and bundle promotions
-    const badge = hasPromo ? '<span class="promo-badge">KM</span>' : '';
+    const remainingText = getRemainingPromoText(pricing.promo);
+    const badgeText = remainingText ? `KM ${remainingText}` : 'KM';
+    const badge = hasPromo ? `<span class="promo-badge">${badgeText}</span>` : '';
     const tagClass = hasPromo && !isBundlePromo ? 'origin' : 'hidden';
     const priceTag = formatPriceCompact(basePrice);
     const label = hasPromo && pricing.label ? `<span class="price-label">${escapeHtml(pricing.label)}</span>` : '';
