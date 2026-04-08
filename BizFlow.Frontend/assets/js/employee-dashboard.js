@@ -68,11 +68,23 @@ const PRODUCT_ICON = `
         <path d="M9 8V6a3 3 0 0 1 6 0v2" />
     </svg>
 `;
+// Lightweight SVG fallback (data URI) used when an <img> fails to load.
+const FALLBACK_SVG_DATA_URI = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 200' width='300' height='200'>
+        <rect width='100%' height='100%' rx='12' fill='%23f0f4f8' />
+        <g transform='translate(65,30) scale(6)'>
+            <path d='M6 8h12l-1.2 11H7.2L6 8Z' fill='%239aa3b6' />
+            <path d='M9 8V6a3 3 0 0 1 6 0v2' fill='%239aa3b6' />
+        </g>
+    </svg>`
+);
 const PRODUCT_IMAGE_LIST_URL = `${API_BASE}/product-images`;
 const PRODUCT_IMAGE_LIST_FALLBACK_URL = '/assets/data/product-image-files.json';
 const productImageMap = new Map();
 const productImageEntries = [];
 let productImageMapReady = false;
+const syntheticCategoryMap = new Map();
+let nextSyntheticCategoryId = -1;
 const POINTS_EARN_RATE_VND = 1000;
 const EARN_POLICY_POINTS = 100;
 
@@ -158,14 +170,24 @@ window.addEventListener('DOMContentLoaded', async () => {
     setupAppMenuModal();
     setupInvoiceModal();
     setupContactSupport();
-    toggleCashPanel(true);
+    // initialize payment panels and prefill checkout customer fields
+    updatePaymentPanels();
+    const checkoutName = document.getElementById('checkoutCustomerName');
+    if (checkoutName) checkoutName.value = selectedCustomer?.name || '';
+    const checkoutPhone = document.getElementById('checkoutCustomerPhone');
+    const phoneVal = selectedCustomer?.phone && selectedCustomer.phone !== '-' ? selectedCustomer.phone : '';
+    if (checkoutPhone) checkoutPhone.value = phoneVal;
+    const checkoutAddress = document.getElementById('checkoutCustomerAddress');
+    if (checkoutAddress) checkoutAddress.value = selectedCustomer?.address || '';
     initInvoices();
     await loadCartStateFromServer();
 
     document.getElementById('productsGrid').innerHTML =
         '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
 
-    await Promise.all([loadProductImageMap(), loadProducts()]);
+    // Ensure image map is loaded before rendering products so images resolve correctly
+    await loadProductImageMap();
+    await loadProducts();
     applyExchangeDraft();
 
     const customerSearchInput = document.getElementById('customerSearch');
@@ -261,6 +283,23 @@ function applyExchangeDraft() {
     updateTotal();
     sessionStorage.removeItem('exchangeDraft');
     queuePersistCartState();
+
+    // UX: bring attention to cart and allow immediate checkout (marketplace-style)
+    try {
+        const cartArea = document.getElementById('cartArea');
+        if (cartArea) {
+            cartArea.classList.add('cart-highlight');
+            setTimeout(() => cartArea.classList.remove('cart-highlight'), 800);
+        }
+        const checkoutBtn = document.getElementById('checkoutBtn');
+        if (checkoutBtn) {
+            checkoutBtn.disabled = false;
+            checkoutBtn.focus({ preventScroll: false });
+            checkoutBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    } catch (e) {
+        console.warn('Failed to focus checkout after addToCart', e);
+    }
 }
 
 function getCurrentUserId() {
@@ -408,8 +447,16 @@ function resolveApiBase() {
         return 'http://localhost:8000/api';
     }
 
-    if (['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port !== '8080') {
-        return '/api';
+    // When developing locally: if served from port 3000 (frontend dev server)
+    // call the gateway directly. Otherwise keep using '/api' so a dev proxy
+    // (if configured) continues to work.
+    if (['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+        if (window.location.port === '3000') {
+            return 'http://localhost:8000/api';
+        }
+        if (window.location.port !== '8080') {
+            return '/api';
+        }
     }
 
     return `${window.location.origin}/api`;
@@ -574,11 +621,14 @@ async function loadProducts() {
         }
 
         const shelvesData = await response.json();
-        
+
         console.log('[loadProducts] Raw shelves data:', shelvesData);
-        
+
+        // Support two response shapes: either an array or an object { value: [...] }
+        const shelvesArray = Array.isArray(shelvesData) ? shelvesData : (Array.isArray(shelvesData?.value) ? shelvesData.value : []);
+
         // CHỈ map những sản phẩm có quantity > 0 (đang thực sự bán)
-        products = shelvesData
+        products = shelvesArray
             .filter(shelf => shelf.quantity > 0)
             .map(shelf => ({
                 id: shelf.productId,
@@ -598,7 +648,35 @@ async function loadProducts() {
         
         if (products.length === 0) {
             console.warn('[loadProducts] No products on shelves with quantity > 0');
-            products = [];
+            // Try alternative endpoint (through gateway) in case API_BASE is not reachable
+            try {
+                const altRes = await fetch('/api/inventory/shelves');
+                if (altRes.ok) {
+                    const altData = await altRes.json();
+                    const altArray = Array.isArray(altData) ? altData : (Array.isArray(altData?.value) ? altData.value : []);
+                    products = altArray.filter(shelf => shelf.quantity > 0).map(shelf => ({
+                        id: shelf.productId,
+                        name: shelf.productName,
+                        code: shelf.productCode,
+                        barcode: shelf.productCode,
+                        price: shelf.price || 0,
+                        stock: shelf.quantity,
+                        categoryId: shelf.categoryId,
+                        categoryName: shelf.categoryName || shelf.category || shelf.groupName || '',
+                        unit: shelf.unit || 'cái',
+                        status: 'active'
+                    }));
+                    console.log('[loadProducts] Loaded from gateway fallback:', products.length);
+                }
+            } catch (e) {
+                console.warn('[loadProducts] Gateway fallback failed', e);
+            }
+
+            // Final fallback to embedded sample products so UI isn't empty
+            if (products.length === 0) {
+                console.warn('[loadProducts] Using FALLBACK_PRODUCTS as last resort');
+                products = FALLBACK_PRODUCTS.slice();
+            }
         }
         
         await loadPromotionIndex();
@@ -614,24 +692,39 @@ async function loadProducts() {
 
 async function loadProductImageMap() {
     if (productImageMapReady) return;
-    productImageMapReady = true;
     try {
         const files = await fetchProductImageList();
-        if (!Array.isArray(files)) {
+        if (!Array.isArray(files) || files.length === 0) {
+            productImageMapReady = false;
+            console.warn('[loadProductImageMap] No image list available');
             return;
         }
+
+        // reset existing maps to avoid duplicates on retry
+        productImageMap.clear();
+        productImageEntries.length = 0;
+
         files.forEach((filePath) => {
             if (!filePath || typeof filePath !== 'string') return;
             const filename = filePath.split('/').pop() || '';
             const baseName = filename.replace(/\.[^.]+$/, '');
-            const key = normalizeProductKey(baseName);
-            if (!key) return;
-            if (!productImageMap.has(key)) {
-                productImageMap.set(key, filePath);
+            try {
+                const key = normalizeProductKey(baseName);
+                if (!key) return;
+                if (!productImageMap.has(key)) {
+                    productImageMap.set(key, filePath);
+                }
+                productImageEntries.push({ key, path: filePath });
+            } catch (e) {
+                console.warn('[loadProductImageMap] key error for', filePath, e);
             }
-            productImageEntries.push({ key, path: filePath });
         });
+
+        productImageMapReady = true;
+        console.log('[loadProductImageMap] loaded', productImageEntries.length, 'entries');
     } catch (err) {
+        productImageMapReady = false;
+        console.warn('[loadProductImageMap] Error fetching image list', err);
     }
 }
 
@@ -687,8 +780,15 @@ function getProductImageSrc(product) {
     const nameKey = normalizeProductKey(product?.name || '');
     if (!nameKey) return '';
 
+    // direct match by normalized product name
     if (productImageMap.has(nameKey)) {
         return productImageMap.get(nameKey);
+    }
+
+    // try match by product code or barcode
+    const codeKey = normalizeProductKey(product?.code || product?.barcode || '');
+    if (codeKey && productImageMap.has(codeKey)) {
+        return productImageMap.get(codeKey);
     }
 
     // Fallback: try to match by containment (product name is a subset of filename or vice versa)
@@ -701,17 +801,50 @@ function getProductImageSrc(product) {
             }
         }
     }
+    if (bestMatch) return bestMatch.path;
 
-    return bestMatch ? bestMatch.path : '';
+    // token scoring: prefer entries that match the most tokens from product name
+    const tokens = (nameKey.match(/[a-z0-9]{3,}/g) || []);
+    if (tokens.length > 0) {
+        let scored = null;
+        for (const entry of productImageEntries) {
+            if (!entry || !entry.key) continue;
+            let score = 0;
+            for (const t of tokens) {
+                if (entry.key.includes(t)) score++;
+            }
+            if (score > 0 && (!scored || score > scored.score || (score === scored.score && entry.key.length < scored.entry.key.length))) {
+                scored = { entry, score };
+            }
+        }
+        if (scored) return scored.entry.path;
+    }
+
+    // very small prefix match: try first 6 chars
+    const prefix = nameKey.slice(0, 6);
+    if (prefix) {
+        for (const entry of productImageEntries) {
+            if (entry && entry.key && entry.key.startsWith(prefix)) {
+                return entry.path;
+            }
+        }
+    }
+
+    return '';
 }
 
 function buildProductImageMarkup(product) {
     const imageSrc = getProductImageSrc(product);
     if (!imageSrc) {
-        return PRODUCT_ICON;
+        const safeName = escapeHtml(product?.name || 'Sản phẩm');
+        const pid = product?.id || '';
+        // render a placeholder background so rendering doesn't produce broken <img>
+        return `<div class="product-image-bg missing-product-image" data-product-name="${safeName}" data-product-id="${pid}" style="background-image:url('${FALLBACK_SVG_DATA_URI}');"></div>`;
     }
     const safeName = escapeHtml(product?.name || 'Sản phẩm');
-    return `<img src="${encodeURI(imageSrc)}" alt="${safeName}" loading="lazy" />`;
+    // Add simple onerror fallback that switches to a safe SVG data-URI placeholder
+    const encoded = encodeURI(imageSrc);
+    return `<div class="product-image-bg" data-product-name="${safeName}" data-product-id="${product?.id||''}" style="background-image:url('${encoded}');"></div>`;
 }
 
 async function loadCustomers() {
@@ -803,6 +936,95 @@ function applyCustomerFilter() {
     });
 
     renderCustomers(filtered);
+}
+
+// Try to resolve images for rendered placeholders by attempting common filename variants.
+async function resolveMissingImagesOnPage(maxPerRun = 40) {
+    try {
+        const imgs = Array.from(document.querySelectorAll('.missing-product-image'));
+        if (!imgs || imgs.length === 0) return;
+        let count = 0;
+        for (const img of imgs) {
+            if (count >= maxPerRun) break;
+            const name = img.dataset.productName || '';
+            const pid = img.dataset.productId || '';
+            const found = await tryFindImageForProduct(name, pid);
+            if (found) {
+                // if element is background container, update background-image; otherwise update src
+                if (img.tagName.toLowerCase() === 'img') {
+                    img.src = found;
+                } else {
+                    img.style.backgroundImage = `url('${found}')`;
+                }
+                img.classList.remove('missing-product-image');
+                try {
+                    const key = normalizeProductKey(name);
+                    if (key && !productImageMap.has(key)) {
+                        productImageMap.set(key, found);
+                        productImageEntries.push({ key, path: found });
+                    }
+                } catch (e) {}
+            }
+            count++;
+        }
+    } catch (e) {
+        console.warn('[resolveMissingImagesOnPage] error', e);
+    }
+}
+
+function generateFilenameCandidates(name, code) {
+    const exts = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+    const raw = (name || '').toString().trim();
+    const stripped = stripDiacritics(raw).toLowerCase();
+    const tokens = stripped.replace(/[^a-z0-9\s]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+    const candidates = new Set();
+
+    function pushBase(b) {
+        if (!b) return;
+        exts.forEach(e => candidates.add(b + e));
+    }
+
+    // original raw variations
+    pushBase(raw);
+    pushBase(raw.replace(/\s+/g, '-'));
+    pushBase(raw.replace(/\s+/g, '_'));
+    pushBase(stripped);
+    pushBase(tokens.join('-'));
+    pushBase(tokens.join(''));
+    pushBase(tokens.join('_'));
+
+    // remove parentheses content
+    const noPar = raw.replace(/\(.*?\)/g, '').trim();
+    pushBase(noPar);
+    pushBase(noPar.replace(/\s+/g, '-'));
+
+    // code-based
+    if (code) {
+        pushBase(code.toString());
+        pushBase(code.toString().toLowerCase());
+    }
+
+    return Array.from(candidates).map(fn => '/assets/img/img_sanpham/' + fn);
+}
+
+async function tryFindImageForProduct(name, code) {
+    const candidates = generateFilenameCandidates(name, code);
+    for (const c of candidates) {
+        try {
+            const encoded = c.split('/').map((seg, idx) => idx === 0 ? seg : encodeURIComponent(seg)).join('/');
+            // try GET but only asking for headers may be blocked; do a lightweight GET
+            const res = await fetch(encoded, { method: 'GET', cache: 'no-store' });
+            if (res && res.ok) {
+                const ct = res.headers.get('content-type') || '';
+                if (ct.startsWith('image/') || c.toLowerCase().match(/\.(jpg|jpeg|png|webp|gif)$/)) {
+                    return encoded;
+                }
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+    return null;
 }
 
 function getSuggestedCustomers() {
@@ -953,6 +1175,8 @@ async function createOrder(isPaid) {
         paid: isPaid,
         // Always send the chosen payment method so backend can create pending transfer payments with tokens
         paymentMethod: currentPaymentMethod,
+        // Optional shipping info (filled when user chooses COD)
+        shipping: null,
         usePoints: isPaid ? shouldUseMemberPoints() : false,
         orderType: exchangeDraft ? 'EXCHANGE' : null,
         originalOrderId: exchangeDraft?.originalOrderId || null,
@@ -961,6 +1185,24 @@ async function createOrder(isPaid) {
             quantity: item.quantity
         }))
     };
+
+    // If shipping (COD) selected in UI, populate shipping object and set paymentMethod to COD
+    try {
+        // Read checkout customer fields (always visible) and apply locally for receipt
+        const cname = document.getElementById('checkoutCustomerName')?.value?.trim() || '';
+        const cphone = document.getElementById('checkoutCustomerPhone')?.value?.trim() || '';
+        const caddr = document.getElementById('checkoutCustomerAddress')?.value?.trim() || '';
+        if (cname || cphone || caddr) {
+            selectedCustomer = {
+                id: 0,
+                name: cname || (selectedCustomer?.name || 'Khách lẻ'),
+                phone: cphone || (selectedCustomer?.phone || '-'),
+                address: caddr || (selectedCustomer?.address || '')
+            };
+        }
+    } catch (e) {
+        console.warn('Could not read shipping fields', e);
+    }
 
     try {
         const res = await fetch(`${API_BASE}/orders`, {
@@ -1173,6 +1415,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (closeBtn) closeBtn.addEventListener('click', hideTransferQrModal);
     if (cancelBtn) cancelBtn.addEventListener('click', hideTransferQrModal);
+    // shipping fields toggle behavior
+    // shipping toggle removed; checkout uses direct customer input fields now
 });
 
 // Reload promotions khi quay lại trang để cập nhật trạng thái active/inactive
@@ -2219,43 +2463,47 @@ function clearSelectedCustomer(options = {}) {
 }
 
 function updateTotal() {
-    const memberSummary = getMemberDiscountForTotal(getTotalAmount());
-    const toggle = document.getElementById('usePointsToggle');
-    const canUsePoints = memberSummary.points >= 100 && Boolean(TIER_DISCOUNT_BY_100[getEffectiveTier(selectedCustomer)]);
-    if (toggle) {
-        toggle.disabled = !canUsePoints;
-        if (!canUsePoints) {
-            toggle.checked = false;
+    try {
+        const memberSummary = getMemberDiscountForTotal(getTotalAmount());
+        const toggle = document.getElementById('usePointsToggle');
+        const canUsePoints = memberSummary.points >= 100 && Boolean(TIER_DISCOUNT_BY_100[getEffectiveTier(selectedCustomer)]);
+        if (toggle) {
+            toggle.disabled = !canUsePoints;
+            if (!canUsePoints) {
+                toggle.checked = false;
+            }
         }
-    }
-    const baseSubtotal = cart.reduce((sum, item) => {
-        const qty = item.quantity || 0;
-        if (qty <= 0) {
-            return sum + (item.productPrice * qty);
-        }
-        const product = products.find(p => p.id === item.productId) || {};
-        const basePrice = Number(product.price);
-        if (!Number.isFinite(basePrice)) {
-            return sum + (item.productPrice * qty);
-        }
-        return sum + (basePrice * qty);
-    }, 0);
-    const discountedSubtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
-    const promoValue = Math.max(0, baseSubtotal - discountedSubtotal);
-    const usePoints = shouldUseMemberPoints();
-    const memberDiscount = usePoints ? memberSummary.discount : 0;
-    const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
-    const total = Math.max(0, discountedSubtotal - memberDiscount);
+        const baseSubtotal = cart.reduce((sum, item) => {
+            const qty = item.quantity || 0;
+            if (qty <= 0) {
+                return sum + (item.productPrice * qty);
+            }
+            const product = products.find(p => p.id === item.productId) || {};
+            const basePrice = Number(product.price);
+            if (!Number.isFinite(basePrice)) {
+                return sum + (item.productPrice * qty);
+            }
+            return sum + (basePrice * qty);
+        }, 0);
+        const discountedSubtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
+        const promoValue = Math.max(0, baseSubtotal - discountedSubtotal);
+        const usePoints = shouldUseMemberPoints();
+        const memberDiscount = usePoints ? memberSummary.discount : 0;
+        const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
+        const total = Math.max(0, discountedSubtotal - memberDiscount);
 
-    document.getElementById('subtotal').textContent = formatPrice(baseSubtotal);
-    document.getElementById('promoAmount').textContent = formatPrice(promoValue);
-    document.getElementById('totalAmount').textContent = formatPrice(total);
-    document.getElementById('amountDue').textContent = formatPrice(total);
-    setText('memberPoints', formatCompactNumber(memberSummary.points));
-    setText('memberDiscountAmount', formatPrice(memberDiscount));
-    setText('memberPointsUsed', formatCompactNumber(pointsUsed));
-    updateChangeDue(total);
-    setDefaultTierByTotal(total);
+        setText('subtotal', formatPrice(baseSubtotal));
+        setText('promoAmount', formatPrice(promoValue));
+        setText('totalAmount', formatPrice(total));
+        setText('amountDue', formatPrice(total));
+        setText('memberPoints', formatCompactNumber(memberSummary.points));
+        setText('memberDiscountAmount', formatPrice(memberDiscount));
+        setText('memberPointsUsed', formatCompactNumber(pointsUsed));
+        updateChangeDue(total);
+        setDefaultTierByTotal(total);
+    } catch (err) {
+        console.warn('[updateTotal] error', err);
+    }
 }
 
 function getTotalAmount() {
@@ -2339,13 +2587,8 @@ function getMemberDiscountForTotal(total) {
 }
 
 function shouldUseMemberPoints() {
-    const toggle = document.getElementById('usePointsToggle');
-    if (toggle && toggle.checked === false) {
-        return false;
-    }
-    const points = getCustomerPoints(selectedCustomer);
-    const tier = getEffectiveTier(selectedCustomer);
-    return points >= 100 && Boolean(TIER_DISCOUNT_BY_100[tier]);
+    // Loyalty points disabled in simplified customer-facing checkout
+    return false;
 }
 
 function showPopup(message, options = {}) {
@@ -2482,9 +2725,19 @@ function updateChangeDue(forcedTotal = null) {
         return;
     }
 
-    const totalAmount = forcedTotal !== null
-        ? forcedTotal
-        : parseInt(document.getElementById('totalAmount').textContent.replace(/\D/g, ''), 10) || 0;
+    let totalAmount = 0;
+    if (forcedTotal !== null) {
+        totalAmount = forcedTotal;
+    } else {
+        const totalEl = document.getElementById('totalAmount');
+        if (totalEl && typeof totalEl.textContent === 'string' && totalEl.textContent.trim()) {
+            totalAmount = parseInt(totalEl.textContent.replace(/\D/g, ''), 10) || 0;
+        } else {
+            // fallback to computed cart total when DOM element missing
+            totalAmount = getTotalAmount();
+        }
+    }
+
     const cashReceived = parseInt(document.getElementById('cashReceivedInput')?.value, 10) || 0;
     const change = Math.max(0, cashReceived - totalAmount);
     changeLabel.textContent = formatPrice(change);
@@ -2494,6 +2747,27 @@ function toggleCashPanel(show) {
     const panel = document.getElementById('cashPanel');
     if (!panel) return;
     panel.style.display = show ? 'block' : 'none';
+}
+
+function updatePaymentPanels() {
+    const cashPanel = document.getElementById('cashPanel');
+    const transferPanel = document.getElementById('transferPanel');
+    const cardPanel = document.getElementById('cardPanel');
+    if (cashPanel) cashPanel.style.display = currentPaymentMethod === 'CASH' ? 'block' : 'none';
+    if (transferPanel) transferPanel.style.display = currentPaymentMethod === 'TRANSFER' ? 'block' : 'none';
+    if (cardPanel) cardPanel.style.display = currentPaymentMethod === 'CARD' ? 'block' : 'none';
+
+    document.querySelectorAll('.method-btn').forEach(btn => {
+        const m = btn.dataset.method;
+        if (m === currentPaymentMethod) {
+            btn.classList.add('active');
+            btn.setAttribute('data-active', 'true');
+        } else {
+            btn.classList.remove('active');
+            btn.setAttribute('data-active', 'false');
+        }
+    });
+    updateChangeDue();
 }
 
 function setDefaultTierByTotal(total) {
@@ -2586,8 +2860,7 @@ function setupEventListeners() {
     document.querySelectorAll('input[name="paymentMethod"]').forEach(input => {
         input.addEventListener('change', () => {
             currentPaymentMethod = input.value;
-            toggleCashPanel(currentPaymentMethod === 'CASH');
-            updateChangeDue();
+            updatePaymentPanels();
             queuePersistCartState();
         });
     });
@@ -2651,6 +2924,23 @@ function setupEventListeners() {
         applyCustomerFilter();
     });
 
+    // Wire visible payment method buttons to the hidden radio inputs
+    document.querySelectorAll('.method-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const method = btn.dataset.method;
+            if (!method) return;
+            const input = document.querySelector(`input[name="paymentMethod"][value="${method}"]`);
+            if (input) {
+                input.checked = true;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            } else {
+                currentPaymentMethod = method;
+                updatePaymentPanels();
+                queuePersistCartState();
+            }
+        });
+    });
+
     document.querySelectorAll('.quick-cash .chip').forEach(btn => {
         btn.addEventListener('click', () => {
             const cashInput = document.getElementById('cashReceivedInput');
@@ -2660,6 +2950,21 @@ function setupEventListeners() {
             updateChangeDue();
         });
     });
+
+    // Order tracking handlers
+    const trackBtn = document.getElementById('trackOrderBtn');
+    const trackInput = document.getElementById('trackOrderInput');
+    if (trackBtn && trackInput) {
+        trackBtn.addEventListener('click', async () => {
+            await trackOrder();
+        });
+        trackInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                await trackOrder();
+            }
+        });
+    }
 
     const clearCartBtn = document.getElementById('clearCartBtn');
     clearCartBtn?.addEventListener('click', () => {
@@ -2687,8 +2992,33 @@ function setupEventListeners() {
             return;
         }
 
-        // Other methods proceed as before
-        createOrder(true);
+        // Treat CASH as COD/unpaid for simplified checkout: create unpaid order, show success, and clear inputs
+        if (currentPaymentMethod === 'CASH') {
+            const res = await createOrder(false);
+            if (res) {
+                showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
+                // clear checkout customer inputs
+                const cnameEl = document.getElementById('checkoutCustomerName');
+                const cphoneEl = document.getElementById('checkoutCustomerPhone');
+                const caddrEl = document.getElementById('checkoutCustomerAddress');
+                if (cnameEl) cnameEl.value = 'Khách lẻ';
+                if (cphoneEl) cphoneEl.value = '';
+                if (caddrEl) caddrEl.value = '';
+            }
+            return;
+        }
+
+        // Fallback: create unpaid order and show success
+        const res = await createOrder(false);
+        if (res) {
+            showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
+            const cnameEl = document.getElementById('checkoutCustomerName');
+            const cphoneEl = document.getElementById('checkoutCustomerPhone');
+            const caddrEl = document.getElementById('checkoutCustomerAddress');
+            if (cnameEl) cnameEl.value = 'Khách lẻ';
+            if (cphoneEl) cphoneEl.value = '';
+            if (caddrEl) caddrEl.value = '';
+        }
     });
 
 
@@ -2770,6 +3100,104 @@ function createInvoiceState(name) {
     };
 }
 
+// Order tracking: fetch order by numeric id or search summary by invoice number
+async function trackOrder() {
+    const qEl = document.getElementById('trackOrderInput');
+    const resultEl = document.getElementById('orderTrackingResult');
+    if (!qEl || !resultEl) return;
+    const q = (qEl.value || '').trim();
+    if (!q) {
+        resultEl.innerHTML = '<div class="muted">Nhập mã đơn hoặc số hóa đơn để tra cứu.</div>';
+        return;
+    }
+    resultEl.innerHTML = '<div class="muted">Đang tra cứu...</div>';
+    try {
+        const headers = getAuthHeaders();
+        // if numeric, try direct lookup
+        if (/^\d+$/.test(q)) {
+            const res = await fetch(`${API_BASE}/orders/${q}`, { headers });
+            if (res.ok) {
+                const data = await res.json();
+                renderOrderTrackingResult(data);
+                return;
+            }
+        }
+
+        // fallback: load summary and try match invoiceNumber
+        const sumRes = await fetch(`${API_BASE}/orders/summary`, { headers });
+        if (!sumRes.ok) {
+            resultEl.innerHTML = '<div class="muted">Không thể truy vấn danh sách đơn.</div>';
+            return;
+        }
+        const list = await sumRes.json();
+        const found = (list || []).find(o => (o.invoiceNumber && String(o.invoiceNumber).toLowerCase().includes(q.toLowerCase())) || String(o.id) === q);
+        if (found) {
+            // try to fetch details
+            try {
+                const det = await fetch(`${API_BASE}/orders/${found.id}`, { headers });
+                if (det.ok) {
+                    const order = await det.json();
+                    renderOrderTrackingResult(order);
+                    return;
+                }
+            } catch (e) {}
+            // render summary if detail unavailable
+            renderOrderSummaryResult(found);
+            return;
+        }
+
+        resultEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
+    } catch (err) {
+        console.warn('trackOrder error', err);
+        resultEl.innerHTML = `<div class="muted">Lỗi khi tra cứu đơn: ${escapeHtml(String(err.message || err))}</div>`;
+    }
+}
+
+function renderOrderTrackingResult(order) {
+    const el = document.getElementById('orderTrackingResult');
+    if (!el || !order) return;
+    const created = formatDateTime(order.createdAt || new Date());
+    const status = escapeHtml(order.status || '-');
+    const invoice = escapeHtml(order.invoiceNumber || (order.id ? `#${order.id}` : '-'));
+    const total = formatPrice(order.totalAmount || order.total || 0);
+    const customer = escapeHtml(order.customerName || order.customer || order.customerPhone || '-');
+    const phone = escapeHtml(order.customerPhone || '-');
+    let itemsHtml = '';
+    if (Array.isArray(order.items) && order.items.length > 0) {
+        itemsHtml = `<div style="margin-top:8px;font-weight:700">Sản phẩm</div>` + order.items.map(it => `
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8">
+                <div style="flex:1">${escapeHtml(it.name || it.productName || '-')}</div>
+                <div style="width:68px;text-align:right">x${it.quantity || it.qty || 0}</div>
+                <div style="width:90px;text-align:right">${formatPrice(it.price || it.unitPrice || 0)}</div>
+            </div>
+        `).join('');
+    }
+
+    el.innerHTML = `
+        <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
+        <div>Trạng thái: <strong>${status}</strong></div>
+        <div>Khách hàng: ${customer} · ${phone}</div>
+        <div>Thời gian: ${created}</div>
+        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+        ${itemsHtml}
+    `;
+}
+
+function renderOrderSummaryResult(summary) {
+    const el = document.getElementById('orderTrackingResult');
+    if (!el || !summary) return;
+    const created = formatDateTime(summary.createdAt || new Date());
+    const invoice = escapeHtml(summary.invoiceNumber || (summary.id ? `#${summary.id}` : '-'));
+    const status = escapeHtml(summary.status || '-');
+    const total = formatPrice(summary.totalAmount || 0);
+    el.innerHTML = `
+        <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
+        <div>Trạng thái: <strong>${status}</strong></div>
+        <div>Thời gian: ${created}</div>
+        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+    `;
+}
+
 
 function getActiveInvoice() {
     return invoices.find(inv => inv.id === activeInvoiceId) || null;
@@ -2825,8 +3253,7 @@ function applyInvoiceState(invoice) {
     methodInputs.forEach(input => {
         input.checked = input.value === currentPaymentMethod;
     });
-    toggleCashPanel(currentPaymentMethod === 'CASH');
-    updateChangeDue();
+    updatePaymentPanels();
 
     if (invoice.selectedCustomer && invoice.selectedCustomer.id > 0) {
         applyCustomerSelection(invoice.selectedCustomer, { openDetail: false });
@@ -3876,19 +4303,35 @@ function getCategoryLabel(product) {
 function getCategoryOptions() {
     const categoryMap = new Map();
     (products || []).forEach((product) => {
-        const rawId = Number(product?.categoryId);
-        if (!Number.isFinite(rawId) || rawId <= 0) return;
-        if (!categoryMap.has(rawId)) {
-            categoryMap.set(rawId, {
-                id: rawId,
-                name: getCategoryLabel(product),
+        let rawName = (product?.categoryName || product?.category || '').toString().trim();
+        let rawId = Number(product?.categoryId);
+        let categoryIdToUse = rawId;
+
+        // If backend didn't provide a numeric categoryId, create a stable synthetic id based on name
+        if (!Number.isFinite(rawId) || rawId <= 0) {
+            const nameKey = stripDiacritics((rawName || FALLBACK_CATEGORY_LABEL).toLowerCase()).replace(/[^a-z0-9]+/g, '') || 'khac';
+            if (syntheticCategoryMap.has(nameKey)) {
+                categoryIdToUse = syntheticCategoryMap.get(nameKey);
+            } else {
+                categoryIdToUse = nextSyntheticCategoryId--;
+                syntheticCategoryMap.set(nameKey, categoryIdToUse);
+            }
+            // ensure product has a categoryId for consistent filtering
+            product.categoryId = categoryIdToUse;
+            if (!rawName) rawName = FALLBACK_CATEGORY_LABEL;
+        }
+
+        if (!categoryMap.has(categoryIdToUse)) {
+            categoryMap.set(categoryIdToUse, {
+                id: categoryIdToUse,
+                name: rawName || getCategoryLabel(product),
                 count: 0
             });
         }
-        categoryMap.get(rawId).count += 1;
+        categoryMap.get(categoryIdToUse).count += 1;
     });
 
-    return Array.from(categoryMap.values()).sort((a, b) => a.id - b.id);
+    return Array.from(categoryMap.values()).sort((a, b) => String(a.name).localeCompare(String(b.name), 'vi'));
 }
 
 function renderCategoryList() {
@@ -3989,6 +4432,7 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                 </div>
             `;
         }).join('');
+        setTimeout(() => resolveMissingImagesOnPage(), 50);
         return;
     }
 
@@ -4010,6 +4454,7 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                 </div>
             `;
         }).join('');
+        setTimeout(() => resolveMissingImagesOnPage(), 50);
         return;
     }
 
@@ -4026,6 +4471,7 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
             </div>
         `;
     }).join('');
+    setTimeout(() => resolveMissingImagesOnPage(), 50);
 }
 function setSuggestionMode(mode, categoryName = '') {
     const title = document.getElementById('suggestionTitle');

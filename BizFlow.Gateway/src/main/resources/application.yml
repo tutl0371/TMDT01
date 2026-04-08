@@ -62,7 +62,7 @@ spring:
         - id: sales-service
           uri: "http://sales-service:8081/"
           predicates:
-            - Path=/api/orders/**
+            - Path=/api/orders,/api/orders/**
         - id: catalog-service
           uri: "http://catalog-service:8083/"
           predicates:
