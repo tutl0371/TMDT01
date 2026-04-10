@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import com.example.bizflow.util.PhoneUtils;
 
 @RestController
 @RequestMapping("/api/orders")
@@ -195,7 +196,26 @@ public class OrderController {
         UserClient.UserSnapshot user = userClient.getUser(userId);
 
         Long customerId = request.getCustomerId();
-        CustomerClient.CustomerSnapshot customer = customerClient.getCustomer(customerId);
+        CustomerClient.CustomerSnapshot customer = null;
+
+        // If client didn't provide existing customerId but provided phone/name in payload,
+        // attempt to create or find the customer in CustomerService (internal upsert).
+        if (customerId == null && request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
+            CustomerClient.CustomerSnapshot up = customerClient.upsertCustomer(
+                    request.getCustomerName(),
+                    request.getCustomerPhone(),
+                    request.getCustomerEmail(),
+                    request.getCustomerAddress()
+            );
+            if (up != null) {
+                customerId = up.getId();
+                customer = up;
+            }
+        }
+
+        if (customer == null && customerId != null) {
+            customer = customerClient.getCustomer(customerId);
+        }
 
         boolean paid = Boolean.TRUE.equals(request.getPaid());
 
@@ -318,6 +338,15 @@ public class OrderController {
         }
 
         order.setTotalAmount(total);
+        // set estimated delivery window: ~2-3 days from now
+        LocalDateTime now = LocalDateTime.now();
+        order.setEstimatedDeliveryFrom(now.plusDays(2));
+        order.setEstimatedDeliveryTo(now.plusDays(3));
+        // persist provided customer phone on order (so searches by phone work even without customer_id)
+        if (request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
+            order.setCustomerPhone(PhoneUtils.normalize(request.getCustomerPhone().trim()));
+        }
+
         Order savedOrder = orderRepository.save(order);
 
         items.forEach(i -> i.setOrder(savedOrder));
@@ -400,6 +429,49 @@ public class OrderController {
         return ResponseEntity.ok(result);
     }
 
+    @GetMapping("/search")
+    public ResponseEntity<List<OrderResponse>> searchOrders(
+            @RequestParam(name = "phone", required = false) String phone,
+            @RequestParam(name = "keyword", required = false) String keyword
+    ) {
+        List<Long> customerIds = null;
+        String normalizedPhone = phone == null || phone.isBlank() ? null : PhoneUtils.normalize(phone.trim());
+        if (normalizedPhone != null && !normalizedPhone.isBlank()) {
+            customerIds = customerClient.searchCustomerIds(normalizedPhone);
+        }
+
+        if (customerIds == null || customerIds.isEmpty()) {
+            customerIds = null;
+        }
+
+        List<Order> orders = orderRepository.searchOrders(
+            keyword == null || keyword.isBlank() ? null : keyword.trim(),
+            customerIds,
+            null,
+            null,
+            normalizedPhone
+        );
+
+        List<OrderResponse> responses = orders.stream()
+                .map(this::toOrderResponse)
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(responses);
+    }
+
+    @GetMapping("/by-phone")
+    public ResponseEntity<List<OrderResponse>> getOrdersByPhone(@RequestParam(name = "phone") String phone) {
+        if (phone == null || phone.isBlank()) {
+            return ResponseEntity.badRequest().body(List.of());
+        }
+
+        String normalizedPhone = PhoneUtils.normalize(phone.trim());
+        List<Long> customerIds = customerClient.searchCustomerIds(normalizedPhone);
+        List<Order> orders = orderRepository.searchOrders(null, customerIds, null, null, normalizedPhone);
+        List<OrderResponse> responses = orders.stream().map(this::toOrderResponse).collect(Collectors.toList());
+        return ResponseEntity.ok(responses);
+    }
+
     @GetMapping("/customer/{id}")
     public ResponseEntity<List<OrderResponse>> getOrdersByCustomer(@PathVariable("id") Long customerId) {
         if (customerId == null) {
@@ -425,7 +497,7 @@ public class OrderController {
         if (toDate != null && !toDate.isBlank()) {
             to = LocalDate.parse(toDate.trim()).atTime(LocalTime.MAX);
         }
-        List<Order> orders = orderRepository.searchOrders(null, null, from, to);
+        List<Order> orders = orderRepository.searchOrders(null, null, from, to, null);
         List<OrderResponse> result = orders.stream()
                 .map(this::toOrderResponse)
                 .collect(Collectors.toList());
@@ -457,7 +529,7 @@ public class OrderController {
             customerIds = null;
         }
 
-        List<Order> orders = orderRepository.searchOrders(trimmedKeyword, customerIds, from, to);
+        List<Order> orders = orderRepository.searchOrders(trimmedKeyword, customerIds, from, to, null);
         Map<Long, UserClient.UserSnapshot> users = new HashMap<>();
         Map<Long, CustomerClient.CustomerSnapshot> customers = new HashMap<>();
         List<OrderSummaryResponse> result = orders.stream()
@@ -474,6 +546,55 @@ public class OrderController {
                 .map(order -> ResponseEntity.ok(toOrderResponse(order)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
+
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<?> cancelOrder(@PathVariable Long id) {
+        Order order = orderRepository.findByIdWithDetails(id).orElse(null);
+        if (order == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String status = order.getStatus();
+        if (status != null && "CANCELLED".equalsIgnoreCase(status)) {
+            return ResponseEntity.ok("Order already cancelled");
+        }
+
+        // If order was paid, try to mark payment as refunded (best-effort)
+        try {
+            if ("PAID".equalsIgnoreCase(status)) {
+                paymentRepository.findFirstByOrderIdAndStatusOrderByIdDesc(order.getId(), "PAID")
+                        .ifPresent(p -> {
+                            p.setStatus("REFUNDED");
+                            paymentRepository.save(p);
+                        });
+            }
+        } catch (Exception ignore) {
+        }
+
+        order.setStatus("CANCELLED");
+        orderRepository.save(order);
+        return ResponseEntity.ok("Order cancelled");
+    }
+
+    @PostMapping("/attach-phone")
+    public ResponseEntity<?> attachPhoneToOrderByInvoice(@RequestBody Map<String, String> payload) {
+        if (payload == null) return ResponseEntity.badRequest().body("invoiceNumber and phone required");
+        String invoice = payload.get("invoiceNumber");
+        String phone = payload.get("phone");
+        if (invoice == null || invoice.isBlank() || phone == null || phone.isBlank()) {
+            return ResponseEntity.badRequest().body("invoiceNumber and phone required");
+        }
+
+        Order order = orderRepository.findByInvoiceNumber(invoice).orElse(null);
+        if (order == null) {
+            return ResponseEntity.notFound().build();
+        }
+        order.setCustomerPhone(PhoneUtils.normalize(phone.trim()));
+        orderRepository.save(order);
+        return ResponseEntity.ok(Map.of("id", order.getId(), "invoiceNumber", order.getInvoiceNumber(), "customerPhone", order.getCustomerPhone()));
+    }
+
+    
 
     private DiscountResult resolveMemberDiscount(CustomerClient.CustomerSnapshot customer, BigDecimal total) {
         if (customer == null || total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
@@ -539,6 +660,9 @@ public class OrderController {
         String userName = user == null ? null : resolveUserName(user);
         String customerName = customer == null ? null : customer.getName();
         String customerPhone = customer == null ? null : customer.getPhone();
+        if (customerPhone == null || customerPhone.isBlank()) {
+            customerPhone = order.getCustomerPhone();
+        }
         int itemCount = order.getItems() == null
                 ? 0
                 : order.getItems().stream()
@@ -598,6 +722,9 @@ public class OrderController {
         response.setReturnOrder(order.getReturnOrder());
         response.setOrderType(order.getOrderType());
         response.setRefundMethod(order.getRefundMethod());
+        response.setEstimatedDeliveryFrom(order.getEstimatedDeliveryFrom());
+        response.setEstimatedDeliveryTo(order.getEstimatedDeliveryTo());
+        response.setCustomerPhone(customerPhone);
         return response;
     }
 

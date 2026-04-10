@@ -100,6 +100,25 @@ public class CustomerClient {
         }
     }
 
+    public CustomerSnapshot upsertCustomer(String name, String phone, String email, String address) {
+        if (phone == null || phone.isBlank()) return null;
+        try {
+            Map<String, Object> payload = new java.util.HashMap<>();
+            if (name != null) payload.put("name", name);
+            payload.put("phone", phone);
+            if (email != null) payload.put("email", email);
+            if (address != null) payload.put("address", address);
+            ResponseEntity<CustomerSnapshot> response = restTemplate.postForEntity(
+                    baseUrl + "/internal/customers/upsert",
+                    payload,
+                    CustomerSnapshot.class
+            );
+            return response.getBody();
+        } catch (org.springframework.web.client.RestClientException ex) {
+            return null;
+        }
+    }
+
     private String normalizeBaseUrl(String raw) {
         if (raw == null || raw.isBlank()) {
             return "http://localhost:8085";

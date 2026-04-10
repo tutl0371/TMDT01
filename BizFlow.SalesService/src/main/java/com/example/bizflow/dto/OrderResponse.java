@@ -22,6 +22,8 @@ public class OrderResponse {
     private Boolean returnOrder;
     private String orderType;
     private String refundMethod;
+    private java.time.LocalDateTime estimatedDeliveryFrom;
+    private java.time.LocalDateTime estimatedDeliveryTo;
 
     public OrderResponse() {
     }
@@ -190,5 +192,21 @@ public class OrderResponse {
 
     public void setRefundMethod(String refundMethod) {
         this.refundMethod = refundMethod;
+    }
+
+    public java.time.LocalDateTime getEstimatedDeliveryFrom() {
+        return estimatedDeliveryFrom;
+    }
+
+    public void setEstimatedDeliveryFrom(java.time.LocalDateTime estimatedDeliveryFrom) {
+        this.estimatedDeliveryFrom = estimatedDeliveryFrom;
+    }
+
+    public java.time.LocalDateTime getEstimatedDeliveryTo() {
+        return estimatedDeliveryTo;
+    }
+
+    public void setEstimatedDeliveryTo(java.time.LocalDateTime estimatedDeliveryTo) {
+        this.estimatedDeliveryTo = estimatedDeliveryTo;
     }
 }

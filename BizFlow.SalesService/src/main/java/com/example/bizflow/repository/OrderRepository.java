@@ -29,18 +29,19 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findByInvoiceNumber(String invoiceNumber);
 
     @Query("""
-        SELECT DISTINCT o FROM Order o
-        LEFT JOIN FETCH o.items i
-        WHERE (
-            (:keyword IS NULL OR o.invoiceNumber LIKE %:keyword%)
-            OR (:customerIds IS NOT NULL AND o.customerId IN :customerIds)
-        )
-          AND (:fromDate IS NULL OR o.createdAt >= :fromDate)
-          AND (:toDate IS NULL OR o.createdAt <= :toDate)
-        ORDER BY o.createdAt DESC
+      SELECT DISTINCT o FROM Order o
+      LEFT JOIN FETCH o.items i
+      WHERE
+        (:keyword IS NULL OR o.invoiceNumber LIKE CONCAT('%', :keyword, '%'))
+        AND (:customerIds IS NULL OR o.customerId IN :customerIds)
+        AND (:phone IS NULL OR o.customerPhone LIKE CONCAT('%', :phone, '%'))
+        AND (:fromDate IS NULL OR o.createdAt >= :fromDate)
+        AND (:toDate IS NULL OR o.createdAt <= :toDate)
+      ORDER BY o.createdAt DESC
     """)
     List<Order> searchOrders(@Param("keyword") String keyword,
             @Param("customerIds") List<Long> customerIds,
             @Param("fromDate") java.time.LocalDateTime fromDate,
-            @Param("toDate") java.time.LocalDateTime toDate);
+            @Param("toDate") java.time.LocalDateTime toDate,
+            @Param("phone") String phone);
 }

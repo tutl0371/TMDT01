@@ -19,6 +19,7 @@
                 <button class="order-tab active" data-invoice-id="default">Gi&#7887; h&#224;ng 1 <span class="tab-close">&times;</span></button>
                 <button class="order-tab ghost" id="addInvoiceBtn" title="Th&#234;m gi&#7887; h&#224;ng">+</button>
                 <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi&#7887; h&#224;ng</button>
+                <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo dõi đơn hàng">Theo dõi</button>
             </div>
         </div>
         <div class="header-actions">
@@ -121,7 +122,8 @@
                         <span>ĐVT</span>
                         <span>Đơn giá</span>
                         <span>Thành tiền</span>
-                        <span></span>
+                        	<span></span>
+                        	<button id="trackOrdersBtn" class="ghost-btn small" style="margin-left:8px;">Theo dõi đơn</button>
                     </div>
                     <div class="cart-items" id="cartItems"></div>
                 </div>
@@ -740,6 +742,29 @@
             <div class="modal-actions">
                 <button type="button" class="ghost-btn" id="detailSecondaryAction" onclick="closeCustomerDetail()">Đóng</button>
                 <button type="button" class="primary-btn" id="detailPrimaryAction">Xác nhận</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Order tracking modal (customer-facing, cancel support) -->
+    <div class="modal" id="orderTrackModal" aria-hidden="true">
+        <div class="modal-content order-tracking">
+            <div class="modal-header">
+                <h3>Theo dõi đơn hàng</h3>
+                <button id="closeOrderTrackModal" class="icon-btn small" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div class="modal-body" style="max-height:60vh;overflow:auto;">
+                <div id="orderTrackCustomerInfo" style="margin-bottom:8px;color:#222;font-weight:600"></div>
+                <div id="orderTrackControls" style="display:flex;gap:8px;margin-bottom:8px;">
+                    <input id="orderTrackPhoneInput" type="text" placeholder="Nhập SĐT khách (nếu chưa chọn khách)" style="flex:1;padding:8px;border:1px solid #e6eefc;border-radius:8px;" />
+                    <button id="orderTrackFindBtn" class="ghost-btn">Tìm</button>
+                </div>
+                <div id="orderTrackList">
+                    <div class="muted">Chưa có dữ liệu</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="ghost-btn" id="closeOrderTrackBtn">Đóng</button>
             </div>
         </div>
     </div>

@@ -50,7 +50,80 @@ public class CustomerInternalController {
         if (keyword == null || keyword.isBlank()) {
             return ResponseEntity.ok(List.of());
         }
-        return ResponseEntity.ok(customerRepository.searchCustomerIds(keyword.trim()));
+        String trimmed = keyword.trim();
+        // If the keyword contains digits, treat it as a phone search and normalize digits-only
+        if (trimmed.matches(".*\\d.*")) {
+            String digits = normalizePhone(trimmed);
+            return ResponseEntity.ok(customerRepository.searchCustomerIds(digits));
+        }
+        return ResponseEntity.ok(customerRepository.searchCustomerIds(trimmed));
+    }
+
+    @PostMapping("/upsert")
+    public ResponseEntity<?> upsertCustomer(@RequestBody UpsertRequest request) {
+        if (request == null || request.phone == null || request.phone.isBlank()) {
+            return ResponseEntity.badRequest().body("Phone is required");
+        }
+        String raw = request.phone.trim();
+        String phone = normalizePhone(raw);
+        if (phone == null || phone.isBlank()) {
+            return ResponseEntity.badRequest().body("Phone is required");
+        }
+        // try find existing by normalized phone first, then fallback to raw
+        java.util.Optional<com.example.bizflow.entity.Customer> found = customerRepository.findByPhone(phone);
+        if (found.isEmpty()) {
+            found = customerRepository.findByPhone(raw);
+        }
+        // try find existing by exact phone
+        return found
+                .map(existing -> {
+                    boolean changed = false;
+                    if (request.name != null && !request.name.isBlank()) {
+                        existing.setName(request.name.trim());
+                        changed = true;
+                    }
+                    if (request.email != null) {
+                        existing.setEmail(trimToNull(request.email));
+                        changed = true;
+                    }
+                    if (request.address != null) {
+                        existing.setAddress(trimToNull(request.address));
+                        changed = true;
+                    }
+                    // ensure phone is stored normalized
+                    if (existing.getPhone() == null || !existing.getPhone().equals(phone)) {
+                        existing.setPhone(phone);
+                        changed = true;
+                    }
+                    if (changed) customerRepository.save(existing);
+                    return ResponseEntity.ok(existing);
+                })
+                .orElseGet(() -> {
+                    String name = request.name != null && !request.name.isBlank() ? request.name.trim() : "Khách hàng";
+                    com.example.bizflow.entity.Customer created = new com.example.bizflow.entity.Customer(name, phone);
+                    created.setEmail(trimToNull(request.email));
+                    created.setAddress(trimToNull(request.address));
+                    com.example.bizflow.entity.Customer saved = customerRepository.save(created);
+                    return ResponseEntity.ok(saved);
+                });
+    }
+
+    private static String normalizePhone(String phone) {
+        if (phone == null) return null;
+        return phone.replaceAll("\\D", "");
+    }
+
+    private static class UpsertRequest {
+        public String name;
+        public String phone;
+        public String email;
+        public String address;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String t = value.trim();
+        return t.isEmpty() ? null : t;
     }
 
     private static class PointAddRequest {

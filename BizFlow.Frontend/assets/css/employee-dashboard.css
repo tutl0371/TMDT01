@@ -124,6 +124,20 @@
     font-size: 12px;
 }
 
+/* Track orders header button (styled like saved cart) */
+#trackOrdersHeaderBtn {
+    background: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
+    color: #ffffff;
+    border-color: rgba(99, 102, 241, 0.65);
+    font-weight: 700;
+    box-shadow: 0 6px 20px rgba(75, 85, 255, 0.28), 0 0 18px rgba(99, 102, 241, 0.22);
+}
+
+#trackOrdersHeaderBtn:hover {
+    transform: translateY(-1px) scale(1.03);
+    box-shadow: 0 10px 28px rgba(75, 85, 255, 0.45), 0 0 24px rgba(139, 92, 246, 0.35);
+}
+
 @keyframes savedCartGlow {
     0%,
     100% {

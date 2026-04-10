@@ -162,6 +162,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         selectedCustomerLabel.textContent = 'Khách lẻ';
     }
     setupEventListeners();
+    setupOrderTracking();
     setupCustomerModal();
     setupProductDetailModal();
     setupInventoryModal();
@@ -1185,6 +1186,14 @@ async function createOrder(isPaid) {
             quantity: item.quantity
         }))
     };
+
+    // include explicit customer info when customer isn't an existing record
+    if (selectedCustomer) {
+        payload.customerName = selectedCustomer.name || null;
+        payload.customerPhone = selectedCustomer.phone || null;
+        payload.customerAddress = selectedCustomer.address || null;
+        payload.customerEmail = selectedCustomer.email || null;
+    }
 
     // If shipping (COD) selected in UI, populate shipping object and set paymentMethod to COD
     try {
@@ -3173,11 +3182,31 @@ function renderOrderTrackingResult(order) {
         `).join('');
     }
 
+    // Estimated delivery range (if available)
+    let deliveryHtml = '';
+    if (order.estimatedDeliveryFrom || order.estimatedDeliveryTo) {
+        try {
+            const from = order.estimatedDeliveryFrom ? new Date(order.estimatedDeliveryFrom) : null;
+            const to = order.estimatedDeliveryTo ? new Date(order.estimatedDeliveryTo) : null;
+            const fmt = d => d.toLocaleDateString('vi-VN');
+            if (from && to) {
+                deliveryHtml = `<div>Ước tính giao hàng: <strong>${fmt(from)} → ${fmt(to)}</strong></div>`;
+            } else if (from) {
+                deliveryHtml = `<div>Ước tính giao hàng: <strong>${fmt(from)}</strong></div>`;
+            } else {
+                deliveryHtml = `<div>Ước tính giao hàng: <strong>${fmt(to)}</strong></div>`;
+            }
+        } catch (e) {
+            deliveryHtml = '';
+        }
+    }
+
     el.innerHTML = `
         <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
         <div>Trạng thái: <strong>${status}</strong></div>
         <div>Khách hàng: ${customer} · ${phone}</div>
         <div>Thời gian: ${created}</div>
+        ${deliveryHtml}
         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
         ${itemsHtml}
     `;
@@ -3278,6 +3307,7 @@ function renderInvoiceTabs() {
         ${tabs}
         <button class="order-tab ghost" id="addInvoiceBtn" title="Th\u00eam gi\u1ecf h\u00e0ng">+</button>
         <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi\u1ecf h\u00e0ng</button>
+        <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo d\u00f5i \u0111\u01a1n h\u00e0ng">Theo d\u00f2i</button>
     `;
 }
 
@@ -3286,6 +3316,11 @@ function setupInvoiceTabs() {
     if (!container) return;
 
     container.addEventListener('click', (e) => {
+        const trackBtnClicked = e.target.closest('#trackOrdersHeaderBtn');
+        if (trackBtnClicked) {
+            openOrderTrackModal();
+            return;
+        }
         const addBtn = e.target.closest('#addInvoiceBtn');
         if (addBtn) {
             createAndSwitchInvoice();
@@ -3343,6 +3378,302 @@ function setupInvoiceTabs() {
                 removeSavedInvoice(draftId);
             }
         }
+    });
+}
+
+// Order tracking modal + actions
+function setupOrderTracking() {
+    const btn = document.getElementById('trackOrdersBtn');
+    const headerBtn = document.getElementById('trackOrdersHeaderBtn');
+    const modal = document.getElementById('orderTrackModal');
+    const closeBtn = document.getElementById('closeOrderTrackModal');
+    const closeFooter = document.getElementById('closeOrderTrackBtn');
+    const findBtn = document.getElementById('orderTrackFindBtn');
+    const phoneInput = document.getElementById('orderTrackPhoneInput');
+
+    [btn, headerBtn].forEach(b => {
+        if (b) b.addEventListener('click', async () => openOrderTrackModal());
+    });
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => closeOrderTrackModal());
+    }
+    if (closeFooter) {
+        closeFooter.addEventListener('click', () => closeOrderTrackModal());
+    }
+    if (findBtn) {
+        findBtn.addEventListener('click', async () => {
+            const phone = (phoneInput.value || '').trim();
+            if (!phone && !(selectedCustomer && selectedCustomer.id > 0)) {
+                alert('Vui lòng nhập SĐT hoặc chọn khách hàng.');
+                return;
+            }
+            await loadOrdersForModal(phone);
+        });
+    }
+    if (phoneInput) {
+        phoneInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                findBtn.click();
+            }
+        });
+    }
+}
+
+function openOrderTrackModal() {
+    const modal = document.getElementById('orderTrackModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+
+    // Prefill with selected customer
+    const info = document.getElementById('orderTrackCustomerInfo');
+    const phoneInput = document.getElementById('orderTrackPhoneInput');
+    if (selectedCustomer && selectedCustomer.id > 0) {
+        if (info) info.textContent = `Khách hàng: ${selectedCustomer.name || '-'} · SĐT: ${selectedCustomer.phone || '-'}`;
+        if (phoneInput) phoneInput.value = selectedCustomer.phone || '';
+        loadOrdersForModal();
+    } else {
+        if (info) info.textContent = 'Chưa chọn khách hàng. Nhập SĐT để tìm đơn.';
+        if (phoneInput) phoneInput.value = '';
+        const list = document.getElementById('orderTrackList');
+        if (list) list.innerHTML = '<div class="muted">Nhập SĐT khách hàng hoặc chọn khách trước khi tra cứu.</div>';
+    }
+}
+
+function closeOrderTrackModal() {
+    const modal = document.getElementById('orderTrackModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+async function loadOrdersForModal(phone) {
+    const listEl = document.getElementById('orderTrackList');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="muted">Đang tải...</div>';
+    const normalizeDigits = (s) => (s || '').toString().replace(/\D/g, '');
+
+    try {
+        let customerId = null;
+        if (selectedCustomer && selectedCustomer.id > 0) {
+            customerId = selectedCustomer.id;
+        } else if (phone && phone.trim()) {
+            const normalized = normalizeDigits(phone);
+            const found = customers.find(c => normalizeDigits(c.phone) === normalized);
+            if (found) {
+                customerId = found.id;
+            } else {
+                await loadCustomers();
+                const f2 = customers.find(c => normalizeDigits(c.phone) === normalized);
+                if (f2) customerId = f2.id;
+            }
+        }
+
+        const diag = [];
+        const pushDiag = (m) => { try { diag.push(String(m)); } catch (__) {} };
+
+        if (!customerId) {
+            try {
+                const raw = phone || '';
+                const digits = normalizeDigits(raw);
+                const variants = [];
+                if (raw && raw.trim()) variants.push(raw.trim());
+                if (digits) {
+                    variants.push(digits);
+                    if (digits.startsWith('0')) {
+                        const without0 = digits.substring(1);
+                        variants.push(without0, '84' + without0, '+84' + without0);
+                    } else if (digits.startsWith('84')) {
+                        const with0 = '0' + digits.substring(2);
+                        variants.push(with0, '+' + digits);
+                    } else {
+                        variants.push('0' + digits, '84' + digits, '+' + digits);
+                    }
+                }
+
+                const tried = new Set();
+                const endpoints = [
+                    (v) => `${API_BASE}/orders/search?phone=${encodeURIComponent(v)}`,
+                    (v) => `${API_BASE}/search/orders?phone=${encodeURIComponent(v)}`,
+                    (v) => `${API_BASE}/orders?phone=${encodeURIComponent(v)}`
+                ];
+
+                for (const v of variants) {
+                    if (!v || tried.has(v)) continue;
+                    tried.add(v);
+                    for (const makeUrl of endpoints) {
+                        const url = makeUrl(v);
+                        pushDiag(`Trying ${url}`);
+                        try {
+                            const res = await fetch(url, { headers: getAuthHeaders() });
+                            pushDiag(`→ ${url} -> ${res.status}`);
+                            if (res.ok) {
+                                let body = null;
+                                try { body = await res.json(); } catch (e) { body = null; }
+                                const count = Array.isArray(body) ? body.length : (body ? 1 : 0);
+                                pushDiag(`→ ${url} returned ${count} item(s)`);
+                                if (count > 0) {
+                                    // filter results by exact normalized phone match
+                                    const targetNorm = normalizeDigits(raw || phone || '');
+                                    const filtered = (Array.isArray(body) ? body : [body]).filter(o => {
+                                        try {
+                                            const op = normalizeDigits(o?.customerPhone || o?.customer?.phone || '');
+                                            if (op === targetNorm && op) return true;
+                                            // also check if order has customerId matching a loaded customer with that phone
+                                            const cid = o?.customerId || o?.customer?.id || null;
+                                            if (cid && customers && customers.length > 0) {
+                                                const c = customers.find(x => Number(x.id) === Number(cid));
+                                                if (c && normalizeDigits(c.phone || '') === targetNorm && targetNorm) return true;
+                                            }
+                                        } catch (e) {}
+                                        return false;
+                                    });
+                                    pushDiag(`→ ${url} filtered to ${filtered.length} item(s)`);
+                                    if (filtered.length > 0) {
+                                        renderOrdersInModal(filtered);
+                                        return;
+                                    }
+                                }
+                            } else {
+                                let txt = '';
+                                try { txt = await res.text(); } catch (e) { txt = ''; }
+                                pushDiag(`→ ${url} returned ${res.status}${txt ? ': ' + txt.slice(0,200) : ''}`);
+                            }
+                        } catch (e) {
+                            pushDiag(`→ ${url} error: ${e && e.message ? e.message : e}`);
+                        }
+                    }
+                }
+            } catch (e) {
+                pushDiag(`search by phone failed: ${e && e.message ? e.message : e}`);
+            }
+
+            listEl.innerHTML = '<div class="muted">Không tìm thấy khách hàng. Vui lòng chọn khách hoặc nhập SĐT đúng.</div>' + formatDiag(diag);
+            return;
+        }
+
+        const headers = getAuthHeaders();
+        pushDiag(`Fetching orders for customerId=${customerId} via ${API_BASE}/orders/customer/${customerId}`);
+        const res = await fetch(`${API_BASE}/orders/customer/${customerId}`, { headers });
+        pushDiag(`→ orders/customer -> ${res.status}`);
+        if (!res.ok) {
+            listEl.innerHTML = '<div class="muted">Lỗi khi tải đơn hàng.</div>' + formatDiag(diag);
+            return;
+        }
+        const orders = await res.json();
+        if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+            listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>' + formatDiag(diag);
+            return;
+        }
+        renderOrdersInModal(orders || []);
+    } catch (err) {
+        console.warn('loadOrdersForModal error', err);
+        listEl.innerHTML = '<div class="muted">Lỗi khi tải đơn hàng.</div>';
+    }
+
+    function formatDiag(diagArr) {
+        if (!diagArr || diagArr.length === 0) return '';
+        const escaped = escapeHtml(diagArr.join('\n'));
+        return `<pre style="max-height:240px;overflow:auto;background:#fafafa;border:1px solid #eee;padding:8px;margin-top:8px;font-size:12px">${escaped}</pre>`;
+    }
+}
+
+function renderOrdersInModal(orders) {
+    const listEl = document.getElementById('orderTrackList');
+    if (!listEl) return;
+    if (!orders || orders.length === 0) {
+        listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
+        return;
+    }
+
+    const html = orders.map(o => {
+        const created = formatDateTime(o.createdAt || '-');
+        const invoice = o.invoiceNumber || ('#' + (o.id || '-'));
+        const status = escapeHtml(o.status || '-');
+        const total = formatPrice(o.totalAmount || o.total || 0);
+        let delivery = '';
+        try {
+            if (o.estimatedDeliveryFrom || o.estimatedDeliveryTo) {
+                const f = o.estimatedDeliveryFrom ? new Date(o.estimatedDeliveryFrom) : null;
+                const t = o.estimatedDeliveryTo ? new Date(o.estimatedDeliveryTo) : null;
+                const fmt = d => d.toLocaleDateString('vi-VN');
+                if (f && t) delivery = `${fmt(f)} → ${fmt(t)}`;
+                else if (f) delivery = fmt(f);
+                else if (t) delivery = fmt(t);
+            }
+        } catch (e) { delivery = ''; }
+
+        return `
+            <div class="order-track-row" style="padding:8px;border-bottom:1px solid #eef2f8;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+                    <div style="flex:1">
+                        <div style="font-weight:700">${escapeHtml(invoice)} · ${created}</div>
+                        <div style="color:#333;margin-top:4px">Trạng thái: <strong>${status}</strong></div>
+                        ${delivery ? `<div style="color:#333;margin-top:4px">Ước tính giao hàng: <strong>${escapeHtml(delivery)}</strong></div>` : ''}
+                        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+                        <button class="ghost-btn small view-order-btn" data-order-id="${o.id}">Xem</button>
+                        ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-btn" data-order-id="${o.id}">Hủy</button>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    listEl.innerHTML = html;
+
+    // bind buttons
+    listEl.querySelectorAll('.cancel-order-btn').forEach(b => {
+        b.addEventListener('click', async (e) => {
+            const id = b.getAttribute('data-order-id');
+            if (!id) return;
+            if (!confirm('Bạn có chắc muốn hủy đơn này?')) return;
+            try {
+                const headers = getAuthHeaders();
+                const res = await fetch(`${API_BASE}/orders/${id}/cancel`, { method: 'POST', headers });
+                if (!res.ok) {
+                    alert('Không thể hủy đơn.');
+                    return;
+                }
+                alert('Đã hủy đơn.');
+                // refresh
+                await loadOrdersForModal(document.getElementById('orderTrackPhoneInput')?.value);
+            } catch (err) {
+                console.warn('cancel error', err);
+                alert('Lỗi khi hủy đơn.');
+            }
+        });
+    });
+
+    listEl.querySelectorAll('.view-order-btn').forEach(b => {
+        b.addEventListener('click', async (e) => {
+            const id = b.getAttribute('data-order-id');
+            if (!id) return;
+            // open detail: reuse existing customerDetailModal if available
+            try {
+                const headers = getAuthHeaders();
+                const res = await fetch(`${API_BASE}/orders/${id}`, { headers });
+                if (!res.ok) {
+                    alert('Không thể tải chi tiết đơn.');
+                    return;
+                }
+                const order = await res.json();
+                // render small detail in modal (append)
+                const list = document.getElementById('orderTrackList');
+                const itemsHtml = Array.isArray(order.items) ? order.items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName||it.name||'-')}</div><div>x${it.quantity||0}</div></div>`).join('') : '';
+                list.innerHTML = `
+                    <div style="font-weight:700;margin-bottom:6px">Đơn: ${escapeHtml(order.invoiceNumber||('#'+order.id))}</div>
+                    <div>Trạng thái: <strong>${escapeHtml(order.status||'-')}</strong></div>
+                    <div>Khách hàng: ${escapeHtml(order.customerName||order.customer||'-')} · ${escapeHtml(order.customerPhone||'-')}</div>
+                    <div>Thời gian: ${formatDateTime(order.createdAt||new Date())}</div>
+                    <div style="margin-top:8px">${itemsHtml}</div>
+                `;
+            } catch (err) {
+                console.warn('view order error', err);
+            }
+        });
     });
 }
 
