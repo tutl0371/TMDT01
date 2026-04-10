@@ -151,6 +151,27 @@ const FALLBACK_PRODUCTS = [
     }
 ];
 
+// Checkout validation helpers (global) — used by multiple event handlers and renderers
+function isCheckoutValid() {
+    try {
+        const phoneEl = document.getElementById('checkoutCustomerPhone');
+        const addrEl = document.getElementById('checkoutCustomerAddress');
+        const phone = phoneEl ? (phoneEl.value || '').trim() : '';
+        const addr = addrEl ? (addrEl.value || '').trim() : '';
+        return phone.length > 0 && addr.length > 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+function updateCheckoutButtonState() {
+    try {
+        const btn = document.getElementById('checkoutBtn');
+        if (!btn) return;
+        btn.disabled = !isCheckoutValid() || !Array.isArray(cart) || cart.length === 0;
+    } catch (e) {}
+}
+
 window.addEventListener('DOMContentLoaded', async () => {
     checkAuth();
     loadUserInfo();
@@ -180,6 +201,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (checkoutPhone) checkoutPhone.value = phoneVal;
     const checkoutAddress = document.getElementById('checkoutCustomerAddress');
     if (checkoutAddress) checkoutAddress.value = selectedCustomer?.address || '';
+    // wire input events to keep button state in sync
+    const _phoneEl = document.getElementById('checkoutCustomerPhone');
+    const _addrEl = document.getElementById('checkoutCustomerAddress');
+    _phoneEl?.addEventListener('input', updateCheckoutButtonState);
+    _addrEl?.addEventListener('input', updateCheckoutButtonState);
+    // initial state
+    updateCheckoutButtonState();
     initInvoices();
     await loadCartStateFromServer();
 
@@ -1213,6 +1241,14 @@ async function createOrder(isPaid) {
         console.warn('Could not read shipping fields', e);
     }
 
+    // Ensure payload includes any customer info entered in checkout fields
+    if (selectedCustomer) {
+        payload.customerName = selectedCustomer.name || payload.customerName || null;
+        payload.customerPhone = selectedCustomer.phone || payload.customerPhone || null;
+        payload.customerAddress = selectedCustomer.address || payload.customerAddress || null;
+        payload.customerEmail = selectedCustomer.email || payload.customerEmail || null;
+    }
+
     try {
         const res = await fetch(`${API_BASE}/orders`, {
             method: 'POST',
@@ -2218,6 +2254,8 @@ function renderCart() {
             emptyState.style.display = 'grid';
         }
         toggleEmptyState(true);
+        // Ensure checkout button state reflects empty cart
+        try { updateCheckoutButtonState(); } catch (e) {}
         return;
     }
 
@@ -2292,6 +2330,8 @@ function renderCart() {
         </div>
     `;
     }).join('');
+    // Update checkout button state whenever cart is re-rendered
+    try { updateCheckoutButtonState(); } catch (e) {}
 }
 
 function updateQty(idx, change) {
@@ -2990,6 +3030,11 @@ function setupEventListeners() {
     });
 
     document.getElementById('checkoutBtn').addEventListener('click', async () => {
+        // enforce required phone + address before allowing payment
+        if (!isCheckoutValid()) {
+            showPopup('Vui lòng nhập SĐT và địa chỉ nhận hàng trước khi thanh toán.', { type: 'error' });
+            return;
+        }
         // If transfer selected, create unpaid order then show QR code
         if (currentPaymentMethod === 'TRANSFER') {
             const res = await createOrder(false);
@@ -3307,7 +3352,7 @@ function renderInvoiceTabs() {
         ${tabs}
         <button class="order-tab ghost" id="addInvoiceBtn" title="Th\u00eam gi\u1ecf h\u00e0ng">+</button>
         <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi\u1ecf h\u00e0ng</button>
-        <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo d\u00f5i \u0111\u01a1n h\u00e0ng">Theo d\u00f2i</button>
+        <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo dõi đơn hàng">Theo dõi đơn hàng</button>
     `;
 }
 
@@ -3494,8 +3539,8 @@ async function loadOrdersForModal(phone) {
 
                 const tried = new Set();
                 const endpoints = [
-                    (v) => `${API_BASE}/orders/search?phone=${encodeURIComponent(v)}`,
                     (v) => `${API_BASE}/search/orders?phone=${encodeURIComponent(v)}`,
+                    (v) => `${API_BASE}/orders/search?phone=${encodeURIComponent(v)}`,
                     (v) => `${API_BASE}/orders?phone=${encodeURIComponent(v)}`
                 ];
 
@@ -3514,9 +3559,10 @@ async function loadOrdersForModal(phone) {
                                 const count = Array.isArray(body) ? body.length : (body ? 1 : 0);
                                 pushDiag(`→ ${url} returned ${count} item(s)`);
                                 if (count > 0) {
-                                    // filter results by exact normalized phone match
+                                    // filter results by exact normalized phone match; if filtering removes all items,
+                                    // fall back to the raw API results so users still see matching orders returned by the server
                                     const targetNorm = normalizeDigits(raw || phone || '');
-                                    const filtered = (Array.isArray(body) ? body : [body]).filter(o => {
+                                    let filtered = (Array.isArray(body) ? body : [body]).filter(o => {
                                         try {
                                             const op = normalizeDigits(o?.customerPhone || o?.customer?.phone || '');
                                             if (op === targetNorm && op) return true;
@@ -3529,6 +3575,10 @@ async function loadOrdersForModal(phone) {
                                         } catch (e) {}
                                         return false;
                                     });
+                                    if (filtered.length === 0) {
+                                        // server returned items but client-side strict filter removed them; show server results anyway
+                                        filtered = Array.isArray(body) ? body : [body];
+                                    }
                                     pushDiag(`→ ${url} filtered to ${filtered.length} item(s)`);
                                     if (filtered.length > 0) {
                                         renderOrdersInModal(filtered);

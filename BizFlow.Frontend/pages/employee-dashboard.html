@@ -19,7 +19,7 @@
                 <button class="order-tab active" data-invoice-id="default">Gi&#7887; h&#224;ng 1 <span class="tab-close">&times;</span></button>
                 <button class="order-tab ghost" id="addInvoiceBtn" title="Th&#234;m gi&#7887; h&#224;ng">+</button>
                 <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi&#7887; h&#224;ng</button>
-                <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo dõi đơn hàng">Theo dõi</button>
+                <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo dõi đơn hàng">Theo dõi đơn hàng</button>
             </div>
         </div>
         <div class="header-actions">
@@ -123,7 +123,7 @@
                         <span>Đơn giá</span>
                         <span>Thành tiền</span>
                         	<span></span>
-                        	<button id="trackOrdersBtn" class="ghost-btn small" style="margin-left:8px;">Theo dõi đơn</button>
+                            <button id="trackOrdersBtn" class="ghost-btn small" style="margin-left:8px;">Theo dõi đơn hàng</button>
                     </div>
                     <div class="cart-items" id="cartItems"></div>
                 </div>
@@ -229,8 +229,8 @@
                 <div style="padding:8px 12px; border-top:1px solid #eee;">
                     <div class="checkout-customer-fields" style="display:flex;flex-direction:column;gap:8px;">
                         <input id="checkoutCustomerName" type="text" placeholder="Tên khách hàng" value="Khách lẻ" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
-                        <input id="checkoutCustomerPhone" type="tel" placeholder="SĐT khách hàng" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
-                        <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
+                        <input id="checkoutCustomerPhone" type="tel" placeholder="SĐT khách hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
+                        <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
                     </div>
                 </div>
 
