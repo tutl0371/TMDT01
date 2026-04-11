@@ -24,12 +24,15 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.RestTemplate;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -240,6 +243,9 @@ public class PromotionServiceImpl implements PromotionService {
         dto.setStartDate(promotion.getStartDate());
         dto.setEndDate(promotion.getEndDate());
         dto.setActive(promotion.getActive());
+        dto.setMaxQuantity(promotion.getMaxQuantity());
+        dto.setUsedQuantity(normalizeUsedQuantity(promotion.getUsedQuantity()));
+        dto.setRemainingQuantity(calculateRemainingQuantity(promotion));
 
         try {
             List<PromotionTarget> targets = promotion.getTargets();
@@ -306,6 +312,10 @@ public class PromotionServiceImpl implements PromotionService {
         promotion.setEndDate(dto.getEndDate());
         Boolean active = dto.getActive();
         promotion.setActive(active != null ? active : true);
+        promotion.setMaxQuantity(normalizeMaxQuantity(dto.getMaxQuantity()));
+        if (promotion.getUsedQuantity() == null || promotion.getUsedQuantity() < 0) {
+            promotion.setUsedQuantity(0);
+        }
 
         if (dto.getTargets() != null) {
             if (promotion.getTargets() == null) {
@@ -371,6 +381,11 @@ public class PromotionServiceImpl implements PromotionService {
 
         if (dto.getDiscountValue() == null) {
             throw new IllegalArgumentException("Giá trị giảm phải được nhập");
+        }
+
+        Integer maxQuantity = dto.getMaxQuantity();
+        if (maxQuantity != null && maxQuantity < 0) {
+            throw new IllegalArgumentException("Số lượng áp dụng không được âm");
         }
 
         double value = dto.getDiscountValue();
@@ -628,41 +643,84 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public List<CartItemPriceResponse> calculateCartItemPrices(CartItemPriceRequest request) {
+        return calculateCartItemPricesInternal(request, false);
+    }
+
+    @Override
+    public List<CartItemPriceResponse> calculateAndConsumeCartItemPrices(CartItemPriceRequest request) {
+        return calculateCartItemPricesInternal(request, true);
+    }
+
+    private List<CartItemPriceResponse> calculateCartItemPricesInternal(CartItemPriceRequest request, boolean consumeQuota) {
         List<CartItemPriceResponse> responses = new ArrayList<>();
-        
-        // Load all active promotions
-        List<PromotionDTO> activePromos = getActivePromotions();
-        
+        if (request == null || request.getItems() == null || request.getItems().isEmpty()) {
+            return responses;
+        }
+
+        List<Promotion> activePromos = promotionRepository.findActivePromotions(LocalDateTime.now());
+
         for (CartItemPriceRequest.CartItem item : request.getItems()) {
-            CartItemPriceResponse response = calculateSingleItemPrice(item, activePromos);
+            CartItemPriceResponse response = calculateSingleItemPrice(item, activePromos, consumeQuota);
             responses.add(response);
         }
-        
+
         return responses;
     }
-    
+
     private CartItemPriceResponse calculateSingleItemPrice(
             CartItemPriceRequest.CartItem item,
-            List<PromotionDTO> promotions
+            List<Promotion> promotions,
+            boolean consumeQuota
     ) {
-        java.math.BigDecimal basePrice = item.getBasePrice() == null
-                ? java.math.BigDecimal.ZERO
+        BigDecimal basePrice = item == null || item.getBasePrice() == null
+                ? BigDecimal.ZERO
                 : item.getBasePrice();
+        int demandQuantity = normalizeDemandQuantity(item);
 
-        PromotionDTO bestPromo = null;
-        java.math.BigDecimal bestPrice = null;
+        if (item == null || item.getProductId() == null || demandQuantity <= 0) {
+            return new CartItemPriceResponse(
+                    item == null ? null : item.getProductId(),
+                    basePrice,
+                    basePrice,
+                    BigDecimal.ZERO,
+                    null,
+                    null,
+                    null,
+                    demandQuantity
+            );
+        }
 
-        for (PromotionDTO promo : promotions) {
-            if (promo == null || !appliesToItem(promo, item)) {
-                continue;
-            }
-            java.math.BigDecimal candidate = calculateDiscountedPrice(basePrice, promo);
+        Promotion bestPromo = null;
+        BigDecimal bestPrice = null;
+        int bestConsumption = 0;
+
+        for (Promotion promo : promotions) {
+            PromotionSelection candidate = evaluatePromotionForItem(promo, item, basePrice, demandQuantity);
             if (candidate == null) {
                 continue;
             }
-            if (bestPrice == null || candidate.compareTo(bestPrice) < 0) {
-                bestPrice = candidate;
+            if (bestPrice == null || candidate.finalPrice.compareTo(bestPrice) < 0) {
+                bestPrice = candidate.finalPrice;
                 bestPromo = promo;
+                bestConsumption = candidate.consumeAmount;
+            }
+        }
+
+        if (consumeQuota && bestPromo != null && bestConsumption > 0) {
+            Optional<Promotion> lockedOpt = promotionRepository.findByIdForUpdate(bestPromo.getId());
+            if (lockedOpt.isPresent()) {
+                Promotion locked = lockedOpt.get();
+                PromotionSelection lockedSelection = evaluatePromotionForItem(locked, item, basePrice, demandQuantity);
+                if (lockedSelection != null && lockedSelection.consumeAmount > 0) {
+                    bestPromo = locked;
+                    bestPrice = lockedSelection.finalPrice;
+                    bestConsumption = lockedSelection.consumeAmount;
+                    locked.setUsedQuantity(normalizeUsedQuantity(locked.getUsedQuantity()) + bestConsumption);
+                    promotionRepository.save(locked);
+                } else {
+                    bestPromo = null;
+                    bestPrice = basePrice;
+                }
             }
         }
 
@@ -670,7 +728,7 @@ public class PromotionServiceImpl implements PromotionService {
             bestPrice = basePrice;
         }
 
-        java.math.BigDecimal discount = basePrice.subtract(bestPrice).max(java.math.BigDecimal.ZERO);
+        BigDecimal discount = basePrice.subtract(bestPrice).max(BigDecimal.ZERO);
 
         return new CartItemPriceResponse(
                 item.getProductId(),
@@ -679,27 +737,30 @@ public class PromotionServiceImpl implements PromotionService {
                 discount,
                 bestPromo == null ? null : bestPromo.getCode(),
                 bestPromo == null ? null : bestPromo.getName(),
-                bestPromo == null || bestPromo.getDiscountType() == null ? null : bestPromo.getDiscountType().name(),
-                item.getQuantity()
+                bestPromo == null || bestPromo.getDiscountType() == null ? null : normalizeDiscountType(bestPromo).name(),
+                demandQuantity
         );
     }
 
-    private boolean appliesToItem(PromotionDTO promo, CartItemPriceRequest.CartItem item) {
+    private boolean appliesToItem(Promotion promo, CartItemPriceRequest.CartItem item) {
+        if (promo == null || item == null || item.getProductId() == null) {
+            return false;
+        }
         Long productId = item.getProductId();
         Long categoryId = item.getCategoryId();
 
-        List<PromotionTargetDTO> targets = promo.getTargets();
+        List<PromotionTarget> targets = promo.getTargets();
         if (targets != null) {
-            for (PromotionTargetDTO target : targets) {
+            for (PromotionTarget target : targets) {
                 if (target == null || target.getTargetId() == null || target.getTargetType() == null) {
                     continue;
                 }
-                if (target.getTargetType() == com.example.promotion.entity.PromotionTarget.TargetType.PRODUCT
+                if (target.getTargetType() == PromotionTarget.TargetType.PRODUCT
                         && productId != null
                         && productId.equals(target.getTargetId())) {
                     return true;
                 }
-                if (target.getTargetType() == com.example.promotion.entity.PromotionTarget.TargetType.CATEGORY
+                if (target.getTargetType() == PromotionTarget.TargetType.CATEGORY
                         && categoryId != null
                         && categoryId.equals(target.getTargetId())) {
                     return true;
@@ -707,13 +768,14 @@ public class PromotionServiceImpl implements PromotionService {
             }
         }
 
-        List<BundleItemDTO> bundleItems = promo.getBundleItems();
-        if (bundleItems != null) {
-            for (BundleItemDTO bundle : bundleItems) {
-                if (bundle == null || bundle.getProductId() == null) {
+        List<BundleItem> bundleItems = promo.getBundleItems();
+        if (bundleItems != null && normalizeDiscountType(promo) == Promotion.DiscountType.BUNDLE) {
+            for (BundleItem bundle : bundleItems) {
+                if (bundle == null) {
                     continue;
                 }
-                if (productId != null && productId.equals(bundle.getProductId())) {
+                Long mainId = bundle.getMainProductId() != null ? bundle.getMainProductId() : bundle.getProductId();
+                if (productId.equals(mainId)) {
                     return true;
                 }
             }
@@ -722,27 +784,172 @@ public class PromotionServiceImpl implements PromotionService {
         return false;
     }
 
-    private java.math.BigDecimal calculateDiscountedPrice(java.math.BigDecimal basePrice, PromotionDTO promo) {
-        if (basePrice == null || promo == null || promo.getDiscountType() == null) {
+    private PromotionSelection evaluatePromotionForItem(
+            Promotion promo,
+            CartItemPriceRequest.CartItem item,
+            BigDecimal basePrice,
+            int demandQuantity
+    ) {
+        if (promo == null || basePrice == null || demandQuantity <= 0 || !appliesToItem(promo, item)) {
             return null;
         }
 
-        java.math.BigDecimal value = promo.getDiscountValue() == null
-                ? null
-                : java.math.BigDecimal.valueOf(promo.getDiscountValue());
+        Promotion.DiscountType type = normalizeDiscountType(promo);
+        if (type == null || !hasRemainingQuota(promo)) {
+            return null;
+        }
 
-        return switch (promo.getDiscountType()) {
+        BigDecimal value = promo.getDiscountValue() == null
+                ? null
+                : BigDecimal.valueOf(promo.getDiscountValue());
+
+        int remaining = remainingQuotaForConsumption(promo);
+
+        return switch (type) {
             case PERCENT -> {
                 if (value == null) {
                     yield null;
                 }
-                java.math.BigDecimal percent = value.divide(java.math.BigDecimal.valueOf(100), 4, java.math.RoundingMode.HALF_UP);
-                yield basePrice.multiply(java.math.BigDecimal.ONE.subtract(percent)).max(java.math.BigDecimal.ZERO);
+                int appliedQty = Math.min(demandQuantity, remaining);
+                if (appliedQty <= 0) {
+                    yield null;
+                }
+                BigDecimal percent = value.divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
+                BigDecimal discountedUnit = basePrice.multiply(BigDecimal.ONE.subtract(percent)).max(BigDecimal.ZERO);
+                BigDecimal finalTotal = discountedUnit.multiply(BigDecimal.valueOf(appliedQty))
+                        .add(basePrice.multiply(BigDecimal.valueOf(demandQuantity - appliedQty)));
+                BigDecimal finalUnit = finalTotal.divide(BigDecimal.valueOf(demandQuantity), 4, RoundingMode.HALF_UP);
+                yield new PromotionSelection(finalUnit, appliedQty);
             }
-            case FIXED, FIXED_AMOUNT -> value == null ? null : basePrice.subtract(value).max(java.math.BigDecimal.ZERO);
-            case BUNDLE -> value == null ? null : value.max(java.math.BigDecimal.ZERO);
-            case FREE_GIFT -> basePrice;
+            case FIXED, FIXED_AMOUNT -> {
+                if (value == null) {
+                    yield null;
+                }
+                int appliedQty = Math.min(demandQuantity, remaining);
+                if (appliedQty <= 0) {
+                    yield null;
+                }
+                BigDecimal discountedUnit = basePrice.subtract(value).max(BigDecimal.ZERO);
+                BigDecimal finalTotal = discountedUnit.multiply(BigDecimal.valueOf(appliedQty))
+                        .add(basePrice.multiply(BigDecimal.valueOf(demandQuantity - appliedQty)));
+                BigDecimal finalUnit = finalTotal.divide(BigDecimal.valueOf(demandQuantity), 4, RoundingMode.HALF_UP);
+                yield new PromotionSelection(finalUnit, appliedQty);
+            }
+            case BUNDLE, FREE_GIFT -> evaluateBundlePromotion(promo, item, basePrice, demandQuantity, remaining);
         };
+    }
+
+    private PromotionSelection evaluateBundlePromotion(
+            Promotion promo,
+            CartItemPriceRequest.CartItem item,
+            BigDecimal basePrice,
+            int demandQuantity,
+            int remainingSets
+    ) {
+        if (promo == null || item == null || item.getProductId() == null || demandQuantity <= 0) {
+            return null;
+        }
+        List<BundleItem> bundleItems = promo.getBundleItems();
+        if (bundleItems == null || bundleItems.isEmpty()) {
+            return null;
+        }
+
+        BundleItem bundle = bundleItems.stream()
+                .filter(b -> b != null)
+                .filter(b -> {
+                    Long mainId = b.getMainProductId() != null ? b.getMainProductId() : b.getProductId();
+                    return mainId != null && mainId.equals(item.getProductId());
+                })
+                .findFirst()
+                .orElse(null);
+
+        if (bundle == null) {
+            return null;
+        }
+
+        int mainQty = safePositive(bundle.getMainQuantity() != null ? bundle.getMainQuantity() : bundle.getQuantity(), 1);
+        int giftQty = safePositive(bundle.getGiftQuantity(), 1);
+        int setSize = mainQty + giftQty;
+        int possibleSets = setSize > 0 ? demandQuantity / setSize : 0;
+        if (possibleSets <= 0) {
+            return null;
+        }
+
+        int appliedSets = Math.min(possibleSets, remainingSets);
+        if (appliedSets <= 0) {
+            return null;
+        }
+
+        int freeUnits = appliedSets * giftQty;
+        int chargeableUnits = Math.max(0, demandQuantity - freeUnits);
+        BigDecimal finalTotal = basePrice.multiply(BigDecimal.valueOf(chargeableUnits));
+        BigDecimal finalUnit = finalTotal.divide(BigDecimal.valueOf(demandQuantity), 4, RoundingMode.HALF_UP);
+        return new PromotionSelection(finalUnit, appliedSets);
+    }
+
+    private int normalizeDemandQuantity(CartItemPriceRequest.CartItem item) {
+        if (item == null || item.getQuantity() == null) {
+            return 0;
+        }
+        return Math.max(0, item.getQuantity());
+    }
+
+    private int safePositive(Integer value, int fallback) {
+        if (value == null || value <= 0) {
+            return fallback;
+        }
+        return value;
+    }
+
+    private Integer normalizeMaxQuantity(Integer maxQuantity) {
+        if (maxQuantity == null || maxQuantity <= 0) {
+            return null;
+        }
+        return maxQuantity;
+    }
+
+    private int normalizeUsedQuantity(Integer usedQuantity) {
+        if (usedQuantity == null || usedQuantity < 0) {
+            return 0;
+        }
+        return usedQuantity;
+    }
+
+    private boolean hasRemainingQuota(Promotion promo) {
+        if (promo == null) {
+            return false;
+        }
+        Integer max = normalizeMaxQuantity(promo.getMaxQuantity());
+        if (max == null) {
+            return true;
+        }
+        return normalizeUsedQuantity(promo.getUsedQuantity()) < max;
+    }
+
+    private int remainingQuotaForConsumption(Promotion promo) {
+        Integer max = normalizeMaxQuantity(promo.getMaxQuantity());
+        if (max == null) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.max(0, max - normalizeUsedQuantity(promo.getUsedQuantity()));
+    }
+
+    private Integer calculateRemainingQuantity(Promotion promotion) {
+        Integer max = normalizeMaxQuantity(promotion == null ? null : promotion.getMaxQuantity());
+        if (max == null) {
+            return null;
+        }
+        return Math.max(0, max - normalizeUsedQuantity(promotion.getUsedQuantity()));
+    }
+
+    private static final class PromotionSelection {
+        private final BigDecimal finalPrice;
+        private final int consumeAmount;
+
+        private PromotionSelection(BigDecimal finalPrice, int consumeAmount) {
+            this.finalPrice = finalPrice;
+            this.consumeAmount = consumeAmount;
+        }
     }
 
     private void sendNifiSignal(String eventType, PromotionDTO dto) {

@@ -19,6 +19,9 @@ public class PromotionDTO {
     private LocalDateTime endDate;
 
     private Boolean active;
+    private Integer maxQuantity;
+    private Integer usedQuantity;
+    private Integer remainingQuantity;
 
     private List<PromotionTargetDTO> targets;
     private List<BundleItemDTO> bundleItems;
@@ -50,6 +53,15 @@ public class PromotionDTO {
 
     public Boolean getActive() { return active; }
     public void setActive(Boolean active) { this.active = active; }
+
+    public Integer getMaxQuantity() { return maxQuantity; }
+    public void setMaxQuantity(Integer maxQuantity) { this.maxQuantity = maxQuantity; }
+
+    public Integer getUsedQuantity() { return usedQuantity; }
+    public void setUsedQuantity(Integer usedQuantity) { this.usedQuantity = usedQuantity; }
+
+    public Integer getRemainingQuantity() { return remainingQuantity; }
+    public void setRemainingQuantity(Integer remainingQuantity) { this.remainingQuantity = remainingQuantity; }
 
     public List<PromotionTargetDTO> getTargets() { return targets; }
     public void setTargets(List<PromotionTargetDTO> targets) { this.targets = targets; }

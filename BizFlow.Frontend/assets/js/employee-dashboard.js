@@ -4,7 +4,22 @@ let products = [];
 let cart = [];
 let selectedCustomer = null;
 let selectedEmployee = null;
-let currentCategory = 'all';
+const BEST_SELLERS_CATEGORY_ID = 'best-sellers';
+const CATEGORY_NAME_BY_ID = {
+    1: 'Nước giải khát',
+    2: 'Đồ ăn vặt',
+    3: 'Hóa mỹ phẩm',
+    4: 'Gia vị & nước chấm',
+    5: 'Sản phẩm chăm sóc nhà cửa',
+    6: 'Bánh kẹo',
+    7: 'Bia & rượu',
+    8: 'Mì, phở, cháo gói',
+    9: 'Đồ hộp & thực phẩm đóng hộp',
+    10: 'Thuốc lá & diêm',
+    11: 'Y tế',
+    12: 'Đồ dùng học tập văn phòng'
+};
+let currentCategory = BEST_SELLERS_CATEGORY_ID;
 let topSearchTerm = '';
 let bottomSearchTerm = '';
 let currentSort = 'name';
@@ -28,6 +43,16 @@ let allPromotions = []; // Luu t?t c? khuy?n m×i cho AI combo
 let isAnalyzingCombo = false; // Flag d? tr×nh v×ng l?p v× h?n
 let activeCustomerDetailId = null;
 let editingCustomerId = null;
+let supportOwnerId = null;
+let supportOwnerName = 'Owner';
+let supportPollTimer = null;
+let lastMessageCount = 0;
+let supportUnreadCount = 0;
+let globalUnreadPollTimer = null;
+let cartPersistTimer = null;
+let isRestoringCartState = false;
+let isCartPersisting = false;
+const FALLBACK_CATEGORY_LABEL = 'Khac';
 const customerOrderCache = new Map();
 const TIER_DISCOUNT_BY_100 = {
     DONG: 10000,
@@ -132,8 +157,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     setupEmployeeSelector();
     setupAppMenuModal();
     setupInvoiceModal();
+    setupContactSupport();
     toggleCashPanel(true);
     initInvoices();
+    await loadCartStateFromServer();
 
     document.getElementById('productsGrid').innerHTML =
         '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
@@ -174,9 +201,9 @@ function fixPaymentPanelText() {
     if (noteInput) noteInput.placeholder = 'Nh\u1eadp ghi ch\u00fa...';
 
     const saveBtn = document.getElementById('saveBillBtn');
-    if (saveBtn) saveBtn.textContent = 'L\u01b0u t\u1ea1m (F10)';
+    if (saveBtn) saveBtn.textContent = 'Th\u00eam v\u00e0o gi\u1ecf h\u00e0ng (F10)';
     const checkoutBtn = document.getElementById('checkoutBtn');
-    if (checkoutBtn) checkoutBtn.textContent = 'Thu ti\u1ec1n (F9)';
+    if (checkoutBtn) checkoutBtn.textContent = 'Thanh to\u00e1n (F9)';
 }
 
 function applyExchangeDraft() {
@@ -233,6 +260,142 @@ function applyExchangeDraft() {
     renderCart();
     updateTotal();
     sessionStorage.removeItem('exchangeDraft');
+    queuePersistCartState();
+}
+
+function getCurrentUserId() {
+    const raw = parseInt(sessionStorage.getItem('userId'), 10);
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function getAuthHeaders() {
+    const token = sessionStorage.getItem('accessToken') || '';
+    return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+    };
+}
+
+function normalizeInvoiceState(raw, index = 0) {
+    const fallbackName = `Giỏ hàng ${index + 1}`;
+    return {
+        id: raw?.id || `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: raw?.name || fallbackName,
+        cart: Array.isArray(raw?.cart) ? raw.cart.map(item => ({ ...item })) : [],
+        selectedCustomer: raw?.selectedCustomer
+            ? { ...raw.selectedCustomer }
+            : { id: 0, name: 'Khách lẻ', phone: '-' },
+        paymentMethod: raw?.paymentMethod || 'CASH',
+        cashReceived: raw?.cashReceived || '',
+        paymentNote: raw?.paymentNote || '',
+        splitLine: !!raw?.splitLine,
+        topSearchTerm: raw?.topSearchTerm || '',
+        bottomSearchTerm: raw?.bottomSearchTerm || ''
+    };
+}
+
+function buildCartStatePayload() {
+    saveActiveInvoiceState();
+    return {
+        invoices: (invoices || []).map((invoice, idx) => normalizeInvoiceState(invoice, idx)),
+        savedInvoices: (savedInvoices || []).map((invoice, idx) => normalizeInvoiceState(invoice, idx)),
+        activeInvoiceId,
+        invoiceSequence,
+        currentCategory,
+        currentSort,
+        updatedAt: new Date().toISOString()
+    };
+}
+
+function applyCartStatePayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+
+    const restoredInvoices = Array.isArray(payload.invoices)
+        ? payload.invoices.map((invoice, idx) => normalizeInvoiceState(invoice, idx))
+        : [];
+
+    const restoredSaved = Array.isArray(payload.savedInvoices)
+        ? payload.savedInvoices.map((invoice, idx) => normalizeInvoiceState(invoice, idx))
+        : [];
+
+    invoices = restoredInvoices.length > 0 ? restoredInvoices : [createInvoiceState()];
+    savedInvoices = restoredSaved;
+
+    const activeExists = invoices.some(inv => inv.id === payload.activeInvoiceId);
+    activeInvoiceId = activeExists ? payload.activeInvoiceId : invoices[0].id;
+
+    const parsedSeq = Number(payload.invoiceSequence);
+    invoiceSequence = Number.isFinite(parsedSeq) && parsedSeq > 0
+        ? parsedSeq
+        : Math.max(1, getNextInvoiceNumberFromAll());
+
+    if (payload.currentCategory != null) {
+        currentCategory = String(payload.currentCategory);
+    }
+    if (payload.currentSort) {
+        currentSort = payload.currentSort;
+    }
+
+    renderInvoiceTabs();
+    const active = getActiveInvoice();
+    if (active) {
+        applyInvoiceState(active);
+    }
+    renderSavedBills();
+}
+
+async function loadCartStateFromServer() {
+    const userId = getCurrentUserId();
+    if (!userId) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/orders/cart/${userId}`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+        });
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (!data?.state) return;
+
+        isRestoringCartState = true;
+        applyCartStatePayload(data.state);
+    } catch (err) {
+        console.warn('Cannot load persisted cart state', err);
+    } finally {
+        isRestoringCartState = false;
+    }
+}
+
+function queuePersistCartState() {
+    if (isRestoringCartState) return;
+
+    if (cartPersistTimer) {
+        clearTimeout(cartPersistTimer);
+    }
+
+    cartPersistTimer = setTimeout(() => {
+        persistCartStateNow();
+    }, 500);
+}
+
+async function persistCartStateNow() {
+    const userId = getCurrentUserId();
+    if (!userId || isRestoringCartState || isCartPersisting) return;
+
+    isCartPersisting = true;
+    try {
+        const state = buildCartStatePayload();
+        await fetch(`${API_BASE}/orders/cart/${userId}`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ state })
+        });
+    } catch (err) {
+        console.warn('Cannot persist cart state', err);
+    } finally {
+        isCartPersisting = false;
+    }
 }
 
 function resolveApiBase() {
@@ -425,6 +588,7 @@ async function loadProducts() {
                 price: shelf.price || 0,
                 stock: shelf.quantity,
                 categoryId: shelf.categoryId,
+                categoryName: shelf.categoryName || shelf.category || shelf.groupName || '',
                 unit: shelf.unit || 'cái',
                 status: 'active'
             }));
@@ -438,10 +602,12 @@ async function loadProducts() {
         }
         
         await loadPromotionIndex();
+        renderCategoryList();
         filterProducts();
     } catch (err) {
         console.error('[loadProducts] Error:', err);
         products = [];
+        renderCategoryList();
         filterProducts();
     }
 }
@@ -754,6 +920,7 @@ async function addToCart(productId, productName, productPrice) {
             renderToolbarSearchResults(document.getElementById('searchInput').value);
         }
     }
+    queuePersistCartState();
 }
 
 function clearCart(resetCustomer = true) {
@@ -763,6 +930,7 @@ function clearCart(resetCustomer = true) {
     if (resetCustomer) {
         clearSelectedCustomer();
     }
+    queuePersistCartState();
 }
 
 async function createOrder(isPaid) {
@@ -817,12 +985,15 @@ async function createOrder(isPaid) {
             await openInvoiceModal(receiptData);
             applyLocalStockAfterSale();
         }
+        await loadPromotionIndex(true);
+        filterProducts(document.getElementById('searchInput')?.value || '');
         clearCart(true);
         if (exchangeDraft) {
             sessionStorage.removeItem('exchangeDraft');
             exchangeDraft = null;
         }
         saveActiveInvoiceState();
+        queuePersistCartState();
         return data;
     } catch (err) {
         showPopup('Lỗi kết nối khi tạo đơn hàng.', { type: 'error' });
@@ -976,6 +1147,7 @@ async function payOrder(orderId) {
         hideTransferQrModal();
         clearCart(true);
         saveActiveInvoiceState();
+        queuePersistCartState();
     } catch (err) {
         alert('Lỗi kết nối khi xác nhận thanh toán.');
     }
@@ -1159,6 +1331,340 @@ function formatDateTime(value) {
     });
 }
 
+function formatSupportTime(value) {
+    const date = value ? new Date(value) : new Date();
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+    return date.toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function getValidSupportOwnerId() {
+    if (supportOwnerId === null || supportOwnerId === undefined || supportOwnerId === '') {
+        return null;
+    }
+    const id = Number(supportOwnerId);
+    if (!Number.isFinite(id) || id <= 0) {
+        return null;
+    }
+    return id;
+}
+
+async function resolveOwnerContact() {
+    const token = sessionStorage.getItem('accessToken') || '';
+    const res = await fetch(`${API_BASE}/users`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!res.ok) return;
+    const users = await res.json();
+    const owner = (users || []).find((u) => {
+        const role = typeof u?.role === 'string'
+            ? u.role
+            : (u?.role?.name || '');
+        return String(role).toUpperCase() === 'OWNER';
+    });
+    if (!owner) return;
+
+    supportOwnerId = Number(owner.id);
+    supportOwnerName = owner.fullName || owner.username || 'Owner';
+}
+
+function renderSupportMessages(messages) {
+    const box = document.getElementById('contactSupportMessages');
+    if (!box) return;
+    const currentUserId = Number(sessionStorage.getItem('userId'));
+
+    box.innerHTML = (messages || []).map((m) => {
+        const isMe = Number(m.senderId) === currentUserId;
+        const cls = isMe ? 'me' : 'them';
+        const sender = escapeHtml(isMe ? 'Bạn' : 'Chăm sóc khách hàng');
+        const content = escapeHtml(m.content || '');
+        const time = formatSupportTime(m.createdAt);
+        return `
+            <div class="contact-msg ${cls}">
+                <div class="sender">${sender}</div>
+                <div>${content}</div>
+                <div class="time">${time}</div>
+            </div>
+        `;
+    }).join('');
+
+    box.scrollTop = box.scrollHeight;
+}
+
+async function loadSupportMessages() {
+    const currentUserId = Number(sessionStorage.getItem('userId'));
+    const ownerId = getValidSupportOwnerId();
+    if (!Number.isFinite(currentUserId) || !ownerId) return;
+
+    const token = sessionStorage.getItem('accessToken') || '';
+    const res = await fetch(`${API_BASE}/messages/${currentUserId}/${ownerId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    renderSupportMessages(data || []);
+
+    // Count unread messages from owner
+    const unreadCount = (data || []).filter(m => !m.isRead && Number(m.senderId) === ownerId).length;
+    
+    // Update unread badge
+    updateSupportUnreadBadge(unreadCount);
+    
+    // Show notification if new unread messages arrived
+    if (unreadCount > 0 && unreadCount > lastMessageCount) {
+        showToastNotification('Chăm sóc khách hàng đã gửi tin nhắn', 'info');
+    }
+    
+    lastMessageCount = unreadCount;
+}
+
+async function sendSupportMessage() {
+    const input = document.getElementById('contactSupportInput');
+    const currentUserId = Number(sessionStorage.getItem('userId'));
+    const currentUserName = sessionStorage.getItem('username') || 'Người dùng';
+    if (!input) return;
+
+    const content = (input.value || '').trim();
+    if (!content) return;
+
+    let ownerId = getValidSupportOwnerId();
+    if (!ownerId) {
+        await resolveOwnerContact();
+        ownerId = getValidSupportOwnerId();
+    }
+    if (!Number.isFinite(currentUserId) || !ownerId) {
+        showPopup('Không tìm thấy Owner để liên hệ.', { type: 'error' });
+        return;
+    }
+
+    const token = sessionStorage.getItem('accessToken') || '';
+    const res = await fetch(`${API_BASE}/messages`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+            senderId: currentUserId,
+            receiverId: ownerId,
+            senderName: currentUserName,
+            receiverName: 'Chăm sóc khách hàng',
+            content
+        })
+    });
+
+    if (!res.ok) {
+        const text = await res.text();
+        showPopup(text || 'Không gửi được tin nhắn.', { type: 'error' });
+        return;
+    }
+
+    input.value = '';
+    await loadSupportMessages();
+}
+
+function clearSupportPolling() {
+    if (supportPollTimer) {
+        clearInterval(supportPollTimer);
+        supportPollTimer = null;
+    }
+}
+
+function updateSupportUnreadBadge(count) {
+    const btn = document.getElementById('contactSupportBtn');
+    if (!btn) return;
+    
+    supportUnreadCount = count;
+    
+    // Remove old badge if exists
+    const oldBadge = btn.querySelector('.unread-badge');
+    if (oldBadge) oldBadge.remove();
+    
+    // Add new badge if count > 0
+    if (count > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'unread-badge';
+        badge.textContent = count > 99 ? '99+' : count;
+        badge.style.cssText = `
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: #ef4444;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            z-index: 999;
+        `;
+        btn.style.position = 'relative';
+        btn.appendChild(badge);
+    }
+}
+
+function showToastNotification(message, type = 'info') {
+    const container = document.getElementById('toastContainer');
+    if (!container) {
+        console.warn('Toast container not found');
+        return;
+    }
+    
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toast.style.cssText = `
+        margin: 8px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        background: ${type === 'error' ? '#fee' : type === 'success' ? '#efe' : '#e0f2fe'};
+        color: ${type === 'error' ? '#991b1b' : type === 'success' ? '#166534' : '#0c4a6e'};
+        border: 1px solid ${type === 'error' ? '#fca5a5' : type === 'success' ? '#86efac' : '#7dd3fc'};
+        animation: slideIn 0.3s ease-out;
+        font-size: 14px;
+    `;
+    
+    container.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
+}
+
+async function openSupportModal() {
+    const modal = document.getElementById('contactSupportModal');
+    const meta = document.getElementById('contactSupportMeta');
+    if (!modal) return;
+
+    let ownerId = getValidSupportOwnerId();
+    if (!ownerId) {
+        await resolveOwnerContact();
+        ownerId = getValidSupportOwnerId();
+    }
+
+    if (!ownerId) {
+        showPopup('Chưa có tài khoản Owner để liên hệ.', { type: 'error' });
+        return;
+    }
+
+    if (meta) {
+        meta.textContent = 'Đang chat với: Chăm sóc khách hàng';
+    }
+
+    await loadSupportMessages();
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+
+    clearSupportPolling();
+    supportPollTimer = setInterval(() => {
+        loadSupportMessages();
+    }, 5000);
+    
+    // Start global polling for unread messages (even when modal is closed)
+    startGlobalUnreadPolling();
+}
+
+function closeSupportModal() {
+    const modal = document.getElementById('contactSupportModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    clearSupportPolling();
+}
+
+function setupContactSupport() {
+    const openBtn = document.getElementById('contactSupportBtn');
+    const closeBtn = document.getElementById('contactSupportCloseBtn');
+    const sendBtn = document.getElementById('contactSupportSendBtn');
+    const input = document.getElementById('contactSupportInput');
+    const modal = document.getElementById('contactSupportModal');
+
+    openBtn?.addEventListener('click', openSupportModal);
+    closeBtn?.addEventListener('click', closeSupportModal);
+    sendBtn?.addEventListener('click', sendSupportMessage);
+    input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendSupportMessage();
+        }
+    });
+    modal?.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeSupportModal();
+        }
+    });
+}
+
+function startGlobalUnreadPolling() {
+    // Only start polling if user is logged in
+    const currentUserId = Number(sessionStorage.getItem('userId'));
+    const token = sessionStorage.getItem('accessToken') || '';
+    
+    if (!Number.isFinite(currentUserId) || !token) {
+        return; // User not logged in yet
+    }
+    
+    if (globalUnreadPollTimer) clearInterval(globalUnreadPollTimer);
+    
+    globalUnreadPollTimer = setInterval(async () => {
+        const userId = Number(sessionStorage.getItem('userId'));
+        const authToken = sessionStorage.getItem('accessToken') || '';
+        let ownerId = getValidSupportOwnerId();
+        
+        if (!ownerId) {
+            await resolveOwnerContact().catch(() => {});
+            ownerId = getValidSupportOwnerId();
+        }
+        
+        if (Number.isFinite(userId) && ownerId && authToken) {
+            try {
+                const res = await fetch(`${API_BASE}/messages/${userId}/${ownerId}`, {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                });
+                
+                if (res.status === 401) {
+                    // User logged out, stop polling
+                    clearInterval(globalUnreadPollTimer);
+                    globalUnreadPollTimer = null;
+                    return;
+                }
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    const unreadCount = (data || []).filter(m => !m.isRead && Number(m.senderId) === ownerId).length;
+                    
+                    // Update badge even when modal is closed
+                    updateSupportUnreadBadge(unreadCount);
+                    
+                    // Show notification for new messages only if modal is closed
+                    const modalEl = document.getElementById('contactSupportModal');
+                    if (modalEl && !modalEl.classList.contains('show')) {
+                        if (unreadCount > lastMessageCount && unreadCount > 0) {
+                            showToastNotification('Chăm sóc khách hàng đã gửi tin nhắn', 'info');
+                        }
+                    }
+                    
+                    if (unreadCount !== lastMessageCount) {
+                        lastMessageCount = unreadCount;
+                    }
+                }
+            } catch (err) {
+                console.error('Error polling unread messages:', err);
+            }
+        }
+    }, 3000); // Poll every 3 seconds
+}
+
 function mapPaymentMethod(method) {
     switch (method) {
         case 'CASH':
@@ -1199,6 +1705,7 @@ async function loadPromotionIndex(forceRefresh = false) {
                     price: shelf.price || 0,
                     stock: shelf.quantity,
                     categoryId: shelf.categoryId,
+                    categoryName: shelf.categoryName || shelf.category || shelf.groupName || '',
                     unit: shelf.unit || 'cái',
                     status: 'active'
                 })));
@@ -1388,6 +1895,13 @@ function formatPromotionLabel(promo) {
         return `Giảm ${formatPrice(value)}`;
     }
     if (type === 'BUNDLE') {
+        const bundles = promo.bundleItems || [];
+        if (bundles.length > 0) {
+            const firstBundle = bundles[0];
+            const mainQty = firstBundle.mainQuantity || firstBundle.main_quantity || 1;
+            const giftQty = firstBundle.giftQuantity || firstBundle.gift_quantity || 1;
+            return `Mua ${mainQty} tặng ${giftQty}`;
+        }
         return 'Combo';
     }
     if (type === 'FREE_GIFT') {
@@ -1399,6 +1913,11 @@ function formatPromotionLabel(promo) {
 function isPromotionActive(promo) {
     if (!promo) return false;
     if (promo.active === false) return false;
+    const maxQty = Number(promo.maxQuantity);
+    if (Number.isFinite(maxQty) && maxQty > 0) {
+        const usedQty = Math.max(0, Number(promo.usedQuantity || 0));
+        if (usedQty >= maxQty) return false;
+    }
     const now = new Date();
     const start = parsePromotionDate(promo.startDate);
     const end = parsePromotionDate(promo.endDate);
@@ -1542,6 +2061,7 @@ function updateQty(idx, change) {
         
         renderCart();
         updateTotal();
+        queuePersistCartState();
     }
 }
 
@@ -1580,6 +2100,7 @@ function setQty(idx, value) {
         
         // Phân tích lại combo sau khi thay đổi số lượng
         setTimeout(() => analyzeCartForCombo(), 100);
+        queuePersistCartState();
     }
 }
 
@@ -1629,6 +2150,7 @@ function removeFromCart(idx) {
     
     // Phân tích lại combo sau khi xóa sản phẩm
     setTimeout(() => analyzeCartForCombo(), 100);
+    queuePersistCartState();
 }
 
 function removeReturnItem(idx) {
@@ -1636,6 +2158,7 @@ function removeReturnItem(idx) {
     cart.splice(idx, 1);
     renderCart();
     updateTotal();
+    queuePersistCartState();
 }
 
 function selectCustomer(evt, customerId, customerName, customerPhone) {
@@ -1692,6 +2215,7 @@ function clearSelectedCustomer(options = {}) {
     }
 
     updateTotal();
+    queuePersistCartState();
 }
 
 function updateTotal() {
@@ -2031,6 +2555,13 @@ function setupEventListeners() {
         sortProducts(currentSort);
     });
 
+    document.getElementById('productCategoryList')?.addEventListener('click', (e) => {
+        const button = e.target.closest('.category-item');
+        if (!button) return;
+        const selectedCategory = button.dataset.categoryId || 'all';
+        setCategoryFilter(selectedCategory);
+    });
+
     document.getElementById('qtyInput').addEventListener('change', () => {
         const val = getCurrentQty();
         document.getElementById('qtyInput').value = val;
@@ -2041,6 +2572,11 @@ function setupEventListeners() {
 
     document.getElementById('cashReceivedInput')?.addEventListener('input', () => {
         updateChangeDue();
+        queuePersistCartState();
+    });
+
+    document.getElementById('paymentNote')?.addEventListener('input', () => {
+        queuePersistCartState();
     });
 
     document.getElementById('usePointsToggle')?.addEventListener('change', () => {
@@ -2052,6 +2588,7 @@ function setupEventListeners() {
             currentPaymentMethod = input.value;
             toggleCashPanel(currentPaymentMethod === 'CASH');
             updateChangeDue();
+            queuePersistCartState();
         });
     });
 
@@ -2128,6 +2665,7 @@ function setupEventListeners() {
     clearCartBtn?.addEventListener('click', () => {
         if (confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
             clearCart(false);
+            queuePersistCartState();
         }
     });
 
@@ -2156,6 +2694,7 @@ function setupEventListeners() {
 
     document.getElementById('logoutBtn').addEventListener('click', () => {
         if (confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
+            persistCartStateNow();
             sessionStorage.clear();
             window.location.href = '/pages/login.html';
         }
@@ -2184,14 +2723,15 @@ function initInvoices() {
     activeInvoiceId = initial.id;
     renderInvoiceTabs();
     applyInvoiceState(initial);
+    queuePersistCartState();
 }
 
 function getNextInvoiceNumber() {
     let max = 0;
     invoices.forEach(inv => {
-        const match = String(inv.name || '').match(/H\u00f3a \u0111\u01a1n\s+(\d+)/i);
+        const match = String(inv.name || '').match(/(H\u00f3a \u0111\u01a1n|Gi\u1ecf h\u00e0ng)\s+(\d+)/i);
         if (match) {
-            max = Math.max(max, Number(match[1]));
+            max = Math.max(max, Number(match[2]));
         }
     });
     return max + 1;
@@ -2201,9 +2741,9 @@ function getNextInvoiceNumberFromAll() {
     let max = 0;
     const collect = (list) => {
         (list || []).forEach(inv => {
-            const match = String(inv.name || '').match(/H\u00f3a \u0111\u01a1n\s+(\d+)/i);
+            const match = String(inv.name || '').match(/(H\u00f3a \u0111\u01a1n|Gi\u1ecf h\u00e0ng)\s+(\d+)/i);
             if (match) {
-                max = Math.max(max, Number(match[1]));
+                max = Math.max(max, Number(match[2]));
             }
         });
     };
@@ -2218,7 +2758,7 @@ function createInvoiceState(name) {
     invoiceSequence = Math.max(invoiceSequence, nextNumber + 1);
     return {
         id,
-        name: name || `H\u00f3a \u0111\u01a1n ${nextNumber}`,
+        name: name || `Gi\u1ecf h\u00e0ng ${nextNumber}`,
         cart: [],
         selectedCustomer: { id: 0, name: 'Khách lẻ', phone: '-' },
         paymentMethod: 'CASH',
@@ -2309,8 +2849,8 @@ function renderInvoiceTabs() {
     `).join('');
     container.innerHTML = `
         ${tabs}
-        <button class="order-tab ghost" id="addInvoiceBtn" title="Th\u00eam h\u00f3a \u0111\u01a1n">+</button>
-        <button class="order-tab ghost" id="savedInvoiceBtn">H\u0110 l\u01b0u t\u1ea1m</button>
+        <button class="order-tab ghost" id="addInvoiceBtn" title="Th\u00eam gi\u1ecf h\u00e0ng">+</button>
+        <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi\u1ecf h\u00e0ng</button>
     `;
 }
 
@@ -2335,7 +2875,7 @@ function setupInvoiceTabs() {
         if (closeBtn) {
             e.stopPropagation();
             const invoiceId = closeBtn.getAttribute('data-close');
-            if (invoiceId && confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
+            if (invoiceId && confirm('X\u00f3a gi\u1ecf h\u00e0ng n\u00e0y?')) {
                 removeInvoice(invoiceId);
             }
             return;
@@ -2386,6 +2926,7 @@ function createAndSwitchInvoice() {
     activeInvoiceId = invoice.id;
     renderInvoiceTabs();
     applyInvoiceState(invoice);
+    queuePersistCartState();
 }
 
 function switchInvoice(invoiceId) {
@@ -2396,6 +2937,7 @@ function switchInvoice(invoiceId) {
     if (invoice) {
         renderInvoiceTabs();
         applyInvoiceState(invoice);
+        queuePersistCartState();
     }
 }
 
@@ -2415,6 +2957,7 @@ function removeInvoice(invoiceId, options = {}) {
         activeInvoiceId = fresh.id;
         renderInvoiceTabs();
         applyInvoiceState(fresh);
+        queuePersistCartState();
         return;
     }
     invoiceSequence = Math.max(invoiceSequence, getNextInvoiceNumber());
@@ -2422,14 +2965,16 @@ function removeInvoice(invoiceId, options = {}) {
         activeInvoiceId = invoices[0].id;
         renderInvoiceTabs();
         applyInvoiceState(invoices[0]);
+        queuePersistCartState();
     } else {
         renderInvoiceTabs();
+        queuePersistCartState();
     }
 }
 
 function saveDraftInvoice() {
     if (cart.length === 0) {
-        showPopup('Giỏ hàng trống, không thể lưu tạm.', { type: 'error' });
+        showPopup('Giỏ hàng trống, không thể thêm vào giỏ hàng.', { type: 'error' });
         return;
     }
     saveActiveInvoiceState();
@@ -2437,7 +2982,7 @@ function saveDraftInvoice() {
     if (!invoice) return;
     const draft = {
         ...invoice,
-        name: `H\u00f3a \u0111\u01a1n ${getNextInvoiceNumberFromAll()}`,
+        name: `Gi\u1ecf h\u00e0ng ${getNextInvoiceNumberFromAll()}`,
         cart: cloneCart(invoice.cart),
         savedAt: new Date().toISOString()
     };
@@ -2445,6 +2990,7 @@ function saveDraftInvoice() {
     removeInvoice(invoice.id, { resetSequence: false });
     renderSavedBills();
     toggleSavedBillsPanel(false);
+    queuePersistCartState();
 }
 
 function renderSavedBills() {
@@ -2459,12 +3005,15 @@ function renderSavedBills() {
     empty.style.display = 'none';
     list.innerHTML = savedInvoices.map(draft => {
         const total = draft.cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
-        const customerName = draft.selectedCustomer?.name || 'Khách lẻ';
+        const customerName = (draft.selectedCustomer?.name || '').trim();
+        const customerLabel = customerName && customerName.toLowerCase() !== 'khách lẻ'
+            ? `<span>${escapeHtml(customerName)}</span>`
+            : '';
         return `
             <div class="saved-bill-item">
                 <button class="saved-bill-open" data-open-draft="${draft.id}">
                     <strong>${draft.name}</strong>
-                    <span>${customerName}</span>
+                    ${customerLabel}
                     <span>${formatPrice(total)}</span>
                 </button>
                 <button class="saved-bill-remove" data-remove-draft="${draft.id}">×</button>
@@ -2509,7 +3058,7 @@ function openSavedInvoice(draftId) {
         activeInvoiceId = emptyTarget.id;
     } else {
         const nextNumber = getNextInvoiceNumber();
-        draft.name = `H\u00f3a \u0111\u01a1n ${nextNumber}`;
+        draft.name = `Gi\u1ecf h\u00e0ng ${nextNumber}`;
         invoiceSequence = Math.max(invoiceSequence, nextNumber + 1);
         invoices.push(draft);
         activeInvoiceId = draft.id;
@@ -2518,6 +3067,7 @@ function openSavedInvoice(draftId) {
     applyInvoiceState(getActiveInvoice());
     renderSavedBills();
     toggleSavedBillsPanel(false);
+    queuePersistCartState();
 }
 
 function isInvoiceEmpty(invoice) {
@@ -2535,6 +3085,7 @@ function removeSavedInvoice(draftId) {
     if (index === -1) return;
     savedInvoices.splice(index, 1);
     renderSavedBills();
+    queuePersistCartState();
 }
 
 function applyCustomerSelection(customer, options = {}) {
@@ -2583,6 +3134,7 @@ function applyCustomerSelection(customer, options = {}) {
     }
 
     updateTotal();
+    queuePersistCartState();
 }
 
 function setupCustomerModal() {
@@ -3051,8 +3603,20 @@ function filterProducts(searchTerm = '') {
         return;
     }
 
-    setSuggestionMode('default');
-    renderProducts(applySort(getBestSellerProducts()), 'default');
+    if (currentCategory === BEST_SELLERS_CATEGORY_ID || currentCategory === 'all') {
+        const bestSellerList = getBestSellerProducts();
+        const filtered = explicitKeyword
+            ? applySort(bestSellerList.filter((p) => productMatchesKeyword(p, explicitKeyword)))
+            : applySort(bestSellerList);
+        setSuggestionMode('category', 'Danh mục sản phẩm bán chạy');
+        renderProducts(filtered, 'default');
+        return;
+    }
+
+    const selected = getCategoryOptions().find((item) => String(item.id) === String(currentCategory));
+    const filtered = applySort(filterProductList(products, explicitKeyword));
+    setSuggestionMode('category', selected?.name || 'Danh mục');
+    renderProducts(filtered, 'default');
 }
 
 function sortProducts(sortBy) {
@@ -3061,9 +3625,38 @@ function sortProducts(sortBy) {
 }
 
 function getBestSellerProducts() {
-    return [...products]
-        .sort((a, b) => (a.id || 0) - (b.id || 0))
-        .slice(0, 10);
+    const list = [...products].sort((a, b) => {
+        const soldDiff = getSoldScore(b) - getSoldScore(a);
+        if (soldDiff !== 0) return soldDiff;
+        const stockDiff = (b.stock || 0) - (a.stock || 0);
+        if (stockDiff !== 0) return stockDiff;
+        return (a.name || '').localeCompare((b.name || ''), 'vi');
+    });
+
+    const hasSoldData = list.some((item) => getSoldScore(item) > 0);
+    return hasSoldData ? list.filter((item) => getSoldScore(item) > 0) : list;
+}
+
+function getSoldScore(product) {
+    const candidates = [
+        product?.soldQuantity,
+        product?.totalSold,
+        product?.quantitySold,
+        product?.soldCount,
+        product?.salesCount,
+        product?.orderCount,
+        product?.sold,
+        product?.totalSales
+    ];
+
+    for (const value of candidates) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+    }
+
+    return 0;
 }
 
 function applySort(list) {
@@ -3077,7 +3670,7 @@ function applySort(list) {
             break;
         case 'name':
         default:
-            sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            sorted.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
             break;
     }
     return sorted;
@@ -3150,12 +3743,16 @@ function getProductPricing(product) {
     const basePrice = Number(product?.price);
     let promoPrice = NaN;
     let promoLabel = '';
+    let promoType = null;
+    let promo = null;
 
     if (promotionIndex && product?.id != null) {
         const promoInfo = promotionIndex.get(product.id);
         if (promoInfo?.promo) {
+            promo = promoInfo.promo;
             promoPrice = getPromoPrice(basePrice, promoInfo.promo);
             promoLabel = promoInfo.label || formatPromotionLabel(promoInfo.promo);
+            promoType = normalizeDiscountType(promoInfo.promo.discountType);
         }
     }
 
@@ -3185,28 +3782,52 @@ function getProductPricing(product) {
     const hasPromo = Number.isFinite(basePrice)
         && Number.isFinite(promoPrice)
         && promoPrice < basePrice;
+    
+    // Bundle promotions should always show as having a promo, even if price doesn't change
+    const hasBundlePromo = promoType === 'BUNDLE' && promoLabel;
 
     return {
         basePrice: Number.isFinite(basePrice) ? basePrice : NaN,
         promoPrice,
-        hasPromo,
-        label: promoLabel
+        hasPromo: hasPromo || hasBundlePromo,
+        promoType,
+        label: promoLabel,
+        promo
     };
+}
+
+function getRemainingPromoText(promo) {
+    if (!promo) return '';
+    const maxQty = Number(promo.maxQuantity);
+    if (!Number.isFinite(maxQty) || maxQty <= 0) {
+        return '';
+    }
+    const remaining = Number.isFinite(Number(promo.remainingQuantity))
+        ? Math.max(0, Number(promo.remainingQuantity))
+        : Math.max(0, maxQty - Math.max(0, Number(promo.usedQuantity || 0)));
+    return `SL ${remaining}`;
 }
 
 function buildProductPriceParts(product) {
     const pricing = getProductPricing(product);
     const basePrice = Number.isFinite(pricing.basePrice) ? pricing.basePrice : 0;
     const promoPrice = Number.isFinite(pricing.promoPrice) ? pricing.promoPrice : basePrice;
-    const hasPromo = pricing.hasPromo && promoPrice < basePrice;
-    const badge = hasPromo ? '<span class="promo-badge">KM</span>' : '';
-    const tagClass = hasPromo ? 'origin' : 'hidden';
+    const hasPromo = pricing.hasPromo;
+    const isBundlePromo = pricing.promoType === 'BUNDLE';
+    
+    // Show badge for both price discounts and bundle promotions
+    const remainingText = getRemainingPromoText(pricing.promo);
+    const badgeText = remainingText ? `KM ${remainingText}` : 'KM';
+    const badge = hasPromo ? `<span class="promo-badge">${badgeText}</span>` : '';
+    const tagClass = hasPromo && !isBundlePromo ? 'origin' : 'hidden';
     const priceTag = formatPriceCompact(basePrice);
     const label = hasPromo && pricing.label ? `<span class="price-label">${escapeHtml(pricing.label)}</span>` : '';
+    
+    // For bundle promos, show the condition instead of discounted price
     const priceBlock = hasPromo
         ? `
             <div class="product-pricing">
-                <span class="price-new">${formatPrice(promoPrice)}</span>
+                <span class="price-new">${isBundlePromo ? 'Mua: ' + formatPrice(basePrice) : formatPrice(promoPrice)}</span>
                 ${label}
             </div>
         `
@@ -3226,11 +3847,82 @@ function buildProductPriceParts(product) {
 }
 
 function filterProductList(list, keyword) {
-    return list.filter(p => {
-        const matchCategory = currentCategory === 'all' || p.categoryId === parseInt(currentCategory, 10);
+    return list.filter((p) => {
+        const categoryKey = String(currentCategory || '');
+        const matchCategory = categoryKey === BEST_SELLERS_CATEGORY_ID
+            || categoryKey === 'all'
+            || p.categoryId === parseInt(categoryKey, 10);
         const matchSearch = productMatchesKeyword(p, keyword);
         return matchCategory && matchSearch;
     });
+}
+
+function getCategoryLabel(product) {
+    const categoryId = Number(product?.categoryId);
+    // Prefer API category name so product-to-category mapping stays faithful to backend data.
+    const raw = (product?.categoryName || product?.category || '').toString().trim();
+    if (raw) return raw;
+
+    if (Number.isFinite(categoryId) && categoryId > 0 && CATEGORY_NAME_BY_ID[categoryId]) {
+        return CATEGORY_NAME_BY_ID[categoryId];
+    }
+
+    if (!Number.isFinite(categoryId) || categoryId <= 0) {
+        return FALLBACK_CATEGORY_LABEL;
+    }
+    return `Danh mục ${categoryId}`;
+}
+
+function getCategoryOptions() {
+    const categoryMap = new Map();
+    (products || []).forEach((product) => {
+        const rawId = Number(product?.categoryId);
+        if (!Number.isFinite(rawId) || rawId <= 0) return;
+        if (!categoryMap.has(rawId)) {
+            categoryMap.set(rawId, {
+                id: rawId,
+                name: getCategoryLabel(product),
+                count: 0
+            });
+        }
+        categoryMap.get(rawId).count += 1;
+    });
+
+    return Array.from(categoryMap.values()).sort((a, b) => a.id - b.id);
+}
+
+function renderCategoryList() {
+    const container = document.getElementById('productCategoryList');
+    if (!container) return;
+
+    const categories = getCategoryOptions();
+    const hasCurrent = currentCategory === BEST_SELLERS_CATEGORY_ID
+        || currentCategory === 'all'
+        || categories.some((item) => String(item.id) === String(currentCategory));
+    if (!hasCurrent) {
+        currentCategory = BEST_SELLERS_CATEGORY_ID;
+    }
+
+    const bestSellerCount = getBestSellerProducts().length;
+    const allButtonClass = (currentCategory === BEST_SELLERS_CATEGORY_ID || currentCategory === 'all')
+        ? 'category-item active'
+        : 'category-item';
+    const allHtml = `<button class="${allButtonClass}" type="button" data-category-id="${BEST_SELLERS_CATEGORY_ID}"><span class="category-item-name">Danh mục sản phẩm bán chạy</span><span class="category-item-meta"><span class="category-item-caret" aria-hidden="true">&rsaquo;</span></span></button>`;
+
+    const categoryHtml = categories.map((category) => {
+        const isActive = String(category.id) === String(currentCategory);
+        const buttonClass = isActive ? 'category-item active' : 'category-item';
+        return `<button class="${buttonClass}" type="button" data-category-id="${category.id}"><span class="category-item-name">${escapeHtml(category.name)}</span><span class="category-item-meta"><span class="category-item-caret" aria-hidden="true">&rsaquo;</span></span></button>`;
+    }).join('');
+
+    container.innerHTML = allHtml + categoryHtml;
+}
+
+function setCategoryFilter(categoryId) {
+    const normalized = categoryId == null ? BEST_SELLERS_CATEGORY_ID : String(categoryId);
+    currentCategory = normalized;
+    renderCategoryList();
+    filterProducts();
 }
 
 function productMatchesKeyword(product, keyword) {
@@ -3293,7 +3985,6 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                     <div class="product-image">${buildProductImageMarkup(p)}</div>
                     <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
                     <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
-                    <div class="product-stock">T\u1ed3n: ${getStockValue(p)}</div>
                     ${priceParts.priceBlock}
                 </div>
             `;
@@ -3314,7 +4005,6 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                     <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
                     <div class="product-meta">
                         <span>${p.unit ? '\u0110VT: ' + p.unit : '\u0110VT: -'}</span>
-                        <span>T\u1ed3n: ${getStockValue(p)}</span>
                     </div>
                     <div class="product-description">${p.description || 'Ch\u01b0a c\u00f3 m\u00f4 t\u1ea3'}</div>
                 </div>
@@ -3333,12 +4023,11 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                 ${priceParts.priceBlock}
                 <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
                 <div class="product-sku">${p.code || 'SKU'}</div>
-                <div class="product-stock">T\u1ed3n: ${getStockValue(p)}</div>
             </div>
         `;
     }).join('');
 }
-function setSuggestionMode(mode) {
+function setSuggestionMode(mode, categoryName = '') {
     const title = document.getElementById('suggestionTitle');
     const controls = document.getElementById('suggestionControls');
 
@@ -3353,6 +4042,12 @@ function setSuggestionMode(mode) {
     if (mode === 'top') {
         controls.style.display = 'none';
         title.textContent = 'KẾT QUẢ TÌM KIẾM';
+        return;
+    }
+
+    if (mode === 'category') {
+        controls.style.display = 'flex';
+        title.textContent = `DANH MỤC: ${categoryName}`;
         return;
     }
 
