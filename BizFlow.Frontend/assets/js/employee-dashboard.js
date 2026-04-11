@@ -1737,7 +1737,26 @@ function buildPromotionIndex(promos, productList) {
     const productMap = new Map((productList || []).map((p) => [p.id, p]));
     const targetMap = new Map();
 
-    (promos || []).forEach((promo) => {
+    // Filter: exclude promotions with exhausted quota
+    const activePromos = (promos || []).filter(promo => {
+        const max = Number(promo?.maxQuantity);
+        const used = Math.max(0, Number(promo?.usedQuantity || 0));
+        
+        // If no max quantity, always active
+        if (!Number.isFinite(max) || max <= 0) {
+            return true;
+        }
+        
+        // If used >= max, promote is exhausted
+        if (used >= max) {
+            console.log(`[buildPromotionIndex] Filtering out exhausted promotion: ${promo.code} (${used}/${max})`);
+            return false;
+        }
+        
+        return true;
+    });
+
+    activePromos.forEach((promo) => {
         const targetIds = new Set();
         const targets = promo.targets || [];
         const bundles = promo.bundleItems || [];
@@ -1817,6 +1836,8 @@ function getPromoPrice(basePrice, promo, quantity = 1) {
         promoType: promo?.discountType, 
         promoCode: promo?.code,
         promoName: promo?.name,
+        maxQuantity: promo?.maxQuantity,
+        usedQuantity: promo?.usedQuantity,
         bundleItems: promo?.bundleItems,
         quantity 
     }, null, 2));
@@ -1825,21 +1846,42 @@ function getPromoPrice(basePrice, promo, quantity = 1) {
         console.log('[getPromoPrice] Invalid input - basePrice:', basePrice, 'promo:', promo);
         return NaN;
     }
-    const value = Number(promo.discountValue);
+    
     const qty = Math.max(1, Number(quantity) || 1);
+    
+    // Check quota first
+    const maxQty = Number(promo.maxQuantity);
+    const usedQty = Math.max(0, Number(promo.usedQuantity || 0));
+    let appliedQty = qty;  // Quantity that gets promotion
+    let regularQty = 0;    // Quantity that gets base price
+    
+    if (Number.isFinite(maxQty) && maxQty > 0) {
+        const remaining = Math.max(0, maxQty - usedQty);
+        appliedQty = Math.min(qty, remaining);
+        regularQty = qty - appliedQty;
+        console.log('[getPromoPrice] Quota check - max:', maxQty, 'used:', usedQty, 'remaining:', remaining, 'appliedQty:', appliedQty, 'regularQty:', regularQty);
+    }
+    
+    // If no promotion can be applied
+    if (appliedQty === 0) {
+        console.log('[getPromoPrice] No quota remaining, returning basePrice:', basePrice);
+        return basePrice;
+    }
+    
+    const value = Number(promo.discountValue);
+    let discountedUnitPrice = basePrice;  // Price per unit with discount
     
     switch (normalizeDiscountType(promo.discountType)) {
         case 'PERCENT':
             if (!Number.isFinite(value)) return NaN;
-            return Math.max(0, basePrice * (1 - value / 100));
+            discountedUnitPrice = Math.max(0, basePrice * (1 - value / 100));
+            break;
         case 'FIXED':
             if (!Number.isFinite(value)) return NaN;
-            return Math.max(0, basePrice - value);
+            discountedUnitPrice = Math.max(0, basePrice - value);
+            break;
         case 'BUNDLE':
             // Bundle logic: "Mua X tặng Y"
-            // Example: Mua 3 t?ng 1 (value = 1)
-            // - mainQuantity: 3 (s? lu?ng c?n mua)
-            // - giftQuantity: 1 (s? lu?ng du?c t?ng)
             console.log('[getPromoPrice BUNDLE] bundleItems:', promo.bundleItems);
             
             if (!promo.bundleItems || promo.bundleItems.length === 0) {
@@ -1849,32 +1891,41 @@ function getPromoPrice(basePrice, promo, quantity = 1) {
             // Get first bundle item (assume 1 bundle per promo)
             const bundle = promo.bundleItems[0];
             const mainQty = Number(bundle.mainQuantity) || 3;  // Mua 3
-            const giftQty = Number(bundle.giftQuantity) || 1;  // T?ng 1
+            const giftQty = Number(bundle.giftQuantity) || 1;  // Tặng 1
             const setSize = mainQty + giftQty;  // 1 set = 4 chai
             
-            console.log('[getPromoPrice BUNDLE] bundle config:', { mainQty, giftQty, setSize, qty });
+            console.log('[getPromoPrice BUNDLE] bundle config:', { mainQty, giftQty, setSize, appliedQty, regularQty });
             
-            // Calculate number of complete sets
-            const completeSets = Math.floor(qty / setSize);
-            const remainingQty = qty % setSize;
+            // Only calculate bundle for appliedQty
+            const completeSets = Math.floor(appliedQty / setSize);
+            const remainingAfterSets = appliedQty % setSize;
             
-            // Price = (complete sets * price of mainQty) + (remaining * full price)
-            const bundlePrice = (completeSets * mainQty * basePrice) + (remainingQty * basePrice);
-            const unitPrice = bundlePrice / qty;
+            const bundlePrice = (completeSets * mainQty * basePrice) + (remainingAfterSets * basePrice) + (regularQty * basePrice);
+            const finalUnitPrice = bundlePrice / qty;
             
             console.log('[getPromoPrice BUNDLE] calculation:', { 
                 completeSets, 
-                remainingQty, 
+                remainingAfterSets,
+                regularQty,
                 bundlePrice, 
-                unitPrice 
+                finalUnitPrice 
             });
             
-            return Math.max(0, unitPrice);  // Return unit price
+            return Math.max(0, finalUnitPrice);
         case 'FREE_GIFT':
-            return basePrice;
+            discountedUnitPrice = basePrice;
+            break;
         default:
             return NaN;
     }
+    
+    // Mixed price calculation: appliedQty with discount + regularQty at base price
+    const totalPrice = (appliedQty * discountedUnitPrice) + (regularQty * basePrice);
+    const finalUnitPrice = totalPrice / qty;
+    
+    console.log('[getPromoPrice] Final calculation - appliedQty:', appliedQty, 'regularQty:', regularQty, 'discountedUnit:', discountedUnitPrice, 'totalPrice:', totalPrice, 'finalUnit:', finalUnitPrice);
+    
+    return Math.max(0, finalUnitPrice);
 }
 
 function normalizeDiscountType(value) {
@@ -2045,16 +2096,16 @@ function updateQty(idx, change) {
     if (cart[idx] && !cart[idx].isReturnItem) {
         cart[idx].quantity = Math.max(1, cart[idx].quantity + change);
         
-        // Recalculate bundle price if this item has a bundle promotion
+        // Recalculate price if this item has any promotion (especially with quota)
         const item = cart[idx];
         if (item.promoId) {
             const promoInfo = promotionIndex.get(item.productId);
-            if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
+            if (promoInfo?.promo) {
                 // Get base price from product
                 const product = products.find(p => p.id === item.productId);
                 const basePrice = product ? Number(product.price) : item.productPrice;
-                console.log('[updateQty] Recalculating BUNDLE:', { productId: item.productId, basePrice, newQty: item.quantity });
-                // Recalculate price with new quantity
+                console.log('[updateQty] Recalculating price:', { productId: item.productId, basePrice, newQty: item.quantity, promoCode: promoInfo.promo.code, discount: normalizeDiscountType(promoInfo.promo.discountType) });
+                // Recalculate price with new quantity (works for all types including quota-limited promos)
                 item.productPrice = getPromoPrice(basePrice, promoInfo.promo, item.quantity);
             }
         }
@@ -2071,16 +2122,16 @@ function setQty(idx, value) {
         const oldQty = cart[idx].quantity;
         cart[idx].quantity = Math.max(1, qty);
         
-        // Recalculate bundle price if this item has a bundle promotion
+        // Recalculate price if this item has any promotion (especially with quota)
         const item = cart[idx];
         if (item.promoId) {
             const promoInfo = promotionIndex.get(item.productId);
-            if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
+            if (promoInfo?.promo) {
                 // Get base price from product
                 const product = products.find(p => p.id === item.productId);
                 const basePrice = product ? Number(product.price) : item.productPrice;
-                console.log('[setQty] Recalculating BUNDLE:', { productId: item.productId, basePrice, newQty: item.quantity });
-                // Recalculate price with new quantity
+                console.log('[setQty] Recalculating price:', { productId: item.productId, basePrice, newQty: item.quantity, promoCode: promoInfo.promo.code, discount: normalizeDiscountType(promoInfo.promo.discountType) });
+                // Recalculate price with new quantity (works for all types including quota-limited promos)
                 item.productPrice = getPromoPrice(basePrice, promoInfo.promo, item.quantity);
             }
         }

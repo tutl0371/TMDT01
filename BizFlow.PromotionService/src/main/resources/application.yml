@@ -47,6 +47,10 @@ logging:
     root: WARN
     com.example.bizflow: WARN
 
+# Service URLs
+services:
+  customer-service: ${CUSTOMER_SERVICE_URL:http://customer-service:8085}
+
 # Actuator configuration for monitoring
 management:
   endpoints:
