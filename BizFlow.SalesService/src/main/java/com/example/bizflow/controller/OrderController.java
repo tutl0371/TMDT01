@@ -314,7 +314,11 @@ public class OrderController {
             DiscountResult result = resolveMemberDiscount(customer, total);
             BigDecimal memberDiscount = result.discount;
             pointsUsed = result.pointsUsed;
-            total = total.subtract(memberDiscount).max(BigDecimal.ZERO);
+            total = total.subtract(memberDiscount);
+            // Only force >= 0 for normal sales
+            if (!allowNegativeQty) {
+                total = total.max(BigDecimal.ZERO);
+            }
         }
 
         order.setTotalAmount(total);
@@ -472,6 +476,18 @@ public class OrderController {
     public ResponseEntity<OrderResponse> getOrderById(@PathVariable Long id) {
         return orderRepository.findByIdWithDetails(id)
                 .map(order -> ResponseEntity.ok(toOrderResponse(order)))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/by-invoice/{invoiceNumber}")
+    public ResponseEntity<OrderResponse> getOrderByInvoiceNumber(@PathVariable String invoiceNumber) {
+        return orderRepository.findByInvoiceNumber(invoiceNumber)
+                .map(order -> {
+                    // Reload with details
+                    return orderRepository.findByIdWithDetails(order.getId())
+                            .map(full -> ResponseEntity.ok(toOrderResponse(full)))
+                            .orElseGet(() -> ResponseEntity.notFound().build());
+                })
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 

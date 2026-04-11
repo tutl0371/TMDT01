@@ -167,6 +167,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     await Promise.all([loadProductImageMap(), loadProducts()]);
     applyExchangeDraft();
+    initShippingLogic(); // New: Initialize shipping UI event listeners
 
     const customerSearchInput = document.getElementById('customerSearch');
     customerSearchInput?.addEventListener('focus', () => {
@@ -462,8 +463,12 @@ function resolveAppRoute(target) {
             return '/pages/invoice-list.html';
         case 'online-orders':
             return '/pages/online-orders.html';
-        case 'returns':
-            return '/pages/return-orders.html';
+        case 'user-returns':
+            return '/pages/user-returns.html';
+        case 'user-warranty':
+            return '/pages/user-warranties.html';
+        case 'user-shipping':
+            return '/pages/user-shipping.html';
         case 'transfers':
             return '/pages/transfer-requests.html';
         case 'topup':
@@ -492,18 +497,20 @@ function resolveAppRoute(target) {
 function checkAuth() {
     const token = sessionStorage.getItem('accessToken');
     const role = sessionStorage.getItem('role');
+    const ALLOWED_ROLES = ['ADMIN', 'OWNER', 'EMPLOYEE', 'MANAGER'];
 
-    if (!token || role !== 'EMPLOYEE') {
+    if (!token || !ALLOWED_ROLES.includes(role)) {
         window.location.href = '/pages/login.html';
     }
 }
 
 function loadUserInfo() {
     const username = sessionStorage.getItem('username');
-    const userInitial = (username ? username[0] : 'E').toUpperCase();
+    const role = sessionStorage.getItem('role');
+    const userInitial = (username ? username[0] : (role === 'OWNER' ? 'O' : 'U')).toUpperCase();
 
     document.getElementById('userInitial').textContent = userInitial;
-    document.getElementById('userNameDropdown').textContent = username || 'Nhân viên';
+    document.getElementById('userNameDropdown').textContent = username || 'Người dùng';
 }
 
 async function loadCurrentEmployee() {
@@ -981,6 +988,14 @@ async function createOrder(isPaid) {
         const data = await res.json();
         const receiptData = buildReceiptData(data, { usePoints: isPaid && shouldUseMemberPoints() });
         const invoiceCode = receiptData.invoiceNumber || '-';
+        
+        // --- SHIPPING INTEGRATION ON CHECKOUT ---
+        const shippingCheck = document.getElementById('shippingToggle');
+        if (shippingCheck && shippingCheck.checked) {
+            console.log('Shipping is enabled, creating shipment for order:', data.id);
+            await createShipmentForOrder(data.id);
+        }
+
         if (isPaid) {
             await openInvoiceModal(receiptData);
             applyLocalStockAfterSale();
@@ -994,9 +1009,210 @@ async function createOrder(isPaid) {
         }
         saveActiveInvoiceState();
         queuePersistCartState();
+
+        // New: Handle Auto-Create Shipment if delivery is checked
+        const shippingToggle = document.getElementById('shippingToggle');
+        if (shippingToggle && shippingToggle.checked) {
+            await createShipmentForOrder(data.orderId || data.id);
+        }
+
         return data;
     } catch (err) {
         showPopup('Lỗi kết nối khi tạo đơn hàng.', { type: 'error' });
+    }
+}
+
+// --- SHIPPING INTEGRATION ---
+function initShippingLogic() {
+    console.log('Initializing Shipping Logic...');
+    const shippingToggle = document.getElementById('shippingToggle');
+    const shippingGroup = document.getElementById('shippingAddressGroup');
+    const shippingFeeDisplay = document.getElementById('shippingFeeDisplay');
+    const shippingFeeInput = document.getElementById('shippingFeeInput');
+
+    if (!shippingToggle) {
+        console.warn('Shipping toggle not found');
+        return;
+    }
+
+    // 1. Attach toggle event IMMEDIATELY (Safety first)
+    shippingToggle.addEventListener('change', () => {
+        const isShipping = shippingToggle.checked;
+        console.log('Shipping toggle changed:', isShipping);
+        if (shippingGroup) {
+            shippingGroup.style.display = isShipping ? 'flex' : 'none';
+            // Force flex display if browser is stubborn
+            if (isShipping) shippingGroup.setAttribute('style', 'display: flex !important; flex-direction: column; gap: 14px; background: #fafafa; padding: 18px; border-radius: 16px; border: 1px solid #eef2f6;');
+        }
+        if (shippingFeeDisplay) shippingFeeDisplay.style.display = isShipping ? 'block' : 'none';
+        
+        if (isShipping && selectedCustomer) {
+            document.getElementById('shippingRecipient').value = selectedCustomer.name || '';
+            document.getElementById('shippingPhone').value = selectedCustomer.phone || '';
+        }
+        updateTotal();
+    });
+
+    // 2. Load administrative data in background
+    const citySelect = document.getElementById('shippingCity');
+    const districtSelect = document.getElementById('shippingDistrict');
+    const wardSelect = document.getElementById('shippingWard');
+
+    try {
+        if (cityCache && cityCache.length > 0) {
+            populateSelect(citySelect, cityCache, 'Tên Tỉnh / Thành');
+        } else {
+            loadAdministrativeItems('city', '', (data) => {
+                cityCache = data;
+                populateSelect(citySelect, cityCache, 'Tên Tỉnh / Thành');
+            });
+        }
+    } catch (e) { console.error('Error loading cities:', e); }
+
+    shippingFeeInput?.addEventListener('input', updateTotal);
+
+    // Cascading logic
+    citySelect?.addEventListener('change', () => {
+        const cityName = citySelect.value;
+        if (districtSelect) districtSelect.innerHTML = '<option value="">-- Quận / Huyện --</option>';
+        if (wardSelect) wardSelect.innerHTML = '<option value="">-- Phường / Xã --</option>';
+        if (wardSelect) wardSelect.disabled = true;
+        
+        if (cityName) {
+            loadAdministrativeItems('district', cityName, (data) => {
+                districtCache = data;
+                populateSelect(districtSelect, districtCache, 'Quận / Huyện');
+                if (districtSelect) districtSelect.disabled = false;
+            });
+        } else if (districtSelect) {
+            districtSelect.disabled = true;
+        }
+    });
+
+    districtSelect?.addEventListener('change', () => {
+        const districtName = districtSelect.value;
+        if (wardSelect) wardSelect.innerHTML = '<option value="">-- Phường / Xã --</option>';
+        
+        if (districtName) {
+            loadAdministrativeItems('ward', districtName, (data) => {
+                wardCache = data;
+                populateSelect(wardSelect, wardCache, 'Phường / Xã');
+                if (wardSelect) wardSelect.disabled = false;
+            });
+        } else if (wardSelect) {
+            wardSelect.disabled = true;
+        }
+    });
+}
+
+function populateSelect(selectEl, items, label) {
+    if (!selectEl) return;
+    selectEl.innerHTML = `<option value="">-- Chọn ${label} --</option>`;
+    items.forEach(item => {
+        const opt = document.createElement('option');
+        // Store name as a data attribute and code as value for 100% accuracy
+        opt.value = item.code || item.name;
+        opt.textContent = item.name;
+        opt.dataset.name = item.name;
+        selectEl.appendChild(opt);
+    });
+}
+
+/**
+ * Tải dữ liệu hành chính 63 tỉnh thành chuẩn xác bằng mã vùng (Code)
+ */
+async function loadAdministrativeItems(type, parentCode, callback) {
+    const PROVINCES_API = 'https://provinces.open-api.vn/api';
+    
+    const FALLBACK_CITIES = [
+        {code: 79, name: 'Hồ Chí Minh'}, {code: 1, name: 'Hà Nội'}, {code: 48, name: 'Đà Nẵng'},
+        {code: 74, name: 'Bình Dương'}, {code: 75, name: 'Đồng Nai'}, {code: 82, name: 'Tiền Giang'},
+        {code: 96, name: 'Cà Mau'}, {code: 89, name: 'An Giang'}, {code: 92, name: 'Cần Thơ'}
+    ];
+
+    try {
+        let url = '';
+        if (type === 'city') {
+            url = `${PROVINCES_API}/p/`;
+        } else if (type === 'district') {
+            url = `${PROVINCES_API}/p/${parentCode}?depth=2`;
+        } else if (type === 'ward') {
+            url = `${PROVINCES_API}/d/${parentCode}?depth=2`;
+        }
+
+        if (url) {
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            let items = [];
+            if (type === 'city') {
+                items = data.map(i => ({code: i.code, name: i.name}));
+            } else if (type === 'district' && data.districts) {
+                items = data.districts.map(i => ({code: i.code, name: i.name}));
+            } else if (type === 'ward' && data.wards) {
+                items = data.wards.map(i => ({code: i.code, name: i.name}));
+            }
+            
+            if (items.length > 0) {
+                callback(items);
+                return;
+            }
+        }
+    } catch (e) { console.error('API Error:', e); }
+
+    if (type === 'city') callback(FALLBACK_CITIES);
+}
+
+// Remove findLocationCode as it's no longer needed with the code-based approach
+
+async function createShipmentForOrder(orderId) {
+    const citySelect = document.getElementById('shippingCity');
+    const districtSelect = document.getElementById('shippingDistrict');
+    const wardSelect = document.getElementById('shippingWard');
+
+    // Lấy tên địa danh từ dataset thay vì lấy mã code
+    const city = citySelect?.options[citySelect.selectedIndex]?.dataset.name || '';
+    const district = districtSelect?.options[districtSelect.selectedIndex]?.dataset.name || '';
+    const ward = wardSelect?.options[wardSelect.selectedIndex]?.dataset.name || '';
+    const detail = document.getElementById('shippingAddress')?.value || '';
+    
+    // Combine into a full professional address string
+    const fullAddress = [detail, ward, district, city].filter(Boolean).join(', ');
+
+    const payload = {
+        orderId: orderId,
+        customerId: selectedCustomer ? selectedCustomer.id : null,
+        receiverName: document.getElementById('shippingRecipient')?.value || selectedCustomer?.name,
+        receiverPhone: document.getElementById('shippingPhone')?.value || selectedCustomer?.phone,
+        receiverAddress: fullAddress,
+        shippingFee: parseFloat(document.getElementById('shippingFeeInput')?.value) || 0,
+        note: document.getElementById('paymentNote')?.value || '',
+        createdBy: parseInt(sessionStorage.getItem('userId'))
+    };
+
+    try {
+        console.log('Sending shipment payload:', payload);
+        const res = await fetch(`${API_BASE}/shipments`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}`
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        if (res.ok) {
+            const data = await res.json();
+            console.log('Shipment created:', data);
+            showPopup('Đã tạo vận chuyển: ' + (data.shipmentNumber || 'Thành công'), { type: 'success' });
+        } else {
+            const errorText = await res.text();
+            console.error('Shipment error:', errorText);
+            showPopup('Lỗi tạo vận chuyển: ' + errorText, { type: 'error' });
+        }
+    } catch (e) { 
+        console.error('Shipment technical error:', e);
+        showPopup('Lỗi kỹ thuật: ' + e.message, { type: 'error' });
     }
 }
 
@@ -2245,7 +2461,17 @@ function updateTotal() {
     const usePoints = shouldUseMemberPoints();
     const memberDiscount = usePoints ? memberSummary.discount : 0;
     const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
-    const total = Math.max(0, discountedSubtotal - memberDiscount);
+    let total = Math.max(0, discountedSubtotal - memberDiscount);
+    
+    // New: Add Shipping Fee to total if active
+    let shippingFee = 0;
+    const shippingToggle = document.getElementById('shippingToggle');
+    if (shippingToggle && shippingToggle.checked) {
+        shippingFee = parseFloat(document.getElementById('shippingFeeInput')?.value) || 0;
+        total += shippingFee;
+        const feeDisplay = document.getElementById('shippingFeeDisplay');
+        if (feeDisplay) feeDisplay.textContent = formatPrice(shippingFee);
+    }
 
     document.getElementById('subtotal').textContent = formatPrice(baseSubtotal);
     document.getElementById('promoAmount').textContent = formatPrice(promoValue);

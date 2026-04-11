@@ -24,7 +24,7 @@ function resolveApiBase() {
 function checkAuth() {
     const token = sessionStorage.getItem('accessToken');
     const role = sessionStorage.getItem('role');
-    if (!token || role !== 'EMPLOYEE') {
+    if (!token || !['EMPLOYEE', 'OWNER'].includes(role)) {
         window.location.href = '/pages/login.html';
     }
 }

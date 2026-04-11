@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Đơn hàng của tôi - BizFlow Delivery</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --ship-primary: #ea580c;
+            --ship-bg: #f4f6f9;
+            --ship-card: #ffffff;
+            --ship-text: #1e293b;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--ship-bg);
+            color: var(--ship-text);
+            margin: 0;
+            padding: 0;
+        }
+
+        .tracking-container {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        .shopee-tabs {
+            background: white;
+            display: flex;
+            justify-content: space-around;
+            border-bottom: 2px solid #eee;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            border-radius: 8px 8px 0 0;
+        }
+
+        .tab-item {
+            padding: 15px 10px;
+            font-weight: 600;
+            color: #64748b;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+            flex: 1;
+            text-align: center;
+        }
+
+        .tab-item.active {
+            color: var(--ship-primary);
+            border-bottom-color: var(--ship-primary);
+        }
+
+        .search-section {
+            background: white;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 0 0 8px 8px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .search-input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            outline: none;
+        }
+
+        .btn-track {
+            background: var(--ship-primary);
+            color: white;
+            border: none;
+            padding: 10px 25px;
+            border-radius: 8px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .order-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            transition: transform 0.2s;
+            cursor: pointer;
+        }
+
+        .order-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .order-header {
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid #f1f5f9;
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+        }
+
+        .order-id {
+            font-weight: 800;
+            color: #334155;
+        }
+
+        .order-status {
+            font-weight: 800;
+            color: var(--ship-primary);
+            text-transform: uppercase;
+            font-size: 13px;
+        }
+
+        .order-body {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 15px;
+        }
+
+        .order-address {
+            color: #64748b;
+            font-size: 14px;
+        }
+
+        .order-price {
+            text-align: right;
+            font-weight: 800;
+            color: #ef4444;
+            font-size: 18px;
+        }
+
+        /* Detail View Modal Override */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            width: 95%;
+            max-width: 600px;
+            border-radius: 20px;
+            padding: 30px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        /* Stepper in Modal */
+        .stepper {
+            display: flex;
+            justify-content: space-between;
+            position: relative;
+            margin: 30px 0;
+        }
+
+        .stepper::before {
+            content: "";
+            position: absolute;
+            top: 20px;
+            left: 30px;
+            right: 30px;
+            height: 4px;
+            background: #f1f5f9;
+            z-index: 1;
+        }
+
+        .step { width: 18%; text-align: center; position: relative; z-index: 2; }
+        .step-icon { width: 40px; height: 40px; background: #f1f5f9; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; font-size: 16px; color: #94a3b8; }
+        .step.active .step-icon { background: var(--ship-primary); color: white; }
+        .step-label { font-size: 10px; font-weight: 800; color: #94a3b8; }
+        .tab-badge {
+            background: #ffe4e6;
+            color: var(--ship-primary);
+            font-size: 11px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            margin-left: 5px;
+            font-weight: 800;
+        }
+
+        .tab-item.active .tab-badge {
+            background: var(--ship-primary);
+            color: white;
+        }
+
+        .empty-state { text-align: center; padding: 100px 20px; color: #94a3b8; }
+        .empty-state i { font-size: 60px; margin-bottom: 20px; opacity: 0.3; }
+    </style>
+</head>
+<body>
+    <div class="tracking-container">
+        <div style="padding: 20px 0; display: flex; justify-content: space-between; align-items: center;">
+            <div id="userGreeting" style="font-size: 14px; font-weight: 600; color: var(--ship-primary);"></div>
+            <a href="employee-dashboard.html" style="text-decoration:none; color: #64748b; font-size: 14px; font-weight: 600;"><i class="fas fa-home"></i> Cửa hàng</a>
+        </div>
+        <h2 style="margin:0 0 15px 0;"><i class="fas fa-shopping-bag"></i> Đơn hàng của tôi</h2>
+
+        <div class="shopee-tabs">
+            <div class="tab-item active" onclick="switchTab('ALL')">Tất cả <span id="count-ALL" class="tab-badge">0</span></div>
+            <div class="tab-item" onclick="switchTab('PENDING')">Chờ xử lý <span id="count-PENDING" class="tab-badge">0</span></div>
+            <div class="tab-item" onclick="switchTab('DELIVERING')">Đang giao <span id="count-DELIVERING" class="tab-badge">0</span></div>
+            <div class="tab-item" onclick="switchTab('COMPLETED')">Hoàn tất <span id="count-COMPLETED" class="tab-badge">0</span></div>
+        </div>
+
+        <div class="search-section">
+            <input type="text" id="invoiceInput" class="search-input" placeholder="Tìm theo mã đơn hàng hoặc SĐT...">
+            <button onclick="searchOrders()" class="btn-track">TÌM KIẾM</button>
+        </div>
+
+        <div id="orderList">
+            <!-- Orders will be rendered here -->
+            <div class="empty-state">
+                <i class="fas fa-box-open"></i>
+                <p>Đang tải danh sách đơn hàng...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tracking Detail Modal -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="margin:0;">Chi tiết hành trình</h3>
+                <i class="fas fa-times" onclick="closeModal()" style="cursor:pointer; font-size: 20px; color: #94a3b8;"></i>
+            </div>
+            
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        function resolveApiBase() {
+            return '/api';
+        }
+        const API_BASE = resolveApiBase();
+        let allShipments = [];
+        let currentTab = 'ALL';
+
+        document.addEventListener('DOMContentLoaded', () => {
+             // Cố gắng lấy thông tin từ mọi nguồn có thể
+             const userId = sessionStorage.getItem('userId') || localStorage.getItem('userId');
+             const userName = sessionStorage.getItem('userName') || localStorage.getItem('userName') || 'Khách';
+             const userRole = (sessionStorage.getItem('userRole') || sessionStorage.getItem('role') || localStorage.getItem('userRole') || '').toUpperCase();
+             const lastSearch = localStorage.getItem('lastTrackingSearch');
+
+             console.log('--- SHIPMENT SECURITY CHECK ---');
+             console.log('Detected User:', userName, '(ID:', userId, ')');
+             console.log('Detected Role:', userRole);
+
+             const greetingEl = document.getElementById('userGreeting');
+             if (userId && userId !== 'null') {
+                 greetingEl.innerHTML = `<i class="fas fa-user-circle"></i> Đang xem: <b>${userName}</b> (${userRole})`;
+             } else {
+                 greetingEl.innerHTML = `<i class="fas fa-user-secret"></i> Chế độ: <b>Khách vãng lai</b>`;
+             }
+
+             // QUYỀN HẠN: Chỉ Sếp tổng (Owner/Admin) mới thấy hết. 
+             // Nhân viên thường (test, test1) chỉ thấy đơn trùng khớp ID của mình.
+             if (userRole === 'ADMIN' || userRole === 'OWNER') {
+                 console.log('Access Level: GLOBAL');
+                 loadAllShipments();
+             } else if (userId && userId !== 'null') {
+                 console.log('Access Level: PERSONAL ONLY');
+                 loadCustomerOrders(userId); 
+             } else if (lastSearch) {
+                 document.getElementById('invoiceInput').value = lastSearch;
+                 searchOrders(lastSearch);
+             } else {
+                 renderEmpty('Chào mừng bạn! Vui lòng đăng nhập hoặc nhập SĐT để xem đơn hàng cá nhân.');
+             }
+        });
+
+        async function loadAllShipments() {
+            try {
+                // Lấy tất cả vận đơn (Dành cho Admin/Nhân viên)
+                const res = await fetch(`${API_BASE}/shipments`, {
+                    headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
+                });
+                if (!res.ok) throw new Error();
+                allShipments = await res.json();
+                renderOrders();
+            } catch (e) {
+                renderEmpty('Không thể tải danh sách vận đơn hệ thống.');
+            }
+        }
+
+        async function loadCustomerOrders(customerId) {
+            try {
+                const res = await fetch(`${API_BASE}/shipments/customer/${customerId}`, {
+                    headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
+                });
+                if (!res.ok) throw new Error();
+                allShipments = await res.json();
+                renderOrders();
+            } catch (e) {
+                renderEmpty('Chưa có dữ liệu đơn hàng nào.');
+            }
+        }
+
+        async function searchOrders(forcedKw = null) {
+            const kw = forcedKw || document.getElementById('invoiceInput').value.trim();
+            if (!kw) return;
+            
+            const userId = sessionStorage.getItem('userId');
+            const userRole = sessionStorage.getItem('userRole') || sessionStorage.getItem('role');
+            
+            // Lưu lại cho lần sau
+            localStorage.setItem('lastTrackingSearch', kw);
+            
+            const listEl = document.getElementById('orderList');
+            listEl.innerHTML = '<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>Đang tìm kiếm...</p></div>';
+
+            try {
+                // BẢO MẬT: Nếu không phải Admin, gửi kèm userId để Server lọc đơn của chính mình
+                let url = `${API_BASE}/shipments/search?keyword=${encodeURIComponent(kw)}`;
+                if (userRole !== 'ADMIN' && userRole !== 'OWNER' && userId) {
+                    url += `&customerId=${userId}`;
+                }
+
+                console.log('Searching at:', url);
+                const res = await fetch(url, {
+                    headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
+                });
+                
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`Server báo lỗi (${res.status}): ${errText}`);
+                }
+                
+                allShipments = await res.json();
+                console.log('Search results:', allShipments);
+                
+                if (allShipments.length === 0) {
+                    renderEmpty('Không tìm thấy đơn hàng nào khớp với: ' + kw);
+                } else {
+                    renderOrders();
+                }
+            } catch (e) { 
+                console.error('Search error detail:', e);
+                renderEmpty('Lỗi: ' + e.message);
+            }
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab-item').forEach(el => el.classList.remove('active'));
+            event.target.classList.add('active');
+            renderOrders();
+        }
+
+        function renderOrders() {
+            updateTabCounts();
+            const listEl = document.getElementById('orderList');
+            const filtered = allShipments.filter(s => {
+                if (currentTab === 'ALL') return true;
+                if (currentTab === 'COMPLETED') return s.status === 'COMPLETED' || s.status === 'DELIVERED';
+                return s.status === currentTab;
+            });
+
+            if (filtered.length === 0) {
+                renderEmpty('Không tìm thấy đơn hàng nào ở mục này.');
+                return;
+            }
+
+            listEl.innerHTML = filtered.map(s => `
+                <div class="order-card" onclick="openDetail(${s.id})">
+                    <div class="order-header">
+                        <span class="order-id">Mã: ${s.invoiceNumber || s.shipmentNumber}</span>
+                        <span class="order-status">${mapStatusText(s.status)}</span>
+                    </div>
+                    <div class="order-body">
+                        <div class="order-address">
+                            <div><i class="fas fa-user-circle"></i> ${s.receiverName}</div>
+                            <div style="margin-top:5px;"><i class="fas fa-map-marker-alt"></i> ${s.receiverAddress}</div>
+                        </div>
+                        <div class="order-price">
+                            ${formatCurrency(s.shippingFee || 0)}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateTabCounts() {
+            const counts = { 'ALL': allShipments.length, 'PENDING': 0, 'DELIVERING': 0, 'COMPLETED': 0 };
+            allShipments.forEach(s => {
+                const stat = s.status;
+                if (stat === 'PENDING' || stat === 'CONFIRMED') counts['PENDING']++;
+                else if (stat === 'DELIVERING' || stat === 'IN_TRANSIT' || stat === 'PICKED_UP') counts['DELIVERING']++;
+                else if (stat === 'COMPLETED' || stat === 'DELIVERED' || stat === 'SHIPPED') counts['COMPLETED']++;
+            });
+            
+            for (const [key, val] of Object.entries(counts)) {
+                const el = document.getElementById(`count-${key}`);
+                if (el) el.textContent = val;
+            }
+        }
+
+        function renderEmpty(msg) {
+            document.getElementById('orderList').innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-box-open"></i>
+                    <p>${msg}</p>
+                </div>
+            `;
+        }
+
+        async function openDetail(id) {
+            try {
+                const res = await fetch(`${API_BASE}/shipments/${id}`);
+                const s = await res.json();
+                
+                const modalBody = document.getElementById('modalBody');
+                modalBody.innerHTML = `
+                    <div style="background: #f8fafc; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 10px 0; color: var(--ship-primary);">${s.shipmentNumber}</h4>
+                        <div style="font-size: 14px; color: #64748b;">
+                            Dự kiến giao: ${s.estimatedDelivery || 'Đang cập nhật'}
+                        </div>
+                    </div>
+
+                    <div class="stepper">
+                        ${renderSteps(s.status)}
+                    </div>
+
+                    <div style="border-top: 1px solid #eee; padding-top: 20px;">
+                        <h5 style="margin: 0 0 10px 0;">Lịch sử hành trình</h5>
+                        ${(s.trackingHistory || []).map(t => `
+                            <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+                                <div style="color: var(--ship-primary);"><i class="fas fa-dot-circle"></i></div>
+                                <div>
+                                    <div style="font-weight: 700; font-size:14px;">${mapStatusText(t.status)}</div>
+                                    <div style="font-size:12px; color: #64748b;">${new Date(t.createdAt).toLocaleString()}</div>
+                                    ${t.note ? `<div style="font-size:13px; color: #475569; margin-top:3px;">${t.note}</div>` : ''}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                document.getElementById('detailModal').style.display = 'flex';
+            } catch (e) { alert('Lỗi khi tải chi tiết'); }
+        }
+
+        function renderSteps(currentStatus) {
+            const stages = ['PENDING', 'CONFIRMED', 'DELIVERING', 'SHIPPED', 'COMPLETED'];
+            const labels = ['Chờ duyệt', 'Đã xác nhận', 'Đang giao', 'Đến nơi', 'Hoàn tất'];
+            const icons = ['receipt', 'box', 'truck', 'map-marker-alt', 'check-double'];
+            const currentIndex = stages.indexOf(currentStatus);
+            
+            return stages.map((s, idx) => `
+                <div class="step ${idx <= currentIndex ? 'active' : ''}">
+                    <div class="step-icon"><i class="fas fa-${icons[idx]}"></i></div>
+                    <div class="step-label">${labels[idx]}</div>
+                </div>
+            `).join('');
+        }
+
+        function closeModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+
+        function mapStatusText(status) {
+            const map = {
+                'PENDING': 'Chờ duyệt đơn',
+                'CONFIRMED': 'Đã xác nhận',
+                'PICKED_UP': 'Shipper đã lấy hàng',
+                'DELIVERING': 'Đang vận chuyển',
+                'IN_TRANSIT': 'Đang chuyển hàng',
+                'SHIPPED': 'Đã đến nơi',
+                'DELIVERED': 'Giao hàng thành công',
+                'COMPLETED': 'Hoàn tất đơn hàng',
+                'CANCELLED': 'Đã hủy đơn',
+                'FAILED': 'Giao hàng thất bại',
+                'RETURNING': 'Đang hoàn hàng'
+            };
+            return map[status] || status;
+        }
+
+        function formatCurrency(v) {
+            return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v).replace('₫', 'đ');
+        }
+    </script>
+</body>
+</html>

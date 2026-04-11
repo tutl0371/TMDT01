@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BizFlow - Đổi trả hàng</title>
+    <link rel="stylesheet" href="../assets/css/employee-dashboard.css">
+    <link rel="stylesheet" href="../assets/css/invoice-list.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        /* ===== USER RETURNS - CUSTOM STYLES ===== */
+        .ur-main {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 24px 16px 60px;
+        }
+
+        /* --- Policy Banner --- */
+        .ur-policy-banner {
+            background: linear-gradient(135deg, #eff6ff 0%, #f0f4ff 100%);
+            border: 1px solid #c7d2fe;
+            border-radius: 14px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+        }
+        .ur-policy-banner .policy-icon {
+            font-size: 28px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .ur-policy-banner h3 {
+            font-size: 15px;
+            color: #1e3a8a;
+            margin-bottom: 6px;
+        }
+        .ur-policy-banner p {
+            font-size: 13px;
+            color: #475569;
+            line-height: 1.5;
+            margin: 0;
+        }
+        .ur-policy-banner .policy-highlight {
+            color: #dc2626;
+            font-weight: 700;
+        }
+
+        /* --- Search Card --- */
+        .ur-search-card {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+            padding: 28px 24px;
+            text-align: center;
+            margin-bottom: 24px;
+            border: 1px solid #e8ecf4;
+        }
+        .ur-search-card h2 {
+            font-size: 22px;
+            color: #1e293b;
+            margin-bottom: 8px;
+        }
+        .ur-search-card .subtitle {
+            color: #64748b;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .ur-search-group {
+            display: flex;
+            gap: 10px;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        .ur-search-group input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 15px;
+            font-family: inherit;
+            transition: border-color 0.2s;
+            outline: none;
+        }
+        .ur-search-group input:focus {
+            border-color: #6366f1;
+        }
+        .ur-search-group input::placeholder {
+            color: #94a3b8;
+        }
+
+        /* --- Messages / Alerts --- */
+        .ur-message {
+            display: none;
+            text-align: center;
+            padding: 32px 20px;
+            border-radius: 14px;
+            margin-bottom: 20px;
+        }
+        .ur-message.show { display: block; }
+        .ur-message.error {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+        }
+        .ur-message.expired {
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            color: #92400e;
+        }
+        .ur-message .msg-icon { font-size: 36px; margin-bottom: 10px; }
+        .ur-message h3 { margin-bottom: 6px; }
+        .ur-message p { font-size: 13px; line-height: 1.5; }
+
+        /* --- Order Card --- */
+        .ur-order-card {
+            display: none;
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+            border: 1px solid #e8ecf4;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        .ur-order-card.show { display: block; }
+
+        .ur-order-header {
+            padding: 20px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .ur-order-header .order-no {
+            font-size: 18px;
+            font-weight: 700;
+            color: #6366f1;
+        }
+        .ur-order-header .order-date {
+            font-size: 13px;
+            color: #64748b;
+        }
+
+        .ur-order-meta {
+            padding: 14px 24px;
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            background: #f8fafc;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 13px;
+            color: #475569;
+        }
+        .ur-order-meta strong { color: #1e293b; }
+
+        .ur-countdown {
+            padding: 12px 24px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .ur-countdown.valid {
+            background: #f0fdf4;
+            color: #166534;
+            border-bottom: 1px solid #bbf7d0;
+        }
+        .ur-countdown.expired {
+            background: #fef2f2;
+            color: #991b1b;
+            border-bottom: 1px solid #fecaca;
+        }
+        .ur-countdown .days-left {
+            font-weight: 800;
+            font-size: 15px;
+        }
+
+        /* --- Product List --- */
+        .ur-products {
+            padding: 0;
+        }
+        .ur-products-header {
+            padding: 12px 24px;
+            font-weight: 700;
+            font-size: 13px;
+            color: #64748b;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .ur-product-row {
+            display: flex;
+            align-items: center;
+            padding: 14px 24px;
+            gap: 14px;
+            border-top: 1px solid #f1f5f9;
+            transition: background 0.15s;
+        }
+        .ur-product-row:hover { background: #fafbff; }
+        .ur-product-row input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #6366f1;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .ur-product-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .ur-product-info .name {
+            font-weight: 600;
+            color: #1e293b;
+            font-size: 14px;
+            margin-bottom: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .ur-product-info .detail {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .ur-product-qty {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .ur-product-qty label {
+            font-size: 12px;
+            color: #64748b;
+        }
+        .ur-product-qty input {
+            width: 56px;
+            padding: 6px 8px;
+            border: 1px solid #dfe3ee;
+            border-radius: 8px;
+            font-size: 13px;
+            text-align: center;
+            font-family: inherit;
+        }
+        .ur-product-qty input:disabled {
+            background: #f8fafc;
+            color: #94a3b8;
+        }
+        .ur-product-price {
+            font-weight: 700;
+            color: #6366f1;
+            font-size: 14px;
+            flex-shrink: 0;
+            width: 110px;
+            text-align: right;
+        }
+
+        /* --- Reason Form --- */
+        .ur-reason-form {
+            display: none;
+            padding: 20px 24px;
+            background: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+        }
+        .ur-reason-form.show { display: block; }
+
+        .ur-form-group {
+            margin-bottom: 16px;
+        }
+        .ur-form-group label {
+            display: block;
+            font-weight: 600;
+            font-size: 13px;
+            color: #374151;
+            margin-bottom: 6px;
+        }
+        .ur-form-group label .required { color: #ef4444; }
+        .ur-form-group select,
+        .ur-form-group textarea {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #dfe3ee;
+            border-radius: 10px;
+            font-size: 14px;
+            font-family: inherit;
+            background: #fff;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .ur-form-group select:focus,
+        .ur-form-group textarea:focus {
+            border-color: #6366f1;
+        }
+
+        /* --- Refund Summary --- */
+        .ur-refund-summary {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: #fefce8;
+            border-top: 1px solid #fde68a;
+        }
+        .ur-refund-summary .label {
+            font-size: 14px;
+            color: #92400e;
+        }
+        .ur-refund-summary .amount {
+            font-size: 22px;
+            font-weight: 800;
+            color: #dc2626;
+        }
+
+        /* --- Actions --- */
+        .ur-actions {
+            padding: 16px 24px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            border-top: 1px solid #e8ecf4;
+        }
+        .ur-btn {
+            padding: 12px 28px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            border: none;
+            font-family: inherit;
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .ur-btn:hover { transform: translateY(-1px); }
+        .ur-btn.primary {
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            color: #fff;
+            box-shadow: 0 6px 20px rgba(99,102,241,0.3);
+        }
+        .ur-btn.primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .ur-btn.ghost {
+            background: #fff;
+            color: #374151;
+            border: 1px solid #dfe3ee;
+        }
+
+        /* --- Success Screen --- */
+        .ur-success {
+            display: none;
+            text-align: center;
+            padding: 48px 24px;
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+            border: 1px solid #e8ecf4;
+        }
+        .ur-success.show { display: block; }
+        .ur-success .success-icon {
+            font-size: 56px;
+            margin-bottom: 16px;
+        }
+        .ur-success h2 {
+            color: #166534;
+            margin-bottom: 10px;
+        }
+        .ur-success p {
+            color: #64748b;
+            font-size: 14px;
+            line-height: 1.6;
+            max-width: 420px;
+            margin: 0 auto;
+        }
+        .ur-success .ref-code {
+            display: inline-block;
+            margin-top: 16px;
+            padding: 10px 20px;
+            background: #f0fdf4;
+            border: 1px solid #86efac;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 18px;
+            color: #166534;
+        }
+        .ur-success .back-btn {
+            display: inline-block;
+            margin-top: 24px;
+            padding: 12px 32px;
+            background: #6366f1;
+            color: #fff;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 700;
+        }
+
+        /* --- Responsive --- */
+        @media (max-width: 640px) {
+            .ur-search-group { flex-direction: column; }
+            .ur-order-header { flex-direction: column; gap: 8px; }
+            .ur-order-meta { flex-direction: column; gap: 8px; }
+            .ur-product-row { flex-wrap: wrap; }
+            .ur-product-price { width: 100%; text-align: left; margin-top: 4px; }
+            .ur-refund-summary { flex-direction: column; gap: 8px; text-align: center; }
+        }
+    </style>
+</head>
+<body class="pos-body">
+    <!-- ========== HEADER ========== -->
+    <header class="pos-header">
+        <div class="header-left">
+            <button class="icon-btn" type="button" id="backBtn">
+                <svg viewBox="0 0 24 24" class="icon-svg"><path d="M15 6l-6 6 6 6" /></svg>
+            </button>
+            <div class="logo-mark">BizFlow</div>
+            <span class="app-icon app-orange app-badge">ĐT</span>
+            <div class="page-title">Đổi trả hàng</div>
+        </div>
+        <div class="header-actions">
+            <div class="store">TRƯỜNG CHINH</div>
+            <div class="user-chip">
+                <span id="userInitial">U</span>
+                <span id="userName">Người dùng</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ========== MAIN CONTENT ========== -->
+    <main class="ur-main">
+
+        <!-- Policy Banner -->
+        <div class="ur-policy-banner">
+            <div class="policy-icon">🛡️</div>
+            <div>
+                <h3>Chính sách đổi trả của BizFlow</h3>
+                <p>
+                    Quý khách được <span class="policy-highlight">đổi hoặc trả hàng miễn phí trong vòng 15 ngày</span>
+                    kể từ ngày mua. Sản phẩm cần giữ nguyên tình trạng ban đầu, có hóa đơn kèm theo.
+                    Sau 15 ngày, đơn hàng sẽ không đủ điều kiện đổi trả.
+                </p>
+            </div>
+        </div>
+
+        <!-- Search -->
+        <section class="ur-search-card">
+            <h2>Yêu cầu đổi trả hàng</h2>
+            <p class="subtitle">Nhập số hóa đơn trên biên lai của bạn để bắt đầu</p>
+            <div class="ur-search-group">
+                <input type="text" id="invoiceSearch" placeholder="Ví dụ: TC-260400007" autocomplete="off">
+                <button class="primary-btn" id="searchBtn" type="button">
+                    <i class="fas fa-search"></i> Tìm hóa đơn
+                </button>
+            </div>
+        </section>
+
+        <!-- Messages -->
+        <div class="ur-message error" id="msgNotFound">
+            <div class="msg-icon">🔍</div>
+            <h3>Không tìm thấy hóa đơn</h3>
+            <p>Mã hóa đơn không tồn tại trong hệ thống. Vui lòng kiểm tra lại số trên biên nhận của bạn.</p>
+        </div>
+
+        <div class="ur-message expired" id="msgExpired">
+            <div class="msg-icon">⏰</div>
+            <h3>Đã quá hạn đổi trả</h3>
+            <p id="expiredDetail">Đơn hàng này đã mua hơn 15 ngày trước nên không đủ điều kiện đổi trả. Nếu có thắc mắc, vui lòng liên hệ cửa hàng.</p>
+        </div>
+
+        <!-- Order Detail Card -->
+        <section class="ur-order-card" id="orderCard">
+            <!-- Order info -->
+            <div class="ur-order-header">
+                <div>
+                    <div class="order-no" id="displayInvoiceNo">-</div>
+                    <div class="order-date">Ngày mua: <strong id="displayOrderDate">--/--/----</strong></div>
+                </div>
+                <span class="shipment-status" style="background:#dcfce7; color:#166534" id="displayStatus">Đã thanh toán</span>
+            </div>
+
+            <div class="ur-order-meta">
+                <div>Khách hàng: <strong id="displayCustomer">-</strong></div>
+                <div>SĐT: <strong id="displayPhone">-</strong></div>
+                <div>Tổng tiền: <strong id="displayTotal">-</strong></div>
+            </div>
+
+            <!-- Countdown -->
+            <div class="ur-countdown valid" id="countdownBar">
+                <i class="fas fa-clock"></i>
+                <span>Còn <span class="days-left" id="daysLeft">-</span> ngày để đổi trả</span>
+            </div>
+
+            <!-- Product List -->
+            <div class="ur-products">
+                <div class="ur-products-header">
+                    <input type="checkbox" id="selectAllItems" title="Chọn tất cả">
+                    <span style="flex:1">Chọn sản phẩm muốn đổi/trả</span>
+                    <span style="width:56px; text-align:center">SL trả</span>
+                    <span style="width:110px; text-align:right">Thành tiền</span>
+                </div>
+                <div id="productListBody">
+                    <!-- Product rows injected here -->
+                </div>
+            </div>
+
+            <!-- Reason Form -->
+            <div class="ur-reason-form" id="reasonForm">
+                <div class="ur-form-group">
+                    <label>Lý do đổi trả <span class="required">*</span></label>
+                    <select id="returnReason">
+                        <option value="">-- Chọn lý do --</option>
+                        <option value="DEFECTIVE">Sản phẩm bị lỗi / hư hỏng</option>
+                        <option value="WRONG_ITEM">Giao nhầm sản phẩm</option>
+                        <option value="NOT_AS_DESCRIBED">Sản phẩm không đúng mô tả</option>
+                        <option value="CHANGED_MIND">Đổi ý / Không còn nhu cầu</option>
+                        <option value="QUALITY_ISSUE">Chất lượng không đạt</option>
+                        <option value="SIZE_FIT">Sai kích cỡ / Không vừa</option>
+                    </select>
+                </div>
+                <div class="ur-form-group">
+                    <label>Ghi chú bổ sung</label>
+                    <textarea id="returnNote" rows="3" placeholder="Mô tả chi tiết tình trạng sản phẩm, lý do cụ thể..."></textarea>
+                </div>
+            </div>
+
+            <!-- Refund Summary -->
+            <div class="ur-refund-summary" id="refundSummary" style="display:none">
+                <div class="label">💰 Số tiền hoàn lại dự kiến:</div>
+                <div class="amount" id="refundAmount">0đ</div>
+            </div>
+
+            <!-- Actions -->
+            <div class="ur-actions" id="actionBar">
+                <button class="ur-btn ghost" type="button" id="cancelBtn">Hủy bỏ</button>
+                <div style="display: flex; gap: 12px;">
+                    <button class="ur-btn primary" type="button" id="exchangeBtn" style="background: linear-gradient(135deg, #0ea5e9, #2563eb); box-shadow: 0 6px 20px rgba(37,99,235,0.3);" disabled>
+                         <i class="fas fa-exchange-alt"></i> Đổi sản phẩm
+                    </button>
+                    <button class="ur-btn primary" type="button" id="submitBtn" disabled>
+                        <i class="fas fa-paper-plane"></i> Gửi yêu cầu trả hàng
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Success Screen -->
+        <section class="ur-success" id="successScreen">
+            <div class="success-icon">🎉</div>
+            <h2>Yêu cầu đã được gửi thành công!</h2>
+            <p>
+                Chúng tôi đã tiếp nhận yêu cầu đổi trả hàng của bạn.
+                Nhân viên cửa hàng sẽ xem xét và liên hệ lại qua số điện thoại trên hóa đơn trong vòng 24 giờ.
+            </p>
+            <div class="ref-code" id="successRefCode">-</div>
+            <br>
+            <a href="/pages/employee-dashboard.html" class="back-btn">← Quay về trang chính</a>
+        </section>
+
+    </main>
+
+    <!-- ========== SCRIPTS ========== -->
+    <script src="../assets/js/app-shell-v2.js"></script>
+    <script>
+    (function() {
+        'use strict';
+
+        // ===== CONFIG =====
+        const RETURN_DEADLINE_DAYS = 15;
+        const API_BASE = resolveApiBase();
+        let currentOrder = null;
+
+        function resolveApiBase() {
+            const configured = window.API_BASE_URL || window.API_BASE;
+            if (configured) return configured.replace(/\/$/, '');
+            if (window.location.protocol === 'file:') return 'http://localhost:8000/api';
+            if (['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port !== '8080') return '/api';
+            return `${window.location.origin}/api`;
+        }
+
+        function getAuthHeaders() {
+            return {
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`,
+                'Content-Type': 'application/json'
+            };
+        }
+
+        function formatPrice(price) {
+            return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', minimumFractionDigits: 0 })
+                .format(price || 0).replace('₫', 'đ');
+        }
+
+        function formatDate(value) {
+            if (!value) return '--/--/----';
+            const d = new Date(value);
+            if (isNaN(d.getTime())) return '--/--/----';
+            return d.toLocaleDateString('vi-VN');
+        }
+
+        // ===== AUTH & INIT =====
+        function init() {
+            const token = sessionStorage.getItem('accessToken');
+            if (!token) {
+                window.location.href = '/pages/login.html';
+                return;
+            }
+
+            // User info
+            const username = sessionStorage.getItem('username');
+            const role = sessionStorage.getItem('role');
+            document.getElementById('userInitial').textContent = (username ? username[0] : 'U').toUpperCase();
+            document.getElementById('userName').textContent = username || 'Người dùng';
+
+            // Back button
+            document.getElementById('backBtn').onclick = () => {
+                window.location.href = (role === 'OWNER') ? '/pages/owner-dashboard.html' : '/pages/employee-dashboard.html';
+            };
+
+            // Events
+            document.getElementById('searchBtn').onclick = searchOrder;
+            document.getElementById('invoiceSearch').onkeydown = (e) => { if (e.key === 'Enter') searchOrder(); };
+            document.getElementById('selectAllItems').onchange = toggleSelectAll;
+            document.getElementById('cancelBtn').onclick = resetView;
+            document.getElementById('submitBtn').onclick = submitReturn;
+            document.getElementById('exchangeBtn').onclick = startExchange;
+        }
+
+        // ===== SEARCH ORDER =====
+        async function searchOrder() {
+            const keyword = document.getElementById('invoiceSearch').value.trim();
+            if (!keyword) {
+                alert('Vui lòng nhập số hóa đơn');
+                return;
+            }
+
+            hideAll();
+
+            try {
+                // Try invoice number first, fallback to order ID
+                let res;
+                if (/^\d+$/.test(keyword)) {
+                    res = await fetch(`${API_BASE}/orders/${keyword}`, { headers: getAuthHeaders() });
+                } else {
+                    res = await fetch(`${API_BASE}/orders/by-invoice/${encodeURIComponent(keyword)}`, { headers: getAuthHeaders() });
+                }
+
+                if (!res.ok) {
+                    showMessage('msgNotFound');
+                    return;
+                }
+
+                currentOrder = await res.json();
+
+                // Check if it's a paid order
+                if (currentOrder.status && currentOrder.status !== 'PAID') {
+                    showMessage('msgNotFound');
+                    return;
+                }
+
+                // Check 15-day deadline
+                const orderDate = new Date(currentOrder.orderDate || currentOrder.createdAt);
+                const now = new Date();
+                const diffDays = Math.floor((now - orderDate) / (1000 * 60 * 60 * 24));
+                const daysRemaining = RETURN_DEADLINE_DAYS - diffDays;
+
+                if (daysRemaining <= 0) {
+                    document.getElementById('expiredDetail').textContent =
+                        `Đơn hàng ${currentOrder.invoiceNumber} được mua ngày ${formatDate(orderDate)} (${Math.abs(daysRemaining) + RETURN_DEADLINE_DAYS} ngày trước). ` +
+                        `Thời hạn đổi trả ${RETURN_DEADLINE_DAYS} ngày đã hết. Nếu cần hỗ trợ, vui lòng liên hệ cửa hàng.`;
+                    showMessage('msgExpired');
+                    return;
+                }
+
+                // Render order
+                renderOrder(daysRemaining);
+
+            } catch (err) {
+                console.error(err);
+                alert('Lỗi kết nối khi tìm hóa đơn');
+            }
+        }
+
+        // ===== RENDER ORDER =====
+        function renderOrder(daysRemaining) {
+            const card = document.getElementById('orderCard');
+
+            // Header
+            document.getElementById('displayInvoiceNo').textContent = currentOrder.invoiceNumber || '-';
+            document.getElementById('displayOrderDate').textContent = formatDate(currentOrder.orderDate || currentOrder.createdAt);
+            document.getElementById('displayCustomer').textContent = currentOrder.customerName || 'Khách lẻ';
+            document.getElementById('displayPhone').textContent = currentOrder.customerPhone || '-';
+            document.getElementById('displayTotal').textContent = formatPrice(currentOrder.totalAmount);
+
+            // Countdown bar
+            const countdown = document.getElementById('countdownBar');
+            const daysEl = document.getElementById('daysLeft');
+            daysEl.textContent = daysRemaining;
+            if (daysRemaining <= 3) {
+                countdown.className = 'ur-countdown expired';
+                daysEl.parentElement.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Chỉ còn <span class="days-left">${daysRemaining}</span> ngày để đổi trả — Hãy gửi yêu cầu sớm!`;
+            } else {
+                countdown.className = 'ur-countdown valid';
+            }
+
+            // Products
+            const body = document.getElementById('productListBody');
+            body.innerHTML = '';
+            (currentOrder.items || []).forEach(item => {
+                const unitPrice = item.price || item.unitPrice || 0;
+                const qty = item.quantity || 0;
+                const lineTotal = unitPrice * qty;
+
+                body.innerHTML += `
+                    <div class="ur-product-row" data-item-id="${item.id}" data-product-id="${item.productId}" data-max-qty="${qty}" data-unit-price="${unitPrice}">
+                        <input type="checkbox" class="item-check" onchange="window._urUpdateRefund()">
+                        <div class="ur-product-info">
+                            <div class="name">${item.productName || '-'}</div>
+                            <div class="detail">${item.unit || 'cái'} · Mua ${qty} · ${formatPrice(unitPrice)}/sp</div>
+                        </div>
+                        <div class="ur-product-qty">
+                            <input type="number" class="qty-return" min="1" max="${qty}" value="${qty}" disabled onchange="window._urUpdateRefund()">
+                        </div>
+                        <div class="ur-product-price">${formatPrice(lineTotal)}</div>
+                    </div>
+                `;
+            });
+
+            // Show card
+            card.classList.add('show');
+            document.getElementById('reasonForm').classList.add('show');
+        }
+
+        // ===== SELECT ALL =====
+        function toggleSelectAll() {
+            const checked = document.getElementById('selectAllItems').checked;
+            document.querySelectorAll('.item-check').forEach(cb => {
+                cb.checked = checked;
+                const row = cb.closest('.ur-product-row');
+                const qtyInput = row.querySelector('.qty-return');
+                qtyInput.disabled = !checked;
+                if (checked) qtyInput.value = row.dataset.maxQty;
+            });
+            updateRefund();
+        }
+
+        // ===== UPDATE REFUND =====
+        function updateRefund() {
+            let total = 0;
+            let hasSelected = false;
+            document.querySelectorAll('.ur-product-row').forEach(row => {
+                const cb = row.querySelector('.item-check');
+                const qtyInput = row.querySelector('.qty-return');
+                const priceEl = row.querySelector('.ur-product-price');
+                if (cb.checked) {
+                    hasSelected = true;
+                    qtyInput.disabled = false;
+                    let qty = parseInt(qtyInput.value) || 0;
+                    const maxQty = parseInt(row.dataset.maxQty) || 0;
+                    if (qty > maxQty) { qty = maxQty; qtyInput.value = maxQty; }
+                    if (qty < 1) { qty = 1; qtyInput.value = 1; }
+                    const unitPrice = parseFloat(row.dataset.unitPrice) || 0;
+                    const lineTotal = unitPrice * qty;
+                    total += lineTotal;
+                    priceEl.textContent = formatPrice(lineTotal);
+                } else {
+                    qtyInput.disabled = true;
+                    const unitPrice = parseFloat(row.dataset.unitPrice) || 0;
+                    const maxQty = parseInt(row.dataset.maxQty) || 0;
+                    priceEl.textContent = formatPrice(unitPrice * maxQty);
+                }
+            });
+
+            const summary = document.getElementById('refundSummary');
+            const submitBtn = document.getElementById('submitBtn');
+            const exchangeBtn = document.getElementById('exchangeBtn');
+            if (hasSelected) {
+                summary.style.display = 'flex';
+                document.getElementById('refundAmount').textContent = formatPrice(total);
+                submitBtn.disabled = false;
+                exchangeBtn.disabled = false;
+            } else {
+                summary.style.display = 'none';
+                submitBtn.disabled = true;
+                exchangeBtn.disabled = true;
+            }
+        }
+        // Expose for inline onchange
+        window._urUpdateRefund = updateRefund;
+
+        // ===== SUBMIT =====
+        async function submitReturn() {
+            // Validate selection
+            const selectedRows = [];
+            document.querySelectorAll('.ur-product-row').forEach(row => {
+                const cb = row.querySelector('.item-check');
+                if (!cb.checked) return;
+                const qty = parseInt(row.querySelector('.qty-return').value) || 0;
+                if (qty <= 0) return;
+                selectedRows.push({
+                    productId: parseInt(row.dataset.productId),
+                    quantity: qty
+                });
+            });
+
+            if (selectedRows.length === 0) {
+                alert('Vui lòng chọn ít nhất 1 sản phẩm');
+                return;
+            }
+
+            const reason = document.getElementById('returnReason').value;
+            if (!reason) {
+                alert('Vui lòng chọn lý do đổi trả');
+                return;
+            }
+
+            const note = document.getElementById('returnNote').value.trim();
+
+            // Build payload
+            const payload = {
+                userId: parseInt(sessionStorage.getItem('userId'), 10) || null,
+                customerId: currentOrder.customerId || null,
+                paid: true,
+                paymentMethod: 'CASH',
+                orderType: 'RETURN',
+                originalOrderId: currentOrder.id,
+                refundMethod: 'CASH',
+                returnReason: reason,
+                returnNote: note,
+                items: selectedRows
+            };
+
+            try {
+                document.getElementById('submitBtn').disabled = true;
+                document.getElementById('submitBtn').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Đang gửi...';
+
+                const res = await fetch(`${API_BASE}/orders`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    const msg = await res.text();
+                    alert(msg || 'Không thể gửi yêu cầu đổi trả');
+                    document.getElementById('submitBtn').disabled = false;
+                    document.getElementById('submitBtn').innerHTML = '<i class="fas fa-paper-plane"></i> Gửi yêu cầu đổi trả';
+                    return;
+                }
+
+                const data = await res.json();
+
+                // Show success
+                hideAll();
+                document.getElementById('successRefCode').textContent = data.invoiceNumber || 'Đã gửi';
+                document.getElementById('successScreen').classList.add('show');
+
+            } catch (err) {
+                console.error(err);
+                alert('Lỗi kết nối khi gửi yêu cầu');
+                document.getElementById('submitBtn').disabled = false;
+                document.getElementById('submitBtn').innerHTML = '<i class="fas fa-paper-plane"></i> Gửi yêu cầu trả hàng';
+            }
+        }
+
+        // ===== EXCHANGE LOGIC (REDIRECT TO CART) =====
+        function startExchange() {
+            const selectedItems = [];
+            document.querySelectorAll('.ur-product-row').forEach(row => {
+                const cb = row.querySelector('.item-check');
+                if (!cb.checked) return;
+                const qty = parseInt(row.querySelector('.qty-return').value) || 0;
+                if (qty <= 0) return;
+                
+                const productId = parseInt(row.dataset.productId);
+                const originalItem = (currentOrder.items || []).find(i => i.productId === productId);
+                
+                selectedItems.push({
+                    productId: productId,
+                    productName: originalItem?.productName || '-',
+                    productCode: originalItem?.productCode || 'N/A',
+                    unit: originalItem?.unit || 'cái',
+                    price: parseFloat(row.dataset.unitPrice),
+                    quantity: qty
+                });
+            });
+
+            if (selectedItems.length === 0) {
+                alert('Vui lòng chọn sản phẩm cần đổi');
+                return;
+            }
+
+            const draft = {
+                originalOrderId: currentOrder.id,
+                customerId: currentOrder.customerId || null,
+                customerName: currentOrder.customerName || '',
+                customerPhone: currentOrder.customerPhone || '',
+                items: selectedItems
+            };
+
+            // Save to draft and redirect to dashboard (POS)
+            sessionStorage.setItem('exchangeDraft', JSON.stringify(draft));
+            window.location.href = '/pages/employee-dashboard.html';
+        }
+
+        // ===== HELPERS =====
+        function hideAll() {
+            document.getElementById('msgNotFound').classList.remove('show');
+            document.getElementById('msgExpired').classList.remove('show');
+            document.getElementById('orderCard').classList.remove('show');
+            document.getElementById('successScreen').classList.remove('show');
+        }
+
+        function showMessage(id) {
+            document.getElementById(id).classList.add('show');
+        }
+
+        function resetView() {
+            hideAll();
+            currentOrder = null;
+            document.getElementById('invoiceSearch').value = '';
+            document.getElementById('returnReason').value = '';
+            document.getElementById('returnNote').value = '';
+            document.getElementById('selectAllItems').checked = false;
+        }
+
+        // ===== START =====
+        document.addEventListener('DOMContentLoaded', init);
+    })();
+    </script>
+</body>
+</html>

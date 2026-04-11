@@ -3,16 +3,38 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BizFlow POS - Bán hàng</title>
-    <link rel="stylesheet" href="../assets/css/employee-dashboard.css">
+    <title>BizFlow - Người dùng</title>
+    <link rel="stylesheet" href="../assets/css/employee-dashboard.css?v=1.1">
     <link rel="stylesheet" href="../assets/css/combo-promotion-ai.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 70px);
+            overflow: hidden;
+        }
+        .payment-panel {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .cart-actions {
+            margin-top: auto;
+            padding-top: 10px;
+            background: #fff;
+            z-index: 10;
+        }
+    </style>
 </head>
 <body class="pos-body">
     <header class="pos-header">
         <div class="header-left">
             <div class="logo-mark" aria-label="BizFlow">
-                BizFlow POS
+                BIZFLOW USER
             </div>
             <span class="app-icon app-blue app-badge">BH</span>
             <div class="order-tabs" id="orderTabs">
@@ -38,8 +60,8 @@
                 </svg>
             </button>
             <div class="user-chip" id="userBtn">
-                <span id="userInitial">E</span>
-                <span id="userNameDropdown">Nhân viên</span>
+                <span id="userInitial">U</span>
+                <span id="userNameDropdown">Người dùng</span>
             </div>
             <button id="logoutBtn" class="icon-btn" title="Đăng xuất" aria-label="Đăng xuất">
                 <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
@@ -315,6 +337,53 @@
                 <div class="payment-note">
                     <label for="paymentNote">Ghi ch&#250; thanh to&#225;n</label>
                     <textarea id="paymentNote" rows="3" placeholder="Nh&#7853;p ghi ch&#250;..."></textarea>
+                </div>
+
+                <!-- Shipping Section (Professional Version) -->
+                <div class="shipping-section" style="margin-bottom: 20px; border-top: 2px solid #f1f5f9; padding-top: 20px;">
+                    <div class="summary-row" style="margin-bottom: 12px;">
+                        <label class="checkbox" style="font-weight: 800; color: #ea580c; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 15px;">
+                            <input type="checkbox" id="shippingToggle" style="width:20px; height:20px; accent-color: #ea580c;">
+                            <span><i class="fas fa-shipping-fast"></i> GIAO HÀNG TẬN NƠI</span>
+                        </label>
+                        <span id="shippingFeeDisplay" style="display:none; font-weight:800; color: #ea580c; font-size: 16px;">0đ</span>
+                    </div>
+
+                    <div id="shippingAddressGroup" style="display:none; flex-direction: column; gap: 14px; background: #fafafa; padding: 18px; border-radius: 16px; border: 1px solid #eef2f6;">
+                        <div class="form-group-custom">
+                            <label style="display:block; font-size: 12px; font-weight: 700; color: #64748b; margin-bottom: 6px; text-transform: uppercase;">Người nhận & SĐT</label>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                <input id="shippingRecipient" type="text" placeholder="Tên người nhận" style="width:100%; padding:12px; border:1px solid #e2e8f0; border-radius:12px; font-size: 14px;">
+                                <input id="shippingPhone" type="text" placeholder="Số điện thoại" style="width:100%; padding:12px; border:1px solid #e2e8f0; border-radius:12px; font-size: 14px;">
+                            </div>
+                        </div>
+
+                        <div class="form-group-custom">
+                            <label style="display:block; font-size: 12px; font-weight: 700; color: #64748b; margin-bottom: 6px; text-transform: uppercase;">Địa chỉ vận chuyển</label>
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <select id="shippingCity" style="width:100%; padding:12px; border:1px solid #e2e8f0; border-radius:12px; font-size: 14px; background: #fff; outline:none; cursor:pointer;">
+                                    <option value="">-- Chọn Tỉnh / Thành phố --</option>
+                                </select>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                    <select id="shippingDistrict" disabled style="width:100%; padding:12px; border:1px solid #e2e8f0; border-radius:12px; font-size: 14px; background: #fff; outline:none; cursor:pointer;">
+                                        <option value="">-- Quận / Huyện --</option>
+                                    </select>
+                                    <select id="shippingWard" disabled style="width:100%; padding:12px; border:1px solid #e2e8f0; border-radius:12px; font-size: 14px; background: #fff; outline:none; cursor:pointer;">
+                                        <option value="">-- Phường / Xã --</option>
+                                    </select>
+                                </div>
+                                <input id="shippingAddress" type="text" placeholder="Số nhà, tên đường..." style="width:100%; padding:12px; border:1px solid #e2e8f0; border-radius:12px; font-size: 14px;">
+                            </div>
+                        </div>
+
+                        <div class="summary-row" style="background: #fff7ed; padding: 12px; border-radius: 12px; border: 1px solid #ffedd5; margin-top: 6px;">
+                            <span style="font-size: 14px; font-weight: 700; color: #9a3412;">Phí vận chuyển:</span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <input id="shippingFeeInput" type="number" value="30000" step="5000" style="width: 100px; text-align: right; padding:8px; border:1px solid #fdba74; border-radius:10px; font-weight: 800; color: #ea580c; font-size: 15px;">
+                                <span style="font-size: 14px; color: #ea580c; font-weight: 800;">đ</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="quick-cash">
@@ -812,13 +881,25 @@
                     <span class="app-icon app-blue">BH</span>
                     <span>Bán hàng</span>
                 </button>
+                <button class="app-tile" data-app="promotions">
+                    <span class="app-icon app-green">KM</span>
+                    <span>Khuyến mãi</span>
+                </button>
                 <button class="app-tile" data-app="invoices">
                     <span class="app-icon app-pink">HD</span>
                     <span>DS hóa đơn</span>
                 </button>
-                <button class="app-tile" data-app="returns">
+                <button class="app-tile" data-app="user-returns">
                     <span class="app-icon app-orange">ĐR</span>
-                    <span>Đổi trả hàng</span>
+                    <span>Trả hàng / Hoàn tiền</span>
+                </button>
+                <button class="app-tile" data-app="user-warranty">
+                    <span class="app-icon app-purple">BH</span>
+                    <span>Tra cứu bảo hành</span>
+                </button>
+                <button class="app-tile" data-app="user-shipping">
+                    <span class="app-icon app-orange">VC</span>
+                    <span>Theo dõi đơn hàng</span>
                 </button>
                 <button class="app-tile" data-app="print">
                     <span class="app-icon app-orange">IN</span>
@@ -912,7 +993,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="../assets/js/combo-promotion-ai.js?v=1.0.0" onerror="console.error('Failed to load combo-promotion-ai.js')"></script>
-    <script src="../assets/js/employee-dashboard.js?v=stock-3"></script>
-    <script src="../assets/js/app-shell.js"></script>
+    <script src="../assets/js/employee-dashboard.js?v=1.3"></script>
+    <script src="../assets/js/app-shell-v2.js"></script>
 </body>
 </html>

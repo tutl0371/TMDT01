@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BizFlow - Quản lý Vận chuyển</title>
+    <link rel="stylesheet" href="../assets/css/employee-dashboard.css">
+    <link rel="stylesheet" href="../assets/css/invoice-list.css">
+    <link rel="stylesheet" href="../assets/css/owner-shipping.css">
+</head>
+<body class="pos-body">
+    <header class="pos-header">
+        <div class="header-left">
+            <button class="icon-btn" type="button" id="backBtn">
+                <svg viewBox="0 0 24 24" class="icon-svg"><path d="M15 6l-6 6 6 6" /></svg>
+            </button>
+            <script>
+                document.getElementById('backBtn').onclick = () => {
+                    const role = sessionStorage.getItem('role');
+                    window.location.href = (role === 'OWNER') ? '/pages/owner-dashboard.html' : '/pages/employee-dashboard.html';
+                };
+            </script>
+            <div class="logo-mark">BizFlow POS</div>
+            <span class="app-icon app-badge" style="background:#f59e0b">VC</span>
+            <div class="page-title">Vận chuyển</div>
+        </div>
+        <div class="header-actions">
+            <div class="store">TRƯỜNG CHINH</div>
+            <div class="user-chip">
+                <span id="userInitial">O</span>
+                <span id="userName">Owner</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="shipping-page">
+        <!-- Stats Cards (Shopee style) -->
+        <section class="shipping-stats" id="adminStats">
+            <div class="stat-card stat-pending">
+                <div class="stat-icon">📦</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statPending">0</span>
+                    <span class="stat-label">Chờ xác nhận</span>
+                </div>
+            </div>
+            <div class="stat-card stat-picked">
+                <div class="stat-icon">🚚</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statInTransit">0</span>
+                    <span class="stat-label">Đang giao</span>
+                </div>
+            </div>
+            <div class="stat-card stat-delivered">
+                <div class="stat-icon">✅</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statDelivered">0</span>
+                    <span class="stat-label">Đã giao</span>
+                </div>
+            </div>
+            <div class="stat-card stat-failed">
+                <div class="stat-icon">⚠️</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statFailed">0</span>
+                    <span class="stat-label">Thất bại</span>
+                </div>
+            </div>
+        </section>
+        <script>
+            if (sessionStorage.getItem('role') !== 'OWNER') {
+                document.getElementById('adminStats').style.display = 'none';
+            }
+        </script>
+
+        <!-- Tabs -->
+        <section class="shipping-tabs" id="adminTabs">
+            <button class="tab-btn active" data-tab="list">📋 Danh sách đơn</button>
+            <button class="tab-btn" data-tab="create">➕ Tạo đơn vận chuyển</button>
+        </section>
+        <script>
+            if (sessionStorage.getItem('role') !== 'OWNER') {
+                document.getElementById('adminTabs').style.display = 'none';
+                document.querySelector('.shipping-page').style.paddingTop = '20px';
+            }
+        </script>
+
+        <!-- Tab: Shipment List -->
+        <section class="tab-content active" id="tabList">
+            <div class="filter-bar">
+                <select id="shipStatusFilter">
+                    <option value="">Tất cả trạng thái</option>
+                    <option value="PENDING">Chờ xác nhận</option>
+                    <option value="CONFIRMED">Đã xác nhận</option>
+                    <option value="PICKED_UP">Đã lấy hàng</option>
+                    <option value="IN_TRANSIT">Đang giao</option>
+                    <option value="DELIVERED">Đã giao</option>
+                    <option value="FAILED">Thất bại</option>
+                    <option value="CANCELLED">Đã hủy</option>
+                </select>
+                <input type="text" id="shipSearchInput" placeholder="Mã đơn, SĐT, mã vận đơn...">
+                <button class="primary-btn" id="shipSearchBtn">Tìm kiếm</button>
+            </div>
+            <div class="shipments-table">
+                <div class="table-header">
+                    <span>Mã vận đơn</span>
+                    <span>Hóa đơn</span>
+                    <span>Người nhận</span>
+                    <span>SĐT</span>
+                    <span>Phương thức</span>
+                    <span>Trạng thái</span>
+                    <span>Thao tác</span>
+                </div>
+                <div id="shipmentsListBody"></div>
+                <div id="shipmentsEmpty" class="empty-state">Chưa có đơn vận chuyển nào</div>
+            </div>
+        </section>
+
+        <!-- Tab: Create Shipment -->
+        <section class="tab-content" id="tabCreate">
+            <div class="create-form">
+                <h3>Tạo đơn vận chuyển mới</h3>
+                <p class="form-desc">Gắn đơn vận chuyển với đơn hàng đã thanh toán</p>
+                <div class="form-group">
+                    <label>Mã đơn hàng *</label>
+                    <div class="search-group">
+                        <input type="text" id="shipOrderId" placeholder="Nhập mã đơn hàng...">
+                        <button class="primary-btn" id="searchOrderForShip">Tìm đơn</button>
+                    </div>
+                </div>
+                <div id="shipOrderInfo" class="order-info-box" style="display:none"></div>
+                <div id="shipFormFields" style="display:none">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Tên người nhận *</label>
+                            <input type="text" id="shipReceiverName" placeholder="Nguyễn Văn A">
+                        </div>
+                        <div class="form-group">
+                            <label>SĐT người nhận *</label>
+                            <input type="tel" id="shipReceiverPhone" placeholder="0901234567" maxlength="10" pattern="[0-9]*">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Địa chỉ giao hàng *</label>
+                        <textarea id="shipReceiverAddress" rows="2" placeholder="123 Đường ABC, Quận 1, TP.HCM"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Đơn vị vận chuyển</label>
+                            <select id="shipMethod">
+                                <option value="STORE_DELIVERY">🏪 Cửa hàng tự giao</option>
+                                <option value="GHN">🚀 Giao Hàng Nhanh</option>
+                                <option value="GHTK">📦 Giao Hàng Tiết Kiệm</option>
+                                <option value="VIETTEL_POST">📮 Viettel Post</option>
+                                <option value="SELF_PICKUP">🙋 Nhận tại cửa hàng</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Phí vận chuyển (đ)</label>
+                            <input type="number" id="shipFee" value="0" min="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Ghi chú</label>
+                        <textarea id="shipNote" rows="2" placeholder="Ghi chú cho shipper..."></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button class="ghost-btn" id="resetShipForm">Hủy</button>
+                        <button class="primary-btn" id="submitShipForm">🚚 Tạo đơn vận chuyển</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Shipment Detail Modal (Shopee-style tracking) -->
+    <div class="modal" id="shipDetailModal" aria-hidden="true">
+        <div class="modal-content ship-detail-modal">
+            <div class="modal-header">
+                <h3>Chi tiết đơn vận chuyển</h3>
+                <button id="closeShipDetail" class="icon-btn small" type="button">×</button>
+            </div>
+            <div class="ship-detail-body">
+                <div class="ship-status-banner" id="shipStatusBanner"></div>
+                <div class="ship-info-grid" id="shipInfoGrid"></div>
+                <h4 class="tracking-title">📍 Lịch sử vận chuyển</h4>
+                <div class="tracking-timeline" id="trackingTimeline"></div>
+            </div>
+            <div class="modal-actions" id="shipActions"></div>
+        </div>
+    </div>
+
+    <script>
+        const username = sessionStorage.getItem('username');
+        const userInitial = (username ? username[0] : 'O').toUpperCase();
+        document.getElementById('userInitial').textContent = userInitial;
+        document.getElementById('userName').textContent = username || 'Owner';
+    </script>
+    <script src="../assets/js/owner-shipping.js"></script>
+    <script src="../assets/js/app-shell-v2.js"></script>
+</body>
+</html>

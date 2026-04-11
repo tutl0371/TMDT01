@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BizFlow - Quản lý Bảo hành</title>
+    <link rel="stylesheet" href="../assets/css/employee-dashboard.css">
+    <link rel="stylesheet" href="../assets/css/invoice-list.css">
+    <link rel="stylesheet" href="../assets/css/owner-warranties.css">
+</head>
+<body class="pos-body">
+    <header class="pos-header">
+        <div class="header-left">
+            <button class="icon-btn" type="button" id="backBtn">
+                <svg viewBox="0 0 24 24" class="icon-svg"><path d="M15 6l-6 6 6 6" /></svg>
+            </button>
+            <script>
+                document.getElementById('backBtn').onclick = () => {
+                    const role = sessionStorage.getItem('role');
+                    window.location.href = (role === 'OWNER') ? '/pages/owner-dashboard.html' : '/pages/employee-dashboard.html';
+                };
+            </script>
+            <div class="logo-mark">BizFlow POS</div>
+            <span class="app-icon app-badge" style="background:#8b5cf6">BH</span>
+            <div class="page-title">Bảo hành</div>
+        </div>
+        <div class="header-actions">
+            <div class="store">TRƯỜNG CHINH</div>
+            <div class="user-chip">
+                <span id="userInitial">O</span>
+                <span id="userName">Owner</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="warranty-page">
+        <!-- Stats Cards -->
+        <section class="warranty-stats" id="adminStats">
+            <div class="stat-card stat-pending">
+                <div class="stat-icon">⏳</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statPending">0</span>
+                    <span class="stat-label">Chờ xử lý</span>
+                </div>
+            </div>
+            <div class="stat-card stat-processing">
+                <div class="stat-icon">🔧</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statProcessing">0</span>
+                    <span class="stat-label">Đang sửa chữa</span>
+                </div>
+            </div>
+            <div class="stat-card stat-completed">
+                <div class="stat-icon">✅</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statCompleted">0</span>
+                    <span class="stat-label">Hoàn tất</span>
+                </div>
+            </div>
+            <div class="stat-card stat-rejected">
+                <div class="stat-icon">❌</div>
+                <div class="stat-info">
+                    <span class="stat-value" id="statRejected">0</span>
+                    <span class="stat-label">Từ chối</span>
+                </div>
+            </div>
+        </section>
+        <script>
+            if (sessionStorage.getItem('role') !== 'OWNER') {
+                document.getElementById('adminStats').style.display = 'none';
+            }
+        </script>
+
+        <!-- Tabs -->
+        <section class="warranty-tabs" id="adminTabs">
+            <button class="tab-btn active" data-tab="claims">📋 Phiếu bảo hành</button>
+            <button class="tab-btn" data-tab="policies">⚙️ Chính sách BH</button>
+            <button class="tab-btn" data-tab="create">➕ Tạo phiếu BH</button>
+        </section>
+        <script>
+            if (sessionStorage.getItem('role') !== 'OWNER') {
+                document.getElementById('adminTabs').style.display = 'none';
+                document.querySelector('.warranty-page').style.paddingTop = '20px';
+            }
+        </script>
+
+        <!-- Tab: Claims List -->
+        <section class="tab-content active" id="tabClaims">
+            <div class="filter-bar">
+                <select id="claimStatusFilter">
+                    <option value="">Tất cả trạng thái</option>
+                    <option value="PENDING">Chờ xử lý</option>
+                    <option value="RECEIVED">Đã tiếp nhận</option>
+                    <option value="PROCESSING">Đang sửa chữa</option>
+                    <option value="COMPLETED">Hoàn tất</option>
+                    <option value="REJECTED">Từ chối</option>
+                </select>
+                <input type="text" id="claimSearchInput" placeholder="Tìm theo mã phiếu, SĐT khách...">
+                <button class="primary-btn" id="claimSearchBtn">Tìm kiếm</button>
+            </div>
+            <div class="claims-table">
+                <div class="table-header">
+                    <span>Mã phiếu</span>
+                    <span>Hóa đơn</span>
+                    <span>Sản phẩm</span>
+                    <span>Khách hàng</span>
+                    <span>Ngày tạo</span>
+                    <span>Trạng thái</span>
+                    <span>Thao tác</span>
+                </div>
+                <div id="claimsListBody"></div>
+                <div id="claimsEmpty" class="empty-state">Chưa có phiếu bảo hành nào</div>
+            </div>
+        </section>
+
+        <!-- Tab: Policies -->
+        <section class="tab-content" id="tabPolicies">
+            <div class="policies-header">
+                <h3>Chính sách bảo hành</h3>
+                <button class="primary-btn" id="addPolicyBtn">+ Thêm chính sách</button>
+            </div>
+            <div class="policies-grid" id="policiesGrid"></div>
+            <div id="policiesEmpty" class="empty-state">Chưa có chính sách bảo hành nào</div>
+        </section>
+
+        <!-- Tab: Create Claim -->
+        <section class="tab-content" id="tabCreate">
+            <div class="create-form">
+                <h3>Tạo phiếu bảo hành mới</h3>
+                <p class="form-desc">Nhập thông tin hóa đơn gốc để tạo phiếu bảo hành</p>
+                <div class="form-group">
+                    <label>Mã đơn hàng / Số hóa đơn *</label>
+                    <div class="search-group">
+                        <input type="text" id="warrantyOrderSearch" placeholder="Nhập mã đơn hàng...">
+                        <button class="primary-btn" id="searchOrderForWarranty">Tìm đơn</button>
+                    </div>
+                </div>
+                <div id="warrantyOrderInfo" class="order-info-box" style="display:none"></div>
+                <div class="form-group" id="warrantyProductGroup" style="display:none">
+                    <label>Chọn sản phẩm cần bảo hành *</label>
+                    <div id="warrantyProductList" class="product-select-list"></div>
+                </div>
+                <div class="form-group" id="warrantyPolicyGroup" style="display:none">
+                    <label>Chính sách bảo hành</label>
+                    <select id="warrantyPolicySelect"><option value="">-- Chọn chính sách --</option></select>
+                </div>
+                <div class="form-group" id="warrantyIssueGroup" style="display:none">
+                    <label>Mô tả lỗi / vấn đề *</label>
+                    <textarea id="warrantyIssueDesc" rows="4" placeholder="Mô tả chi tiết lỗi sản phẩm..."></textarea>
+                </div>
+                <div class="form-actions" id="warrantyFormActions" style="display:none">
+                    <button class="ghost-btn" id="resetWarrantyForm">Hủy</button>
+                    <button class="primary-btn" id="submitWarrantyForm">Tạo phiếu bảo hành</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Claim Detail Modal -->
+    <div class="modal" id="claimDetailModal" aria-hidden="true">
+        <div class="modal-content claim-detail-modal">
+            <div class="modal-header">
+                <h3>Chi tiết phiếu bảo hành</h3>
+                <button id="closeClaimDetail" class="icon-btn small" type="button">×</button>
+            </div>
+            <div class="claim-detail-body">
+                <div class="claim-timeline" id="claimTimeline"></div>
+                <div class="claim-info-grid" id="claimInfoGrid"></div>
+            </div>
+            <div class="modal-actions" id="claimActions"></div>
+        </div>
+    </div>
+
+    <!-- Policy Form Modal -->
+    <div class="modal" id="policyFormModal" aria-hidden="true">
+        <div class="modal-content policy-form-modal">
+            <div class="modal-header">
+                <h3 id="policyFormTitle">Thêm chính sách bảo hành</h3>
+                <button id="closePolicyForm" class="icon-btn small" type="button">×</button>
+            </div>
+            <div class="policy-form-body">
+                <div class="form-group">
+                    <label>Tên chính sách *</label>
+                    <input type="text" id="policyName" placeholder="VD: Bảo hành 12 tháng điện tử">
+                </div>
+                <div class="form-group">
+                    <label>Thời hạn (tháng) *</label>
+                    <input type="number" id="policyDuration" min="1" value="12">
+                </div>
+                <div class="form-group">
+                    <label>Mô tả</label>
+                    <textarea id="policyDescription" rows="3" placeholder="Mô tả chi tiết chính sách..."></textarea>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="ghost-btn" id="cancelPolicyForm">Hủy</button>
+                <button class="primary-btn" id="savePolicyForm">Lưu</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const username = sessionStorage.getItem('username');
+        const userInitial = (username ? username[0] : 'O').toUpperCase();
+        document.getElementById('userInitial').textContent = userInitial;
+        document.getElementById('userName').textContent = username || 'Owner';
+    </script>
+    <script src="../assets/js/owner-warranties.js"></script>
+    <script src="../assets/js/app-shell-v2.js"></script>
+</body>
+</html>

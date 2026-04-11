@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BizFlow POS - Đổi trả hàng</title>
+    <title>BizFlow - Trả hàng / Hoàn tiền</title>
     <link rel="stylesheet" href="../assets/css/employee-dashboard.css">
     <link rel="stylesheet" href="../assets/css/invoice-list.css">
     <link rel="stylesheet" href="../assets/css/return-orders.css">
@@ -11,14 +11,20 @@
 <body class="pos-body">
     <header class="pos-header">
         <div class="header-left">
-            <button class="icon-btn" type="button" aria-label="Quay lại" onclick="window.location.href='/pages/employee-dashboard.html'">
+            <button class="icon-btn" type="button" aria-label="Quay lại" id="backBtn">
                 <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
                     <path d="M15 6l-6 6 6 6" />
                 </svg>
             </button>
-            <div class="logo-mark" aria-label="BizFlow">BizFlow POS</div>
+            <script>
+                document.getElementById('backBtn').onclick = () => {
+                    const role = sessionStorage.getItem('role');
+                    window.location.href = (role === 'OWNER') ? '/pages/owner-dashboard.html' : '/pages/employee-dashboard.html';
+                };
+            </script>
+            <div class="logo-mark" aria-label="BizFlow">BizFlow User</div>
             <span class="app-icon app-orange app-badge">ĐR</span>
-            <div class="page-title">Đổi trả hàng</div>
+            <div class="page-title">Trả hàng / Hoàn tiền</div>
         </div>
         <div class="header-actions">
             <div class="store">TRƯỜNG CHINH</div>
@@ -26,14 +32,20 @@
                 <span id="userInitial">E</span>
                 <span id="userName">Nhân viên</span>
             </div>
+            <script>
+                const role = sessionStorage.getItem('role');
+                const username = sessionStorage.getItem('username');
+                document.getElementById('userInitial').textContent = (username ? username[0] : (role === 'OWNER' ? 'O' : 'U')).toUpperCase();
+                document.getElementById('userName').textContent = username || (role === 'OWNER' ? 'Owner' : 'Người dùng');
+            </script>
         </div>
     </header>
 
     <main class="invoice-page return-page">
         <section class="invoice-toolbar">
             <div class="toolbar-title">
-                <h2>Đổi / Trả hàng</h2>
-                <p>Tìm hóa đơn đã thanh toán để đổi hoặc trả</p>
+                <span>Trả hàng / Hoàn tiền</span>
+                <p>Tìm hóa đơn của bạn để yêu cầu đổi hoặc trả</p>
             </div>
         </section>
 
@@ -156,13 +168,7 @@
 
 
 
-    <script>
-        const username = sessionStorage.getItem('username');
-        const userInitial = (username ? username[0] : 'E').toUpperCase();
-        document.getElementById('userInitial').textContent = userInitial;
-        document.getElementById('userName').textContent = username || 'Nhân viên';
-    </script>
     <script src="../assets/js/return-orders.js"></script>
-    <script src="../assets/js/app-shell.js"></script>
+    <script src="../assets/js/app-shell-v2.js"></script>
 </body>
 </html>

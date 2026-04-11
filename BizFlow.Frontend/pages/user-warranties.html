@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BizFlow - Tra cứu bảo hành</title>
+    <link rel="stylesheet" href="../assets/css/employee-dashboard.css">
+    <link rel="stylesheet" href="../assets/css/invoice-list.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .uw-main {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 30px 16px 60px;
+        }
+
+        /* --- Welcome Header --- */
+        .uw-welcome {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .uw-welcome h1 {
+            font-size: 28px;
+            color: #1e293b;
+            margin-bottom: 8px;
+            font-weight: 800;
+        }
+        .uw-welcome p {
+            color: #64748b;
+            font-size: 15px;
+        }
+
+        /* --- Search Group --- */
+        .uw-search-container {
+            background: #fff;
+            border-radius: 20px;
+            padding: 32px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            margin-bottom: 32px;
+            border: 1px solid #f1f5f9;
+        }
+        .uw-search-box {
+            display: flex;
+            gap: 12px;
+            max-width: 540px;
+            margin: 0 auto;
+        }
+        .uw-search-box input {
+            flex: 1;
+            padding: 14px 20px;
+            border: 2px solid #e2e8f0;
+            border-radius: 14px;
+            font-size: 16px;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.2s;
+        }
+        .uw-search-box input:focus {
+            border-color: #8b5cf6;
+            box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.1);
+        }
+        .uw-search-box .search-btn {
+            background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+            color: #fff;
+            border: none;
+            padding: 0 28px;
+            border-radius: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .uw-search-box .search-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        }
+
+        /* --- Info Cards --- */
+        .uw-order-info {
+            display: none;
+            background: linear-gradient(135deg, #1e293b, #334155);
+            color: #fff;
+            padding: 24px;
+            border-radius: 20px;
+            margin-bottom: 24px;
+            display: none;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .uw-order-info.show { display: flex; }
+        .uw-order-info .info-left h2 {
+            font-size: 20px;
+            margin-bottom: 4px;
+            color: #f8fafc;
+        }
+        .uw-order-info .info-left p {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        .uw-order-info .info-right {
+            text-align: right;
+        }
+        .uw-order-info .customer-name {
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        /* --- Product Grid --- */
+        .uw-product-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .uw-card {
+            background: #fff;
+            border-radius: 20px;
+            border: 1px solid #f1f5f9;
+            padding: 24px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+        }
+        .uw-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0,0,0,0.06);
+        }
+        .uw-card .product-header {
+            margin-bottom: 16px;
+        }
+        .uw-card .product-name {
+            font-weight: 800;
+            font-size: 16px;
+            color: #1e293b;
+            margin-bottom: 4px;
+            display: block;
+        }
+        .uw-card .product-sku {
+            font-size: 12px;
+            color: #94a3b8;
+            background: #f1f5f9;
+            padding: 2px 8px;
+            border-radius: 6px;
+            display: inline-block;
+        }
+
+        /* --- Status Bar --- */
+        .uw-status-badge {
+            padding: 6px 14px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 16px;
+        }
+        .uw-status-badge.valid { background: #dcfce7; color: #166534; }
+        .uw-status-badge.warning { background: #fef9c3; color: #854d0e; }
+        .uw-status-badge.expired { background: #fee2e2; color: #991b1b; }
+
+        .uw-timeline {
+            border-top: 1px dashed #e2e8f0;
+            padding-top: 16px;
+            margin-top: auto;
+        }
+        .uw-timeline-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 6px;
+        }
+        .uw-timeline-row .label { color: #64748b; }
+        .uw-timeline-row .date { font-weight: 600; color: #334155; }
+
+        .uw-claim-btn {
+            margin-top: 16px;
+            width: 100%;
+            padding: 10px;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            color: #6366f1;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .uw-claim-btn:hover {
+            background: #f5f3ff;
+            border-color: #8b5cf6;
+            color: #7c3aed;
+        }
+        .uw-claim-btn:disabled {
+            background: #f8fafc;
+            color: #cbd5e1;
+            cursor: not-allowed;
+            border-color: #f1f5f9;
+        }
+
+        /* --- Claim Modal --- */
+        .uw-modal-body {
+            padding: 20px;
+        }
+        .uw-field {
+            margin-bottom: 16px;
+        }
+        .uw-field label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 6px;
+        }
+        .uw-field textarea {
+            width: 100%;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 12px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+        }
+        .uw-field textarea:focus { border-color: #8b5cf6; }
+
+        /* --- Empty State --- */
+        #emptyState, #msgNotFound {
+            display: none;
+            text-align: center;
+            padding: 60px 20px;
+        }
+        .empty-icon { font-size: 64px; margin-bottom: 16px; opacity: 0.5; }
+        
+        /* Responsive */
+        @media (max-width: 640px) {
+            .uw-order-info { flex-direction: column; text-align: center; gap: 16px; }
+            .uw-order-info .info-right { text-align: center; }
+            .uw-search-box { flex-direction: column; }
+            .uw-search-box .search-btn { padding: 14px; }
+        }
+    </style>
+</head>
+<body class="pos-body">
+    <!-- ========== HEADER ========== -->
+    <header class="pos-header">
+        <div class="header-left">
+            <button class="icon-btn" type="button" id="backBtn">
+                <svg viewBox="0 0 24 24" class="icon-svg"><path d="M15 6l-6 6 6 6" /></svg>
+            </button>
+            <div class="logo-mark">BizFlow</div>
+            <span class="app-icon app-purple app-badge">BH</span>
+            <div class="page-title">Tra cứu bảo hành</div>
+        </div>
+        <div class="header-actions">
+            <div class="store">TRƯỜNG CHINH</div>
+            <div class="user-chip">
+                <span id="userInitial">U</span>
+                <span id="userName">Người dùng</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="uw-main">
+        <div class="uw-welcome">
+            <h1>Trung tâm bảo hành BizFlow</h1>
+            <p>Nhập số hóa đơn để kiểm tra thời hạn và tình trạng bảo hành của sản phẩm</p>
+        </div>
+
+        <section class="uw-search-container">
+            <div class="uw-search-box">
+                <input type="text" id="invoiceInput" placeholder="VD: TC-260400007" autocomplete="off">
+                <button class="search-btn" id="searchBtn">
+                    <i class="fas fa-search"></i> Kiểm tra ngay
+                </button>
+            </div>
+        </section>
+
+        <div id="msgNotFound">
+            <div class="empty-icon">🔍</div>
+            <h3>Không tìm thấy hóa đơn</h3>
+            <p>Vui lòng kiểm tra lại mã số trên biên nhận của bạn.</p>
+        </div>
+
+        <section class="uw-order-info" id="orderInfo">
+            <div class="info-left">
+                <h2 id="displayInvoice">-</h2>
+                <p>Ngày mua: <span id="displayDate">-</span></p>
+            </div>
+            <div class="info-right">
+                <div class="customer-name" id="displayCustomer">-</div>
+                <p id="displayPhone">-</p>
+            </div>
+        </section>
+
+        <section class="uw-product-grid" id="productGrid">
+            <!-- Cards injected here -->
+        </section>
+
+        <div id="emptyState" style="display: block;">
+            <div class="empty-icon">🛡️</div>
+            <h3>Sẵn sàng bảo vệ quyền lợi của bạn</h3>
+            <p>Tra cứu nhanh chóng, minh bạch và tận tâm.</p>
+        </div>
+    </main>
+
+    <!-- Claim Modal -->
+    <div class="modal" id="claimModal" aria-hidden="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Yêu cầu bảo hành</h3>
+                <button class="icon-btn small" type="button" onclick="closeModal('claimModal')">×</button>
+            </div>
+            <div class="uw-modal-body">
+                <div class="uw-field">
+                    <label>Sản phẩm</label>
+                    <strong id="claimProductName">-</strong>
+                </div>
+                <div class="uw-field">
+                    <label>Mô tả tình trạng lỗi / hư hỏng <span style="color:red">*</span></label>
+                    <textarea id="claimDescription" rows="4" placeholder="Hãy mô tả chi tiết vấn đề bạn đang gặp phải..."></textarea>
+                </div>
+                <p style="font-size:12px; color:#64748b">
+                    <i class="fas fa-info-circle"></i> Yêu cầu sẽ được chuyển đến bộ phận kỹ thuật để xem xét.
+                </p>
+            </div>
+            <div class="modal-actions">
+                <button class="ghost-btn" onclick="closeModal('claimModal')">Hủy bỏ</button>
+                <button class="primary-btn" id="confirmClaimBtn" style="background:#8b5cf6">Gửi yêu cầu</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="../assets/js/app-shell-v2.js"></script>
+    <script>
+        (function() {
+            'use strict';
+            const API_BASE = resolveApiBase();
+            let currentOrder = null;
+            let activeClaimProduct = null;
+
+            function resolveApiBase() {
+                if (window.location.protocol === 'file:') return 'http://localhost:8000/api';
+                const api = window.API_BASE_URL || window.API_BASE || '/api';
+                return api.replace(/\/$/, '');
+            }
+
+            function formatPrice(p) {
+                return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(p || 0);
+            }
+
+            function formatDate(v) {
+                if (!v) return '-';
+                const d = new Date(v);
+                return d.toLocaleDateString('vi-VN');
+            }
+
+            function init() {
+                const username = sessionStorage.getItem('username');
+                const role = sessionStorage.getItem('role');
+                document.getElementById('userInitial').textContent = (username ? username[0] : 'U').toUpperCase();
+                document.getElementById('userName').textContent = username || 'Người dùng';
+
+                document.getElementById('backBtn').onclick = () => {
+                    window.location.href = (role === 'OWNER') ? '/pages/owner-dashboard.html' : '/pages/employee-dashboard.html';
+                };
+
+                document.getElementById('searchBtn').onclick = searchOrder;
+                document.getElementById('invoiceInput').onkeydown = (e) => { if(e.key === 'Enter') searchOrder(); };
+                document.getElementById('confirmClaimBtn').onclick = submitClaim;
+            }
+
+            async function searchOrder() {
+                const invoice = document.getElementById('invoiceInput').value.trim();
+                if (!invoice) return;
+
+                // Reset
+                document.getElementById('emptyState').style.display = 'none';
+                document.getElementById('msgNotFound').style.display = 'none';
+                document.getElementById('orderInfo').classList.remove('show');
+                document.getElementById('productGrid').innerHTML = '';
+
+                try {
+                    const res = await fetch(`${API_BASE}/orders/by-invoice/${encodeURIComponent(invoice)}`, {
+                        headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
+                    });
+
+                    if (!res.ok) {
+                        document.getElementById('msgNotFound').style.display = 'block';
+                        return;
+                    }
+
+                    currentOrder = await res.json();
+                    renderResult();
+                } catch (err) {
+                    console.error(err);
+                    alert('Lỗi khi kết nối đến máy chủ');
+                }
+            }
+
+            function renderResult() {
+                document.getElementById('orderInfo').classList.add('show');
+                document.getElementById('displayInvoice').textContent = currentOrder.invoiceNumber;
+                document.getElementById('displayDate').textContent = formatDate(currentOrder.orderDate || currentOrder.createdAt);
+                document.getElementById('displayCustomer').textContent = currentOrder.customerName || 'Khách lẻ';
+                document.getElementById('displayPhone').textContent = currentOrder.customerPhone || '-';
+
+                const grid = document.getElementById('productGrid');
+                const purchaseDate = new Date(currentOrder.orderDate || currentOrder.createdAt);
+                const now = new Date();
+
+                (currentOrder.items || []).forEach(item => {
+                    // Logic: Warranty is 12 months from purchase date by default
+                    // In real app, we would fetch poly from backend, but here 12m is standard
+                    const warrantyEnd = new Date(purchaseDate);
+                    warrantyEnd.setMonth(warrantyEnd.getMonth() + 12);
+
+                    const isExpired = now > warrantyEnd;
+                    const diffMonths = (warrantyEnd - now) / (1000 * 60 * 60 * 24 * 30);
+                    const isWarning = !isExpired && diffMonths < 1;
+
+                    let statusClass = 'valid';
+                    let statusIcon = 'fa-check-circle';
+                    let statusText = 'Đang bảo hành';
+
+                    if (isExpired) {
+                        statusClass = 'expired';
+                        statusIcon = 'fa-times-circle';
+                        statusText = 'Đã hết hạn';
+                    } else if (isWarning) {
+                        statusClass = 'warning';
+                        statusIcon = 'fa-exclamation-circle';
+                        statusText = 'Sắp hết hạn';
+                    }
+
+                    const card = document.createElement('div');
+                    card.className = 'uw-card';
+                    card.innerHTML = `
+                        <div class="product-header">
+                            <span class="product-name">${item.productName}</span>
+                            <span class="product-sku">${item.productCode || 'N/A'}</span>
+                        </div>
+                        <div class="uw-status-badge ${statusClass}">
+                            <i class="fas ${statusIcon}"></i> ${statusText}
+                        </div>
+                        <div class="uw-timeline">
+                            <div class="uw-timeline-row">
+                                <span class="label">Bắt đầu:</span>
+                                <span class="date">${formatDate(purchaseDate)}</span>
+                            </div>
+                            <div class="uw-timeline-row">
+                                <span class="label">Hết hạn:</span>
+                                <span class="date">${formatDate(warrantyEnd)}</span>
+                            </div>
+                        </div>
+                        <button class="uw-claim-btn" ${isExpired ? 'disabled' : ''} onclick="window.requestClaim(${item.productId}, '${item.productName.replace(/'/g, "\\'")}')">
+                            <i class="fas fa-headset"></i> Gửi yêu cầu hỗ trợ
+                        </button>
+                    `;
+                    grid.appendChild(card);
+                });
+            }
+
+            window.requestClaim = (pId, pName) => {
+                activeClaimProduct = { id: pId, name: pName };
+                document.getElementById('claimProductName').textContent = pName;
+                document.getElementById('claimDescription').value = '';
+                openModal('claimModal');
+            };
+
+            async function submitClaim() {
+                const desc = document.getElementById('claimDescription').value.trim();
+                if (!desc) {
+                    alert('Vui lòng mô tả vấn đề gặp phải');
+                    return;
+                }
+
+                const btn = document.getElementById('confirmClaimBtn');
+                btn.disabled = true;
+                btn.textContent = 'Đang gửi...';
+
+                try {
+                    const payload = {
+                        orderId: currentOrder.id,
+                        productId: activeClaimProduct.id,
+                        customerId: currentOrder.customerId,
+                        issueDescription: desc,
+                        status: 'PENDING',
+                        createdBy: parseInt(sessionStorage.getItem('userId'))
+                    };
+
+                    const res = await fetch(`${API_BASE}/warranties/claims`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}`
+                        },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        alert(`Yêu cầu bảo hành đã được gửi thành công! Mã yêu cầu: ${data.claimNumber}`);
+                        closeModal('claimModal');
+                    } else {
+                        const msg = await res.text();
+                        alert('Lỗi: ' + msg);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert('Lỗi kết nối');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Gửi yêu cầu';
+                }
+            }
+
+            window.closeModal = (id) => {
+                const m = document.getElementById(id);
+                m.classList.remove('show');
+                m.setAttribute('aria-hidden', 'true');
+            };
+            function openModal(id) {
+                const m = document.getElementById(id);
+                m.classList.add('show');
+                m.setAttribute('aria-hidden', 'false');
+            }
+
+            document.addEventListener('DOMContentLoaded', init);
+        })();
+    </script>
+</body>
+</html>
