@@ -1395,6 +1395,29 @@ function renderSupportMessages(messages) {
     box.scrollTop = box.scrollHeight;
 }
 
+async function markSupportMessagesAsRead() {
+    const currentUserId = Number(sessionStorage.getItem('userId'));
+    const ownerId = getValidSupportOwnerId();
+    if (!Number.isFinite(currentUserId) || !ownerId) return;
+
+    try {
+        const token = sessionStorage.getItem('accessToken') || '';
+        await fetch(`${API_BASE}/messages/mark-as-read`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                senderId: ownerId,
+                receiverId: currentUserId
+            })
+        });
+    } catch (error) {
+        console.error('Error marking messages as read:', error);
+    }
+}
+
 async function loadSupportMessages() {
     const currentUserId = Number(sessionStorage.getItem('userId'));
     const ownerId = getValidSupportOwnerId();
@@ -1407,20 +1430,14 @@ async function loadSupportMessages() {
     if (!res.ok) return;
 
     const data = await res.json();
+    
+    // Mark all messages as read FIRST
+    await markSupportMessagesAsRead();
+    
+    // Then render and update badge
     renderSupportMessages(data || []);
-
-    // Count unread messages from owner
-    const unreadCount = (data || []).filter(m => !m.isRead && Number(m.senderId) === ownerId).length;
-    
-    // Update unread badge
-    updateSupportUnreadBadge(unreadCount);
-    
-    // Show notification if new unread messages arrived
-    if (unreadCount > 0 && unreadCount > lastMessageCount) {
-        showToastNotification('Chăm sóc khách hàng đã gửi tin nhắn', 'info');
-    }
-    
-    lastMessageCount = unreadCount;
+    updateSupportUnreadBadge(0);
+    lastMessageCount = 0;
 }
 
 async function sendSupportMessage() {
@@ -1506,7 +1523,6 @@ function updateSupportUnreadBadge(count) {
             font-weight: 700;
             z-index: 999;
         `;
-        btn.style.position = 'relative';
         btn.appendChild(badge);
     }
 }
@@ -1557,6 +1573,10 @@ async function openSupportModal() {
         return;
     }
 
+    // Reset badge immediately
+    updateSupportUnreadBadge(0);
+    lastMessageCount = 0;
+
     if (meta) {
         meta.textContent = 'Đang chat với: Chăm sóc khách hàng';
     }
@@ -1580,6 +1600,13 @@ function closeSupportModal() {
     modal.classList.remove('show');
     modal.setAttribute('aria-hidden', 'true');
     clearSupportPolling();
+    
+    // Mark as read one more time before closing to be sure
+    markSupportMessagesAsRead().then(() => {
+        // Reset badge after marking
+        updateSupportUnreadBadge(0);
+        lastMessageCount = 0;
+    });
 }
 
 function setupContactSupport() {
@@ -1603,6 +1630,17 @@ function setupContactSupport() {
             closeSupportModal();
         }
     });
+
+    // Mark all old messages as read on page load to avoid showing old unread count
+    const userId = Number(sessionStorage.getItem('userId'));
+    if (Number.isFinite(userId)) {
+        resolveOwnerContact().then(() => {
+            const ownerId = getValidSupportOwnerId();
+            if (ownerId) {
+                markSupportMessagesAsRead().catch(() => {});
+            }
+        }).catch(() => {});
+    }
 }
 
 function startGlobalUnreadPolling() {
@@ -1641,20 +1679,19 @@ function startGlobalUnreadPolling() {
                 
                 if (res.ok) {
                     const data = await res.json();
-                    const unreadCount = (data || []).filter(m => !m.isRead && Number(m.senderId) === ownerId).length;
+                    const unreadCount = (data || []).filter(m => m.isRead !== true && Number(m.senderId) === ownerId).length;
                     
-                    // Update badge even when modal is closed
-                    updateSupportUnreadBadge(unreadCount);
-                    
-                    // Show notification for new messages only if modal is closed
+                    // Only update badge when modal is CLOSED
                     const modalEl = document.getElementById('contactSupportModal');
                     if (modalEl && !modalEl.classList.contains('show')) {
-                        if (unreadCount > lastMessageCount && unreadCount > 0) {
+                        // Show badge với số tin nhắn chưa đọc
+                        updateSupportUnreadBadge(unreadCount);
+                        
+                        // Show notification for new messages
+                        if (unreadCount > 0 && unreadCount > lastMessageCount) {
                             showToastNotification('Chăm sóc khách hàng đã gửi tin nhắn', 'info');
                         }
-                    }
-                    
-                    if (unreadCount !== lastMessageCount) {
+                        
                         lastMessageCount = unreadCount;
                     }
                 }

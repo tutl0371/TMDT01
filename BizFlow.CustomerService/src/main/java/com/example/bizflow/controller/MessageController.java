@@ -64,15 +64,31 @@ public class MessageController {
                     ? safeName(message.getReceiverName())
                     : safeName(message.getSenderName());
 
+            long unreadCount = messageRepository.countUnreadMessages(userId, ownerId);
+
             ConversationResponse item = new ConversationResponse();
             item.userId = userId;
             item.userName = userName;
             item.lastMessage = message.getContent();
             item.lastMessageAt = message.getCreatedAt();
+            item.unreadCount = unreadCount;
             result.add(item);
         }
 
         return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/messages/mark-as-read")
+    public ResponseEntity<?> markMessagesAsRead(@RequestBody MarkAsReadRequest request) {
+        if (request == null || request.senderId == null || request.receiverId == null) {
+            return ResponseEntity.badRequest().body("senderId and receiverId are required");
+        }
+
+        int updated = messageRepository.markMessagesAsRead(request.senderId, request.receiverId);
+        return ResponseEntity.ok(new Object() {
+            public final int updated_count = updated;
+            public final String status = "success";
+        });
     }
 
     private String safeName(String value) {
@@ -98,6 +114,7 @@ public class MessageController {
         public String receiverName;
         public String content;
         public LocalDateTime createdAt;
+        public Boolean isRead;
 
         public MessageResponse(Message message) {
             this.id = message.getId();
@@ -107,6 +124,7 @@ public class MessageController {
             this.receiverName = message.getReceiverName();
             this.content = message.getContent();
             this.createdAt = message.getCreatedAt();
+            this.isRead = message.getIsRead();
         }
     }
 
@@ -115,5 +133,11 @@ public class MessageController {
         public String userName;
         public String lastMessage;
         public LocalDateTime lastMessageAt;
+        public long unreadCount;
+    }
+
+    public static class MarkAsReadRequest {
+        public Long senderId;
+        public Long receiverId;
     }
 }

@@ -232,10 +232,29 @@
     background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
     box-shadow: 0 10px 24px rgba(37, 99, 235, 0.35);
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .contact-support-btn:hover {
     transform: translateY(-1px);
+}
+
+#contactSupportModal {
+    position: fixed !important;
+    inset: auto !important;
+    bottom: 20px !important;
+    right: 18px !important;
+    background: transparent !important;
+    padding: 0 !important;
+    z-index: 111 !important;
+    align-items: flex-end !important;
+    justify-content: flex-end !important;
+}
+
+#contactSupportModal.show {
+    display: flex !important;
 }
 
 .contact-support-modal {
@@ -243,6 +262,8 @@
     max-height: 80vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    border-radius: 12px;
 }
 
 .contact-support-body {
@@ -250,6 +271,8 @@
     flex-direction: column;
     gap: 10px;
     min-height: 360px;
+    max-height: calc(80vh - 120px);
+    overflow: hidden;
 }
 
 .contact-support-meta {
