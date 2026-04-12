@@ -6,7 +6,16 @@ import com.example.bizflow.integration.SalesClient;
 import org.springframework.http.ResponseEntity;
 import org.springframework.lang.NonNull;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
+import javax.servlet.http.HttpServletRequest;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.security.Keys;
+import java.nio.charset.StandardCharsets;
+import org.springframework.http.HttpStatus;
 
 import java.util.List;
 import java.time.LocalDate;
@@ -18,6 +27,8 @@ public class CustomerController {
 
     private final CustomerRepository customerRepository;
     private final SalesClient salesClient;
+    @Value("${app.jwt.secret:my-secret-key-for-jwt-token-generation-and-verification}")
+    private String jwtSecret;
 
     public CustomerController(CustomerRepository customerRepository,
             SalesClient salesClient) {
@@ -83,6 +94,44 @@ public class CustomerController {
     @PreAuthorize("hasAnyRole('EMPLOYEE', 'OWNER', 'ADMIN')")
     public ResponseEntity<Object> getCustomerOrderHistory(@PathVariable @NonNull Long id) {
         return ResponseEntity.ok(salesClient.getCustomerOrderHistory(id));
+    }
+
+    @GetMapping("/by-user/{userId}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<?> getCustomerByUserId(@PathVariable @NonNull Long userId, HttpServletRequest request) {
+        try {
+            // If the caller is a CUSTOMER role, allow only when the requested userId matches the JWT's userId.
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            boolean isCustomer = auth != null && auth.getAuthorities().stream()
+                    .anyMatch(a -> "ROLE_CUSTOMER".equalsIgnoreCase(a.getAuthority()));
+            if (isCustomer) {
+                String authHeader = request.getHeader("Authorization");
+                if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Forbidden");
+                }
+                String token = authHeader.substring(7);
+                try {
+                    Claims claims = Jwts.parserBuilder()
+                            .setSigningKey(Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8)))
+                            .build()
+                            .parseClaimsJws(token)
+                            .getBody();
+                    Number tokenUserIdNum = claims.get("userId", Number.class);
+                    Long tokenUserId = tokenUserIdNum == null ? null : tokenUserIdNum.longValue();
+                    if (tokenUserId == null || !tokenUserId.equals(userId)) {
+                        return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Forbidden");
+                    }
+                } catch (Exception ex) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Forbidden");
+                }
+            }
+
+            return customerRepository.findByUserId(userId)
+                    .map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Error fetching customer by userId: " + e.getMessage());
+        }
     }
 
     @PutMapping("/{id}")

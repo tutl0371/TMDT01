@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -117,6 +118,19 @@ public class OrderController {
                 )));
     }
 
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<?> getOrdersByUser(@PathVariable("userId") Long userId) {
+        if (userId == null) {
+            return ResponseEntity.badRequest().body("User id is required");
+        }
+
+        List<Order> orders = orderRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        List<OrderResponse> response = orders.stream()
+                .map(this::toOrderResponse)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(response);
+    }
+
     @PostMapping("/cart/{userId}")
     public ResponseEntity<?> saveUserCart(@PathVariable("userId") Long userId,
                                           @RequestBody(required = false) CartStateRequest request) {
@@ -198,18 +212,32 @@ public class OrderController {
         Long customerId = request.getCustomerId();
         CustomerClient.CustomerSnapshot customer = null;
 
-        // If client didn't provide existing customerId but provided phone/name in payload,
-        // attempt to create or find the customer in CustomerService (internal upsert).
-        if (customerId == null && request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
-            CustomerClient.CustomerSnapshot up = customerClient.upsertCustomer(
-                    request.getCustomerName(),
-                    request.getCustomerPhone(),
-                    request.getCustomerEmail(),
-                    request.getCustomerAddress()
-            );
-            if (up != null) {
-                customerId = up.getId();
-                customer = up;
+        // If client didn't provide existing customerId, try to associate by user first,
+        // falling back to phone-based upsert for guest customers.
+        if (customerId == null) {
+            if (userId != null && user != null) {
+                CustomerClient.CustomerSnapshot up = customerClient.upsertCustomerByUser(
+                        userId,
+                        resolveUserName(user),
+                        request.getCustomerName(),
+                        request.getCustomerEmail(),
+                        request.getCustomerAddress()
+                );
+                if (up != null) {
+                    customerId = up.getId();
+                    customer = up;
+                }
+            } else if (request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
+                CustomerClient.CustomerSnapshot up = customerClient.upsertCustomer(
+                        request.getCustomerName(),
+                        request.getCustomerPhone(),
+                        request.getCustomerEmail(),
+                        request.getCustomerAddress()
+                );
+                if (up != null) {
+                    customerId = up.getId();
+                    customer = up;
+                }
             }
         }
 
@@ -576,6 +604,66 @@ public class OrderController {
         return ResponseEntity.ok("Order cancelled");
     }
 
+    @PostMapping("/{id}/received")
+    @Transactional
+    public ResponseEntity<?> confirmOrderReceived(@PathVariable Long id) {
+        return confirmOrderReceivedInternal(id);
+    }
+
+    @PostMapping("/{id}/confirm-received")
+    @Transactional
+    public ResponseEntity<?> confirmOrderConfirmedReceived(@PathVariable Long id) {
+        return confirmOrderReceivedInternal(id);
+    }
+
+    @PostMapping("/received/{id}")
+    @Transactional
+    public ResponseEntity<?> confirmOrderReceivedByPrefix(@PathVariable Long id) {
+        return confirmOrderReceivedInternal(id);
+    }
+
+    @PostMapping("/confirm-received/{id}")
+    @Transactional
+    public ResponseEntity<?> confirmOrderConfirmedReceivedByPrefix(@PathVariable Long id) {
+        return confirmOrderReceivedInternal(id);
+    }
+
+    private ResponseEntity<?> confirmOrderReceivedInternal(Long id) {
+        Order order = orderRepository.findByIdWithDetails(id).orElse(null);
+        if (order == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String status = order.getStatus() == null ? "" : order.getStatus().trim().toUpperCase();
+        if ("CANCELLED".equals(status)) {
+            return ResponseEntity.badRequest().body("Order has been cancelled");
+        }
+        if ("RECEIVED".equals(status)) {
+            return ResponseEntity.ok("Order already confirmed as received");
+        }
+
+        if (order.getCustomerId() == null && order.getCustomerPhone() != null && !order.getCustomerPhone().isBlank()) {
+            List<Long> customerIds = customerClient.searchCustomerIds(order.getCustomerPhone());
+            if (customerIds != null && customerIds.size() == 1) {
+                order.setCustomerId(customerIds.get(0));
+            }
+        }
+
+        if (order.getCustomerId() == null) {
+            return ResponseEntity.badRequest().body("Không thể cộng điểm vì đơn hàng chưa có khách hàng liên kết");
+        }
+
+        customerClient.addPoints(
+                order.getCustomerId(),
+                order.getTotalAmount(),
+                "ORDER_RECEIVED_" + order.getId()
+        );
+
+        order.setStatus("RECEIVED");
+        orderRepository.save(order);
+        return ResponseEntity.ok("Order confirmed as received");
+    }
+
     @PostMapping("/attach-phone")
     public ResponseEntity<?> attachPhoneToOrderByInvoice(@RequestBody Map<String, String> payload) {
         if (payload == null) return ResponseEntity.badRequest().body("invoiceNumber and phone required");
@@ -696,7 +784,9 @@ public class OrderController {
         CustomerClient.CustomerSnapshot customer = resolveCustomer(order.getCustomerId(), customers);
         String userName = user == null ? null : resolveUserName(user);
         String customerName = customer == null ? null : customer.getName();
-        String customerPhone = customer == null ? null : customer.getPhone();
+        String customerPhone = customer == null || customer.getPhone() == null || customer.getPhone().isBlank()
+                ? order.getCustomerPhone()
+                : customer.getPhone();
         List<OrderItemResponse> items = order.getItems() == null
                 ? new ArrayList<>()
                 : order.getItems().stream()

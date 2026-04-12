@@ -23,6 +23,9 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @EntityGraph(attributePaths = {"items"})
     List<Order> findByCustomerIdOrderByCreatedAtDesc(Long customerId);
 
+    @EntityGraph(attributePaths = {"items"})
+    List<Order> findByUserIdOrderByCreatedAtDesc(Long userId);
+
     Optional<Order> findTopByInvoiceNumberStartingWithOrderByInvoiceNumberDesc(String prefix);
 
     @EntityGraph(attributePaths = {"items"})

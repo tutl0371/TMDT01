@@ -108,6 +108,57 @@ public class CustomerInternalController {
                 });
     }
 
+    @PostMapping("/upsertByUser")
+    public ResponseEntity<?> upsertCustomerByUser(@RequestBody UpsertByUserRequest request) {
+        if (request == null || request.userId == null) {
+            return ResponseEntity.badRequest().body("userId is required");
+        }
+
+        // Try find by userId first, then by username
+        java.util.Optional<com.example.bizflow.entity.Customer> found = customerRepository.findByUserId(request.userId);
+        if (found.isEmpty() && request.username != null && !request.username.isBlank()) {
+            found = customerRepository.findByUsername(request.username.trim());
+        }
+
+        return found
+                .map(existing -> {
+                    boolean changed = false;
+                    if (request.name != null && !request.name.isBlank()) {
+                        existing.setName(request.name.trim());
+                        changed = true;
+                    }
+                    if (request.email != null) {
+                        existing.setEmail(trimToNull(request.email));
+                        changed = true;
+                    }
+                    if (request.address != null) {
+                        existing.setAddress(trimToNull(request.address));
+                        changed = true;
+                    }
+                    if (existing.getUserId() == null || !existing.getUserId().equals(request.userId)) {
+                        existing.setUserId(request.userId);
+                        changed = true;
+                    }
+                    if (request.username != null && !request.username.isBlank()
+                            && (existing.getUsername() == null || !existing.getUsername().equals(request.username.trim()))) {
+                        existing.setUsername(request.username.trim());
+                        changed = true;
+                    }
+                    if (changed) customerRepository.save(existing);
+                    return ResponseEntity.ok(existing);
+                })
+                .orElseGet(() -> {
+                    String name = request.name != null && !request.name.isBlank() ? request.name.trim() : "Khách hàng";
+                    com.example.bizflow.entity.Customer created = new com.example.bizflow.entity.Customer(name, null);
+                    created.setUserId(request.userId);
+                    created.setUsername(trimToNull(request.username));
+                    created.setEmail(trimToNull(request.email));
+                    created.setAddress(trimToNull(request.address));
+                    com.example.bizflow.entity.Customer saved = customerRepository.save(created);
+                    return ResponseEntity.ok(saved);
+                });
+    }
+
     private static String normalizePhone(String phone) {
         if (phone == null) return null;
         return phone.replaceAll("\\D", "");
@@ -116,6 +167,14 @@ public class CustomerInternalController {
     private static class UpsertRequest {
         public String name;
         public String phone;
+        public String email;
+        public String address;
+    }
+
+    private static class UpsertByUserRequest {
+        public Long userId;
+        public String username;
+        public String name;
         public String email;
         public String address;
     }

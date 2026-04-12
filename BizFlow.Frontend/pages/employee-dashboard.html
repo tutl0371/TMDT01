@@ -232,6 +232,14 @@
                         <input id="checkoutCustomerPhone" type="tel" placeholder="SĐT khách hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
                         <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
                     </div>
+                    <div class="customer-points-info" style="padding-top:8px;">
+                        <div style="font-size:13px;color:#333;margin-top:6px;">
+                            <span>Điểm hiện có: </span><strong id="checkoutPointsCurrent">0</strong>&nbsp;điểm
+                        </div>
+                        <div style="font-size:13px;color:#333;margin-top:4px;">
+                            <span>Sẽ cộng thêm: </span><strong id="checkoutPointsEarn">0</strong>&nbsp;điểm
+                        </div>
+                    </div>
                 </div>
 
                 <div class="payment-methods customer-methods" aria-label="Phương thức thanh toán">
@@ -755,7 +763,7 @@
             </div>
             <div class="modal-body" style="max-height:60vh;overflow:auto;">
                 <div id="orderTrackCustomerInfo" style="margin-bottom:8px;color:#222;font-weight:600"></div>
-                <div id="orderTrackControls" style="display:flex;gap:8px;margin-bottom:8px;">
+                <div id="orderTrackControls" style="display:none;gap:8px;margin-bottom:8px;">
                     <input id="orderTrackPhoneInput" type="text" placeholder="Nhập SĐT khách (nếu chưa chọn khách)" style="flex:1;padding:8px;border:1px solid #e6eefc;border-radius:8px;" />
                     <button id="orderTrackFindBtn" class="ghost-btn">Tìm</button>
                 </div>

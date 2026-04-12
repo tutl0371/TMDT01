@@ -119,6 +119,26 @@ public class CustomerClient {
         }
     }
 
+    public CustomerSnapshot upsertCustomerByUser(Long userId, String username, String name, String email, String address) {
+        if (userId == null) return null;
+        try {
+            Map<String, Object> payload = new java.util.HashMap<>();
+            payload.put("userId", userId);
+            if (username != null) payload.put("username", username);
+            if (name != null) payload.put("name", name);
+            if (email != null) payload.put("email", email);
+            if (address != null) payload.put("address", address);
+            ResponseEntity<CustomerSnapshot> response = restTemplate.postForEntity(
+                    baseUrl + "/internal/customers/upsertByUser",
+                    payload,
+                    CustomerSnapshot.class
+            );
+            return response.getBody();
+        } catch (org.springframework.web.client.RestClientException ex) {
+            return null;
+        }
+    }
+
     private String normalizeBaseUrl(String raw) {
         if (raw == null || raw.isBlank()) {
             return "http://localhost:8085";
@@ -130,6 +150,8 @@ public class CustomerClient {
         private Long id;
         private String name;
         private String phone;
+        private Long userId;
+        private String username;
         private Integer totalPoints;
         private Integer monthlyPoints;
         private CustomerTier tier;
@@ -152,6 +174,22 @@ public class CustomerClient {
 
         public String getPhone() {
             return phone;
+        }
+
+        public Long getUserId() {
+            return userId;
+        }
+
+        public void setUserId(Long userId) {
+            this.userId = userId;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
         }
 
         public void setPhone(String phone) {

@@ -15,6 +15,8 @@ import java.util.Optional;
 public interface CustomerRepository extends JpaRepository<Customer, Long> {
 
     Optional<Customer> findByPhone(String phone);
+    Optional<Customer> findByUserId(Long userId);
+    Optional<Customer> findByUsername(String username);
 
     // 🔒 Khóa bản ghi khi cộng điểm (tránh cộng sai khi nhiều request)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -25,7 +27,8 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
         select c.id from Customer c
         where (:keyword is null
             or lower(c.name) like lower(concat('%', :keyword, '%'))
-            or c.phone like concat('%', :keyword, '%'))
+            or c.phone like concat('%', :keyword, '%')
+            or lower(c.username) like lower(concat('%', :keyword, '%')))
     """)
     List<Long> searchCustomerIds(@Param("keyword") String keyword);
 }

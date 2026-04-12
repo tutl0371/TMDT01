@@ -154,6 +154,9 @@ const FALLBACK_PRODUCTS = [
 // Checkout validation helpers (global) — used by multiple event handlers and renderers
 function isCheckoutValid() {
     try {
+        if (getCurrentUserId()) {
+            return true;
+        }
         const phoneEl = document.getElementById('checkoutCustomerPhone');
         const addrEl = document.getElementById('checkoutCustomerAddress');
         const phone = phoneEl ? (phoneEl.value || '').trim() : '';
@@ -177,11 +180,16 @@ window.addEventListener('DOMContentLoaded', async () => {
     loadUserInfo();
     await loadCurrentEmployee();
     fixPaymentPanelText();
-    selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+
+    // Initialize selectedCustomer only when it wasn't loaded by loadCurrentEmployee()
+    if (!selectedCustomer || !(selectedCustomer.id > 0)) {
+        selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+    }
     const selectedCustomerLabel = document.getElementById('selectedCustomer');
     if (selectedCustomerLabel) {
-        selectedCustomerLabel.textContent = 'Khách lẻ';
+        selectedCustomerLabel.textContent = (selectedCustomer && selectedCustomer.id > 0) ? (selectedCustomer.name || 'Khách lẻ') : 'Khách lẻ';
     }
+
     setupEventListeners();
     setupOrderTracking();
     setupCustomerModal();
@@ -623,6 +631,48 @@ async function loadCurrentEmployee() {
         if (userInitialEl) {
             const initial = (data.fullName || data.username || 'E')[0]?.toUpperCase() || 'E';
             userInitialEl.textContent = initial;
+        }
+
+        // Try to fetch a linked Customer record for this authenticated user so
+        // we can show member points in checkout. Endpoint: GET /api/customers/by-user/{userId}
+        try {
+            const custRes = await fetch(`${API_BASE}/customers/by-user/${userId}`, {
+                headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+            });
+            if (custRes.ok) {
+                const cust = await custRes.json();
+                selectedCustomer = {
+                    id: cust.id || 0,
+                    name: cust.name || 'Khách lẻ',
+                    phone: cust.phone || '-',
+                    address: cust.address || '',
+                    totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
+                    monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
+                    tier: cust.tier || ''
+                };
+
+                // Prefill checkout fields with member info
+                const checkoutNameEl = document.getElementById('checkoutCustomerName');
+                const checkoutPhoneEl = document.getElementById('checkoutCustomerPhone');
+                const checkoutAddressEl = document.getElementById('checkoutCustomerAddress');
+                if (checkoutNameEl) checkoutNameEl.value = selectedCustomer.name || '';
+                if (checkoutPhoneEl) checkoutPhoneEl.value = (selectedCustomer.phone && selectedCustomer.phone !== '-') ? selectedCustomer.phone : '';
+                if (checkoutAddressEl) checkoutAddressEl.value = selectedCustomer.address || '';
+
+                const searchInput = document.getElementById('customerSearch');
+                if (searchInput && selectedCustomer.id) {
+                    searchInput.value = selectedCustomer.name || selectedCustomer.phone || '';
+                    searchInput.classList.add('has-selection');
+                    searchInput.readOnly = true;
+                }
+                const addBtn = document.getElementById('addCustomerBtn'); if (addBtn) addBtn.style.display = 'none';
+                const clearBtn = document.getElementById('clearCustomerBtn'); if (clearBtn) clearBtn.style.display = 'inline-flex';
+
+                // Update UI totals / points display
+                try { renderCart(); updateTotal(); } catch (e) {}
+            }
+        } catch (err) {
+            console.warn('Could not fetch customer by user', err);
         }
     } catch (err) {
     }
@@ -2548,6 +2598,14 @@ function updateTotal() {
         setText('memberPoints', formatCompactNumber(memberSummary.points));
         setText('memberDiscountAmount', formatPrice(memberDiscount));
         setText('memberPointsUsed', formatCompactNumber(pointsUsed));
+        // Show checkout points: current and points that will be earned from this order
+        try {
+            const pointsCurrentEl = document.getElementById('checkoutPointsCurrent');
+            const pointsEarnEl = document.getElementById('checkoutPointsEarn');
+            const pointsToAdd = Math.max(0, Math.floor(total / POINTS_EARN_RATE_VND));
+            if (pointsCurrentEl) pointsCurrentEl.textContent = formatCompactNumber(getCustomerPoints(selectedCustomer));
+            if (pointsEarnEl) pointsEarnEl.textContent = formatCompactNumber(pointsToAdd);
+        } catch (e) {}
         updateChangeDue(total);
         setDefaultTierByTotal(total);
     } catch (err) {
@@ -3160,13 +3218,127 @@ async function trackOrder() {
     const resultEl = document.getElementById('orderTrackingResult');
     if (!qEl || !resultEl) return;
     const q = (qEl.value || '').trim();
+    const userId = getCurrentUserId();
+    const headers = getAuthHeaders();
+
+    // If user is logged in, show orders belonging to that account directly
+    if (userId) {
+        resultEl.innerHTML = '<div class="muted">Đang tra cứu đơn của tài khoản...</div>';
+        try {
+            let orders = [];
+            const ordRes = await fetch(`${API_BASE}/orders/user/${userId}`, { headers });
+            if (ordRes.ok) {
+                orders = await ordRes.json();
+            } else {
+                console.warn('orders/user fallback failed', ordRes.status);
+            }
+            if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+                const summaryRes = await fetch(`${API_BASE}/orders/summary`, { headers });
+                if (summaryRes.ok) {
+                    const summary = await summaryRes.json();
+                    orders = Array.isArray(summary) ? summary.filter(o => Number(o.userId) === Number(userId)) : [];
+                }
+            }
+            if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+                resultEl.innerHTML = '<div class="muted">Tài khoản chưa có đơn hàng nào.</div>';
+                return;
+            }
+
+            // If user provided a query, try to match within their orders
+            if (q) {
+                const found = (orders || []).find(o => String(o.id) === q || (o.invoiceNumber && String(o.invoiceNumber).toLowerCase().includes(q.toLowerCase())));
+                if (found) {
+                    try {
+                        const det = await fetch(`${API_BASE}/orders/${found.id}`, { headers });
+                        if (det.ok) {
+                            const order = await det.json();
+                            renderOrderTrackingResult(order);
+                            return;
+                        }
+                    } catch (e) {}
+                    renderOrderSummaryResult(found);
+                    return;
+                }
+                resultEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng của tài khoản với từ khóa này.</div>';
+                return;
+            }
+
+            // No query: render a simple list inline
+            const html = (orders || []).map(o => {
+                const created = formatDateTime(o.createdAt || '-');
+                const invoice = o.invoiceNumber || ('#' + (o.id || '-'));
+                const status = escapeHtml(o.status || '-');
+                const total = formatPrice(o.totalAmount || o.total || 0);
+                return `
+                    <div style="padding:8px;border-bottom:1px solid #eef2f8;">
+                        <div style="font-weight:700">${escapeHtml(invoice)} · ${created}</div>
+                        <div style="color:#333;margin-top:4px">Trạng thái: <strong>${status}</strong></div>
+                        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+                        <div style="margin-top:6px">
+                            <button class="ghost-btn small view-order-inline" data-order-id="${o.id}">Xem</button>
+                            ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-inline" data-order-id="${o.id}">Hủy</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            resultEl.innerHTML = html;
+
+            // bind inline buttons
+            resultEl.querySelectorAll('.view-order-inline').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = b.getAttribute('data-order-id');
+                    if (!id) return;
+                    try {
+                        const res = await fetch(`${API_BASE}/orders/${id}`, { headers });
+                        if (!res.ok) {
+                            alert('Không thể tải chi tiết đơn.');
+                            return;
+                        }
+                        const order = await res.json();
+                        renderOrderTrackingResult(order);
+                    } catch (err) {
+                        console.warn('view inline order error', err);
+                        alert('Lỗi khi tải chi tiết đơn.');
+                    }
+                });
+            });
+
+            resultEl.querySelectorAll('.cancel-order-inline').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = b.getAttribute('data-order-id');
+                    if (!id) return;
+                    if (!confirm('Bạn có chắc muốn hủy đơn này?')) return;
+                    try {
+                        const res = await fetch(`${API_BASE}/orders/${id}/cancel`, { method: 'POST', headers });
+                        if (!res.ok) {
+                            alert('Không thể hủy đơn.');
+                            return;
+                        }
+                        alert('Đã hủy đơn.');
+                        // refresh
+                        await trackOrder();
+                    } catch (err) {
+                        console.warn('cancel inline error', err);
+                        alert('Lỗi khi hủy đơn.');
+                    }
+                });
+            });
+
+            return;
+        } catch (err) {
+            console.warn('trackOrder (user) error', err);
+            // fallback to global behavior below
+        }
+    }
+
+    // Global lookup (unauthenticated or fallback)
     if (!q) {
         resultEl.innerHTML = '<div class="muted">Nhập mã đơn hoặc số hóa đơn để tra cứu.</div>';
         return;
     }
     resultEl.innerHTML = '<div class="muted">Đang tra cứu...</div>';
     try {
-        const headers = getAuthHeaders();
         // if numeric, try direct lookup
         if (/^\d+$/.test(q)) {
             const res = await fetch(`${API_BASE}/orders/${q}`, { headers });
@@ -3254,7 +3426,57 @@ function renderOrderTrackingResult(order) {
         ${deliveryHtml}
         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
         ${itemsHtml}
+        ${order.customerId && !['CANCELLED','RECEIVED'].includes(String(order.status || '').toUpperCase()) ? `<div style="margin-top:12px"><button id="receiveOrderDetailBtn" class="ghost-btn">Đã nhận được hàng</button></div>` : ''}
     `;
+
+    const receiveBtn = el.querySelector('#receiveOrderDetailBtn');
+    if (receiveBtn) {
+        receiveBtn.addEventListener('click', async () => {
+            const confirmed = await confirmOrderReceived(order.id);
+            if (confirmed) {
+                await loadOrdersForModal(getCurrentUserId());
+            }
+        });
+    }
+}
+
+function canShowReceiveButton(order) {
+    if (!order) return false;
+    const status = String(order.status || '').trim().toUpperCase();
+    if (status === 'CANCELLED' || status === 'RECEIVED') return false;
+    return order.customerId != null;
+}
+
+async function confirmOrderReceived(orderId) {
+    if (!orderId) return false;
+    if (!confirm('Xác nhận đã nhận hàng và cộng điểm vào tài khoản khách?')) return false;
+    const headers = getAuthHeaders();
+    const endpoints = [
+        `${API_BASE}/orders/${orderId}/received`,
+        `${API_BASE}/orders/${orderId}/confirm-received`,
+        `${API_BASE}/orders/received/${orderId}`,
+        `${API_BASE}/orders/confirm-received/${orderId}`
+    ];
+
+    for (const url of endpoints) {
+        try {
+            const res = await fetch(url, { method: 'POST', headers });
+            if (res.ok) {
+                alert('Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
+                return true;
+            }
+            if (res.status !== 404) {
+                const msg = await res.text();
+                alert(`Không thể xác nhận đơn hàng: ${msg || res.statusText}`);
+                return false;
+            }
+        } catch (err) {
+            console.warn('confirmOrderReceived attempt failed for', url, err);
+        }
+    }
+
+    alert('Không thể xác nhận đơn hàng: endpoint chưa được hỗ trợ hoặc đơn hàng không tồn tại.');
+    return false;
 }
 
 function renderOrderSummaryResult(summary) {
@@ -3447,12 +3669,7 @@ function setupOrderTracking() {
     }
     if (findBtn) {
         findBtn.addEventListener('click', async () => {
-            const phone = (phoneInput.value || '').trim();
-            if (!phone && !(selectedCustomer && selectedCustomer.id > 0)) {
-                alert('Vui lòng nhập SĐT hoặc chọn khách hàng.');
-                return;
-            }
-            await loadOrdersForModal(phone);
+            await loadOrdersForModal(getCurrentUserId());
         });
     }
     if (phoneInput) {
@@ -3465,25 +3682,36 @@ function setupOrderTracking() {
     }
 }
 
-function openOrderTrackModal() {
+async function openOrderTrackModal() {
     const modal = document.getElementById('orderTrackModal');
+    const controls = document.getElementById('orderTrackControls');
     if (!modal) return;
     modal.classList.add('show');
     modal.setAttribute('aria-hidden', 'false');
 
-    // Prefill with selected customer
     const info = document.getElementById('orderTrackCustomerInfo');
     const phoneInput = document.getElementById('orderTrackPhoneInput');
-    if (selectedCustomer && selectedCustomer.id > 0) {
-        if (info) info.textContent = `Khách hàng: ${selectedCustomer.name || '-'} · SĐT: ${selectedCustomer.phone || '-'}`;
-        if (phoneInput) phoneInput.value = selectedCustomer.phone || '';
-        loadOrdersForModal();
-    } else {
-        if (info) info.textContent = 'Chưa chọn khách hàng. Nhập SĐT để tìm đơn.';
+
+    const showSearchControls = (show) => {
+        if (controls) {
+            controls.style.display = show ? 'flex' : 'none';
+        }
+    };
+
+    showSearchControls(false);
+
+    const userId = getCurrentUserId();
+    if (userId) {
+        if (info) info.textContent = 'Đang tải đơn hàng của tài khoản...';
         if (phoneInput) phoneInput.value = '';
-        const list = document.getElementById('orderTrackList');
-        if (list) list.innerHTML = '<div class="muted">Nhập SĐT khách hàng hoặc chọn khách trước khi tra cứu.</div>';
+        await loadOrdersForModal(userId);
+        return;
     }
+
+    if (info) info.textContent = 'Bạn cần đăng nhập để xem đơn hàng của tài khoản.';
+    if (phoneInput) phoneInput.value = '';
+    const list = document.getElementById('orderTrackList');
+    if (list) list.innerHTML = '<div class="muted">Chưa đăng nhập. Vui lòng đăng nhập để xem đơn hàng của tài khoản.</div>';
 }
 
 function closeOrderTrackModal() {
@@ -3493,133 +3721,46 @@ function closeOrderTrackModal() {
     modal.setAttribute('aria-hidden', 'true');
 }
 
-async function loadOrdersForModal(phone) {
+async function loadOrdersForModal(userId) {
     const listEl = document.getElementById('orderTrackList');
     if (!listEl) return;
     listEl.innerHTML = '<div class="muted">Đang tải...</div>';
-    const normalizeDigits = (s) => (s || '').toString().replace(/\D/g, '');
 
     try {
-        let customerId = null;
-        if (selectedCustomer && selectedCustomer.id > 0) {
-            customerId = selectedCustomer.id;
-        } else if (phone && phone.trim()) {
-            const normalized = normalizeDigits(phone);
-            const found = customers.find(c => normalizeDigits(c.phone) === normalized);
-            if (found) {
-                customerId = found.id;
-            } else {
-                await loadCustomers();
-                const f2 = customers.find(c => normalizeDigits(c.phone) === normalized);
-                if (f2) customerId = f2.id;
-            }
-        }
-
-        const diag = [];
-        const pushDiag = (m) => { try { diag.push(String(m)); } catch (__) {} };
-
-        if (!customerId) {
-            try {
-                const raw = phone || '';
-                const digits = normalizeDigits(raw);
-                const variants = [];
-                if (raw && raw.trim()) variants.push(raw.trim());
-                if (digits) {
-                    variants.push(digits);
-                    if (digits.startsWith('0')) {
-                        const without0 = digits.substring(1);
-                        variants.push(without0, '84' + without0, '+84' + without0);
-                    } else if (digits.startsWith('84')) {
-                        const with0 = '0' + digits.substring(2);
-                        variants.push(with0, '+' + digits);
-                    } else {
-                        variants.push('0' + digits, '84' + digits, '+' + digits);
-                    }
-                }
-
-                const tried = new Set();
-                const endpoints = [
-                    (v) => `${API_BASE}/search/orders?phone=${encodeURIComponent(v)}`,
-                    (v) => `${API_BASE}/orders/search?phone=${encodeURIComponent(v)}`,
-                    (v) => `${API_BASE}/orders?phone=${encodeURIComponent(v)}`
-                ];
-
-                for (const v of variants) {
-                    if (!v || tried.has(v)) continue;
-                    tried.add(v);
-                    for (const makeUrl of endpoints) {
-                        const url = makeUrl(v);
-                        pushDiag(`Trying ${url}`);
-                        try {
-                            const res = await fetch(url, { headers: getAuthHeaders() });
-                            pushDiag(`→ ${url} -> ${res.status}`);
-                            if (res.ok) {
-                                let body = null;
-                                try { body = await res.json(); } catch (e) { body = null; }
-                                const count = Array.isArray(body) ? body.length : (body ? 1 : 0);
-                                pushDiag(`→ ${url} returned ${count} item(s)`);
-                                if (count > 0) {
-                                    // filter results by exact normalized phone match; if filtering removes all items,
-                                    // fall back to the raw API results so users still see matching orders returned by the server
-                                    const targetNorm = normalizeDigits(raw || phone || '');
-                                    let filtered = (Array.isArray(body) ? body : [body]).filter(o => {
-                                        try {
-                                            const op = normalizeDigits(o?.customerPhone || o?.customer?.phone || '');
-                                            if (op === targetNorm && op) return true;
-                                            // also check if order has customerId matching a loaded customer with that phone
-                                            const cid = o?.customerId || o?.customer?.id || null;
-                                            if (cid && customers && customers.length > 0) {
-                                                const c = customers.find(x => Number(x.id) === Number(cid));
-                                                if (c && normalizeDigits(c.phone || '') === targetNorm && targetNorm) return true;
-                                            }
-                                        } catch (e) {}
-                                        return false;
-                                    });
-                                    if (filtered.length === 0) {
-                                        // server returned items but client-side strict filter removed them; show server results anyway
-                                        filtered = Array.isArray(body) ? body : [body];
-                                    }
-                                    pushDiag(`→ ${url} filtered to ${filtered.length} item(s)`);
-                                    if (filtered.length > 0) {
-                                        renderOrdersInModal(filtered);
-                                        return;
-                                    }
-                                }
-                            } else {
-                                let txt = '';
-                                try { txt = await res.text(); } catch (e) { txt = ''; }
-                                pushDiag(`→ ${url} returned ${res.status}${txt ? ': ' + txt.slice(0,200) : ''}`);
-                            }
-                        } catch (e) {
-                            pushDiag(`→ ${url} error: ${e && e.message ? e.message : e}`);
-                        }
-                    }
-                }
-            } catch (e) {
-                pushDiag(`search by phone failed: ${e && e.message ? e.message : e}`);
-            }
-
-            listEl.innerHTML = '<div class="muted">Không tìm thấy khách hàng. Vui lòng chọn khách hoặc nhập SĐT đúng.</div>' + formatDiag(diag);
+        if (!userId) {
+            listEl.innerHTML = '<div class="muted">Không tìm thấy tài khoản. Vui lòng đăng nhập.</div>';
             return;
         }
 
         const headers = getAuthHeaders();
-        pushDiag(`Fetching orders for customerId=${customerId} via ${API_BASE}/orders/customer/${customerId}`);
-        const res = await fetch(`${API_BASE}/orders/customer/${customerId}`, { headers });
-        pushDiag(`→ orders/customer -> ${res.status}`);
-        if (!res.ok) {
-            listEl.innerHTML = '<div class="muted">Lỗi khi tải đơn hàng.</div>' + formatDiag(diag);
-            return;
+        let orders = [];
+
+        const res = await fetch(`${API_BASE}/orders/user/${userId}`, { headers });
+        if (res.ok) {
+            orders = await res.json();
+        } else {
+            console.warn('orders/user fetch failed', res.status, await res.text());
         }
-        const orders = await res.json();
+
         if (!orders || (Array.isArray(orders) && orders.length === 0)) {
-            listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>' + formatDiag(diag);
+            const summaryRes = await fetch(`${API_BASE}/orders/summary`, { headers });
+            if (summaryRes.ok) {
+                const summary = await summaryRes.json();
+                orders = Array.isArray(summary) ? summary.filter(o => Number(o.userId) === Number(userId)) : [];
+            } else {
+                console.warn('orders/summary fallback failed', summaryRes.status, await summaryRes.text());
+            }
+        }
+
+        if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+            listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
             return;
         }
+
         renderOrdersInModal(orders || []);
     } catch (err) {
         console.warn('loadOrdersForModal error', err);
-        listEl.innerHTML = '<div class="muted">Lỗi khi tải đơn hàng.</div>';
+        listEl.innerHTML = '<div class="muted">Lỗi khi tải đơn hàng. Vui lòng thử lại.</div>';
     }
 
     function formatDiag(diagArr) {
@@ -3664,6 +3805,7 @@ function renderOrdersInModal(orders) {
                         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+                        ${o.customerId && !['CANCELLED','RECEIVED'].includes(String(o.status || '').toUpperCase()) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
                         <button class="ghost-btn small view-order-btn" data-order-id="${o.id}">Xem</button>
                         ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-btn" data-order-id="${o.id}">Hủy</button>` : ''}
                     </div>
@@ -3688,11 +3830,21 @@ function renderOrdersInModal(orders) {
                     return;
                 }
                 alert('Đã hủy đơn.');
-                // refresh
-                await loadOrdersForModal(document.getElementById('orderTrackPhoneInput')?.value);
+                await loadOrdersForModal(getCurrentUserId());
             } catch (err) {
                 console.warn('cancel error', err);
                 alert('Lỗi khi hủy đơn.');
+            }
+        });
+    });
+
+    listEl.querySelectorAll('.receive-order-btn').forEach(b => {
+        b.addEventListener('click', async () => {
+            const id = b.getAttribute('data-order-id');
+            if (!id) return;
+            const confirmed = await confirmOrderReceived(id);
+            if (confirmed) {
+                await loadOrdersForModal(getCurrentUserId());
             }
         });
     });
@@ -3701,7 +3853,6 @@ function renderOrdersInModal(orders) {
         b.addEventListener('click', async (e) => {
             const id = b.getAttribute('data-order-id');
             if (!id) return;
-            // open detail: reuse existing customerDetailModal if available
             try {
                 const headers = getAuthHeaders();
                 const res = await fetch(`${API_BASE}/orders/${id}`, { headers });
@@ -3712,7 +3863,9 @@ function renderOrdersInModal(orders) {
                 const order = await res.json();
                 // render small detail in modal (append)
                 const list = document.getElementById('orderTrackList');
-                const itemsHtml = Array.isArray(order.items) ? order.items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName||it.name||'-')}</div><div>x${it.quantity||0}</div></div>`).join('') : '';
+                const itemsHtml = Array.isArray(order.items)
+                    ? order.items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName||it.name||'-')}</div><div>x${it.quantity||0}</div></div>`).join('')
+                    : '';
                 list.innerHTML = `
                     <div style="font-weight:700;margin-bottom:6px">Đơn: ${escapeHtml(order.invoiceNumber||('#'+order.id))}</div>
                     <div>Trạng thái: <strong>${escapeHtml(order.status||'-')}</strong></div>
