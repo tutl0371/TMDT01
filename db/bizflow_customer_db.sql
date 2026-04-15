@@ -33,6 +33,8 @@ CREATE TABLE `customers` (
   `email` varchar(255) DEFAULT NULL,
   `name` varchar(255) NOT NULL,
   `phone` varchar(255) DEFAULT NULL,
+  `user_id` bigint DEFAULT NULL,
+  `username` varchar(255) DEFAULT NULL,
   `cccd` varchar(255) DEFAULT NULL,
   `dob` date DEFAULT NULL,
   `monthly_points` int NOT NULL,

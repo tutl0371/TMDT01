@@ -52,6 +52,7 @@ let globalUnreadPollTimer = null;
 let cartPersistTimer = null;
 let isRestoringCartState = false;
 let isCartPersisting = false;
+let cartStateLoaded = false;
 const FALLBACK_CATEGORY_LABEL = 'Khac';
 const customerOrderCache = new Map();
 const TIER_DISCOUNT_BY_100 = {
@@ -151,6 +152,35 @@ const FALLBACK_PRODUCTS = [
     }
 ];
 
+// Ensure the page remains interactive: remove common blocking overlays
+// and re-enable pointer events. Also attach a temporary debug click
+// logger to help trace issues where clicks are swallowed.
+function ensureInteractive() {
+    try {
+        const selectors = ['.modal-backdrop', '.overlay', '.app-overlay', '#pageOverlay', '.fullscreen-overlay'];
+        selectors.forEach(sel => {
+            try {
+                document.querySelectorAll(sel).forEach(el => el.remove());
+            } catch (e) {}
+        });
+        try { document.body.style.pointerEvents = 'auto'; } catch (e) {}
+        const main = document.querySelector('body') || document.getElementById('app') || document.getElementById('root');
+        if (main) try { main.style.pointerEvents = 'auto'; } catch (e) {}
+        console.debug('[ensureInteractive] removed blocking overlays');
+    } catch (e) {
+        console.warn('[ensureInteractive] error', e);
+    }
+
+    try {
+        if (!window.__debugClickAttached) {
+            document.addEventListener('click', function (ev) {
+                console.debug('[DEBUG CLICK] target=', ev.target);
+            }, { capture: true });
+            window.__debugClickAttached = true;
+        }
+    } catch (e) {}
+}
+
 // Checkout validation helpers (global) — used by multiple event handlers and renderers
 function isCheckoutValid() {
     try {
@@ -166,7 +196,6 @@ function isCheckoutValid() {
         return false;
     }
 }
-
 function updateCheckoutButtonState() {
     try {
         const btn = document.getElementById('checkoutBtn');
@@ -176,10 +205,29 @@ function updateCheckoutButtonState() {
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
-    checkAuth();
-    loadUserInfo();
-    await loadCurrentEmployee();
-    fixPaymentPanelText();
+    // Defensive init: run critical startup steps but do not allow
+    // one failure to prevent attaching UI event handlers.
+    try { checkAuth(); } catch (e) { console.warn('checkAuth failed', e); }
+    try { loadUserInfo(); } catch (e) { console.warn('loadUserInfo failed', e); }
+    try {
+        await loadCartStateFromServer();
+    } catch (e) {
+        console.warn('loadCartStateFromServer failed', e);
+    }
+    try {
+        await loadCurrentEmployee();
+    } catch (e) {
+        console.warn('loadCurrentEmployee failed', e);
+    }
+    try {
+        const persistedCustomer = loadPersistedSelectedCustomerState();
+        if (persistedCustomer && persistedCustomer.id > 0 && (!selectedCustomer || selectedCustomer.id === 0)) {
+            applyCustomerSelection(persistedCustomer, { openDetail: false });
+        }
+    } catch (e) {
+        console.warn('loadPersistedSelectedCustomerState failed', e);
+    }
+    try { fixPaymentPanelText(); } catch (e) { console.warn('fixPaymentPanelText failed', e); }
 
     // Initialize selectedCustomer only when it wasn't loaded by loadCurrentEmployee()
     if (!selectedCustomer || !(selectedCustomer.id > 0)) {
@@ -190,42 +238,54 @@ window.addEventListener('DOMContentLoaded', async () => {
         selectedCustomerLabel.textContent = (selectedCustomer && selectedCustomer.id > 0) ? (selectedCustomer.name || 'Khách lẻ') : 'Khách lẻ';
     }
 
-    setupEventListeners();
-    setupOrderTracking();
-    setupCustomerModal();
-    setupProductDetailModal();
-    setupInventoryModal();
-    setupCustomerDetailModal();
-    setupEmployeeSelector();
-    setupAppMenuModal();
-    setupInvoiceModal();
-    setupContactSupport();
+    // Ensure page is interactive (remove blocking overlays) before wiring handlers
+    try { ensureInteractive(); } catch (e) { console.warn('ensureInteractive failed', e); }
+    // Always attach UI handlers; protect each setup call so one failure doesn't block others
+    try { setupEventListeners(); } catch (e) { console.warn('setupEventListeners failed', e); }
+    try { setupOrderTracking(); } catch (e) { console.warn('setupOrderTracking failed', e); }
+    try { setupCustomerModal(); } catch (e) { console.warn('setupCustomerModal failed', e); }
+    try { setupProductDetailModal(); } catch (e) { console.warn('setupProductDetailModal failed', e); }
+    try { setupInventoryModal(); } catch (e) { console.warn('setupInventoryModal failed', e); }
+    try { setupCustomerDetailModal(); } catch (e) { console.warn('setupCustomerDetailModal failed', e); }
+    try { setupEmployeeSelector(); } catch (e) { console.warn('setupEmployeeSelector failed', e); }
+    try { setupAppMenuModal(); } catch (e) { console.warn('setupAppMenuModal failed', e); }
+    try { setupInvoiceModal(); } catch (e) { console.warn('setupInvoiceModal failed', e); }
+    try { setupContactSupport(); } catch (e) { console.warn('setupContactSupport failed', e); }
+
     // initialize payment panels and prefill checkout customer fields
-    updatePaymentPanels();
-    const checkoutName = document.getElementById('checkoutCustomerName');
-    if (checkoutName) checkoutName.value = selectedCustomer?.name || '';
-    const checkoutPhone = document.getElementById('checkoutCustomerPhone');
-    const phoneVal = selectedCustomer?.phone && selectedCustomer.phone !== '-' ? selectedCustomer.phone : '';
-    if (checkoutPhone) checkoutPhone.value = phoneVal;
-    const checkoutAddress = document.getElementById('checkoutCustomerAddress');
-    if (checkoutAddress) checkoutAddress.value = selectedCustomer?.address || '';
-    // wire input events to keep button state in sync
-    const _phoneEl = document.getElementById('checkoutCustomerPhone');
-    const _addrEl = document.getElementById('checkoutCustomerAddress');
-    _phoneEl?.addEventListener('input', updateCheckoutButtonState);
-    _addrEl?.addEventListener('input', updateCheckoutButtonState);
-    // initial state
-    updateCheckoutButtonState();
-    initInvoices();
-    await loadCartStateFromServer();
+    try {
+        updatePaymentPanels();
+        const checkoutName = document.getElementById('checkoutCustomerName');
+        if (checkoutName) checkoutName.value = selectedCustomer?.name || '';
+        const checkoutPhone = document.getElementById('checkoutCustomerPhone');
+        const phoneVal = selectedCustomer?.phone && selectedCustomer.phone !== '-' ? selectedCustomer.phone : '';
+        if (checkoutPhone) checkoutPhone.value = phoneVal;
+        const checkoutAddress = document.getElementById('checkoutCustomerAddress');
+        if (checkoutAddress) checkoutAddress.value = selectedCustomer?.address || '';
+        // wire input events to keep button state in sync
+        const _phoneEl = document.getElementById('checkoutCustomerPhone');
+        const _addrEl = document.getElementById('checkoutCustomerAddress');
+        _phoneEl?.addEventListener('input', updateCheckoutButtonState);
+        _addrEl?.addEventListener('input', updateCheckoutButtonState);
+        // initial state
+        updateCheckoutButtonState();
+    } catch (e) {
+        console.warn('payment panel init failed', e);
+    }
 
-    document.getElementById('productsGrid').innerHTML =
-        '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
+    try { initInvoices(); } catch (e) { console.warn('initInvoices failed', e); }
 
-    // Ensure image map is loaded before rendering products so images resolve correctly
-    await loadProductImageMap();
-    await loadProducts();
-    applyExchangeDraft();
+    try {
+        document.getElementById('productsGrid').innerHTML =
+            '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
+    } catch (e) {}
+
+    // Load product image map and products in background; do not block UI setup
+    (async () => {
+        try { await loadProductImageMap(); } catch (e) { console.warn('loadProductImageMap failed', e); }
+        try { await loadProducts(); } catch (e) { console.warn('loadProducts failed', e); }
+        try { applyExchangeDraft(); } catch (e) { console.warn('applyExchangeDraft failed', e); }
+    })();
 
     const customerSearchInput = document.getElementById('customerSearch');
     customerSearchInput?.addEventListener('focus', () => {
@@ -310,6 +370,8 @@ function applyExchangeDraft() {
         if (addBtn) {
             addBtn.style.display = 'none';
         }
+        // Refresh authoritative customer details (points, tier) from server
+        try { refreshCustomerDetailFromApi(exchangeDraft.customerId).catch(() => {}); } catch (e) {}
         const clearBtn = document.getElementById('clearCustomerBtn');
         if (clearBtn) {
             clearBtn.style.display = 'inline-flex';
@@ -344,6 +406,11 @@ function getCurrentUserId() {
     return Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
+function getSelectedCustomerStorageKey() {
+    const userId = getCurrentUserId();
+    return userId ? `selected_customer_state_${userId}` : 'selected_customer_state';
+}
+
 function getAuthHeaders() {
     const token = sessionStorage.getItem('accessToken') || '';
     return {
@@ -352,14 +419,65 @@ function getAuthHeaders() {
     };
 }
 
+function persistSelectedCustomerState() {
+    try {
+        if (!selectedCustomer || !selectedCustomer.id) return;
+        const payload = {
+            id: selectedCustomer.id,
+            name: selectedCustomer.name || 'Khách lẻ',
+            phone: selectedCustomer.phone || '-',
+            address: selectedCustomer.address || '',
+            totalPoints: Number.isFinite(Number(selectedCustomer.totalPoints)) ? Number(selectedCustomer.totalPoints) : 0,
+            monthlyPoints: Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : 0,
+            tier: selectedCustomer.tier || '',
+            updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem(getSelectedCustomerStorageKey(), JSON.stringify(payload));
+    } catch (e) {
+        console.warn('[persistSelectedCustomerState] failed', e);
+    }
+}
+
+function loadPersistedSelectedCustomerState() {
+    try {
+        const preferredKey = getSelectedCustomerStorageKey();
+        let raw = localStorage.getItem(preferredKey);
+        if (!raw) {
+            raw = localStorage.getItem('selected_customer_state');
+        }
+        if (!raw) return null;
+        const saved = JSON.parse(raw);
+        if (!saved || !saved.id) return null;
+        return {
+            id: saved.id,
+            name: saved.name || 'Khách lẻ',
+            phone: saved.phone || '-',
+            address: saved.address || '',
+            totalPoints: Number.isFinite(Number(saved.totalPoints)) ? Number(saved.totalPoints) : 0,
+            monthlyPoints: Number.isFinite(Number(saved.monthlyPoints)) ? Number(saved.monthlyPoints) : 0,
+            tier: saved.tier || ''
+        };
+    } catch (e) {
+        console.warn('[loadPersistedSelectedCustomerState] failed', e);
+        return null;
+    }
+}
+
 function normalizeInvoiceState(raw, index = 0) {
     const fallbackName = `Giỏ hàng ${index + 1}`;
     return {
         id: raw?.id || `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: raw?.name || fallbackName,
         cart: Array.isArray(raw?.cart) ? raw.cart.map(item => ({ ...item })) : [],
-        selectedCustomer: raw?.selectedCustomer
-            ? { ...raw.selectedCustomer }
+        // Persist only minimal customer info (id/name/phone). Do NOT store
+        // `totalPoints`/`monthlyPoints` in the saved cart to avoid stale
+        // values overwriting server-authoritative totals on restore.
+        selectedCustomer: (raw?.selectedCustomer)
+            ? {
+                id: raw.selectedCustomer.id || 0,
+                name: raw.selectedCustomer.name || raw.selectedCustomer.phone || 'Khách lẻ',
+                phone: raw.selectedCustomer.phone || '-'
+            }
             : { id: 0, name: 'Khách lẻ', phone: '-' },
         paymentMethod: raw?.paymentMethod || 'CASH',
         cashReceived: raw?.cashReceived || '',
@@ -436,6 +554,25 @@ async function loadCartStateFromServer() {
 
         isRestoringCartState = true;
         applyCartStatePayload(data.state);
+        // mark that we successfully restored a server-saved cart state so
+        // we should not overwrite selectedCustomer with linked user customer
+        // during the subsequent loadCurrentEmployee() step.
+        cartStateLoaded = true;
+
+        // Ensure any selectedCustomer restored from the saved cart is refreshed
+        // from the customer service so points are up-to-date (avoid stale points
+        // persisted inside a saved invoice object).
+        try {
+            const invoices = data.state?.invoices || [];
+            for (const inv of invoices) {
+                const sc = inv?.selectedCustomer;
+                if (sc && sc.id && Number(sc.id) > 0) {
+                    try { await refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to refresh customers from restored cart state', e);
+        }
     } catch (err) {
         console.warn('Cannot load persisted cart state', err);
     } finally {
@@ -636,40 +773,46 @@ async function loadCurrentEmployee() {
         // Try to fetch a linked Customer record for this authenticated user so
         // we can show member points in checkout. Endpoint: GET /api/customers/by-user/{userId}
         try {
-            const custRes = await fetch(`${API_BASE}/customers/by-user/${userId}`, {
-                headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
-            });
-            if (custRes.ok) {
-                const cust = await custRes.json();
-                selectedCustomer = {
-                    id: cust.id || 0,
-                    name: cust.name || 'Khách lẻ',
-                    phone: cust.phone || '-',
-                    address: cust.address || '',
-                    totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
-                    monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
-                    tier: cust.tier || ''
-                };
+            // If we already restored a saved cart state from the server and an
+            // explicit customer is already selected, preserve that selection.
+            if (cartStateLoaded && selectedCustomer && selectedCustomer.id > 0) {
+                // keep server-restored customer selection
+            } else {
+                const custRes = await fetch(`${API_BASE}/customers/by-user/${userId}`, {
+                    headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+                });
+                if (custRes.ok) {
+                    const cust = await custRes.json();
+                    selectedCustomer = {
+                        id: cust.id || 0,
+                        name: cust.name || 'Khách lẻ',
+                        phone: cust.phone || '-',
+                        address: cust.address || '',
+                        totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
+                        monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
+                        tier: cust.tier || ''
+                    };
 
-                // Prefill checkout fields with member info
-                const checkoutNameEl = document.getElementById('checkoutCustomerName');
-                const checkoutPhoneEl = document.getElementById('checkoutCustomerPhone');
-                const checkoutAddressEl = document.getElementById('checkoutCustomerAddress');
-                if (checkoutNameEl) checkoutNameEl.value = selectedCustomer.name || '';
-                if (checkoutPhoneEl) checkoutPhoneEl.value = (selectedCustomer.phone && selectedCustomer.phone !== '-') ? selectedCustomer.phone : '';
-                if (checkoutAddressEl) checkoutAddressEl.value = selectedCustomer.address || '';
+                    // Prefill checkout fields with member info
+                    const checkoutNameEl = document.getElementById('checkoutCustomerName');
+                    const checkoutPhoneEl = document.getElementById('checkoutCustomerPhone');
+                    const checkoutAddressEl = document.getElementById('checkoutCustomerAddress');
+                    if (checkoutNameEl) checkoutNameEl.value = selectedCustomer.name || '';
+                    if (checkoutPhoneEl) checkoutPhoneEl.value = (selectedCustomer.phone && selectedCustomer.phone !== '-') ? selectedCustomer.phone : '';
+                    if (checkoutAddressEl) checkoutAddressEl.value = selectedCustomer.address || '';
 
-                const searchInput = document.getElementById('customerSearch');
-                if (searchInput && selectedCustomer.id) {
-                    searchInput.value = selectedCustomer.name || selectedCustomer.phone || '';
-                    searchInput.classList.add('has-selection');
-                    searchInput.readOnly = true;
+                    const searchInput = document.getElementById('customerSearch');
+                    if (searchInput && selectedCustomer.id) {
+                        searchInput.value = selectedCustomer.name || selectedCustomer.phone || '';
+                        searchInput.classList.add('has-selection');
+                        searchInput.readOnly = true;
+                    }
+                    const addBtn = document.getElementById('addCustomerBtn'); if (addBtn) addBtn.style.display = 'none';
+                    const clearBtn = document.getElementById('clearCustomerBtn'); if (clearBtn) clearBtn.style.display = 'inline-flex';
+
+                    // Update UI totals / points display
+                    try { renderCart(); updateTotal(); } catch (e) {}
                 }
-                const addBtn = document.getElementById('addCustomerBtn'); if (addBtn) addBtn.style.display = 'none';
-                const clearBtn = document.getElementById('clearCustomerBtn'); if (clearBtn) clearBtn.style.display = 'inline-flex';
-
-                // Update UI totals / points display
-                try { renderCart(); updateTotal(); } catch (e) {}
             }
         } catch (err) {
             console.warn('Could not fetch customer by user', err);
@@ -929,64 +1072,58 @@ function buildProductImageMarkup(product) {
 async function loadCustomers() {
     if (customersLoaded) return;
 
-    try {
-        const response = await fetch(`${API_BASE}/customers`, {
-            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
-        });
-
-        if (!response.ok) {
-            if (response.status === 401) {
-                sessionStorage.clear();
-                window.location.href = '/pages/login.html';
-                return;
-            }
-            throw new Error('Failed to load customers');
-        }
-
-        const rawCustomers = await response.json();
-        customers = dedupeCustomers(rawCustomers);
-        applyCustomerFilter();
-        customersLoaded = true;
-    } catch (err) {
-    }
-}
-
-function renderCustomers(customers) {
     const list = document.getElementById('customerList');
     if (!list) return;
 
-    if (!customers || customers.length === 0) {
-        const emptyMessage = customerSearchTerm ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng';
-        list.innerHTML = `<div class="customer-empty">${emptyMessage}</div>`;
-        return;
+    try {
+        const response = await fetch(`${API_BASE}/customers`, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data)) {
+                customers = data;
+            } else if (data?.value && Array.isArray(data.value)) {
+                customers = data.value;
+            } else {
+                customers = [];
+            }
+        } else {
+            console.warn('[loadCustomers] failed to fetch customers', response.status, response.statusText);
+        }
+    } catch (err) {
+        console.warn('[loadCustomers] Error fetching customers', err);
+        customers = customers || [];
+    } finally {
+        customersLoaded = true;
+        const customersHtml = (customers || []).map(c => {
+            const phone = c.phone || '-';
+            const secondary = c.email || c.address || '-';
+            const customerId = c.id ?? '';
+            return `
+            <div class="customer-item"
+                data-customer-id="${customerId}"
+                data-customer-name="${escapeHtml(c.name || '')}"
+                data-customer-phone="${escapeHtml(phone)}">
+                <div class="customer-info">
+                    <p class="customer-name">
+                        <button type="button" class="customer-name-btn" data-customer-id="${customerId}" onclick="openCustomerDetailFromButton(event)">
+                            ${escapeHtml(c.name || 'Khách hàng')}
+                        </button>
+                    </p>
+                    <p class="customer-phone">${escapeHtml(phone)}</p>
+                </div>
+                <div class="customer-meta">
+                    <span class="customer-phone">${escapeHtml(phone)}</span>
+                    <span class="customer-sub">${escapeHtml(secondary)}</span>
+                </div>
+            </div>
+            `;
+        }).join('');
+
+        list.innerHTML = customersHtml || '<div class="customer-empty">Chưa có khách hàng</div>';
     }
-
-    const customersHtml = customers.map(c => {
-        const phone = c.phone || '-';
-        const secondary = c.email || c.address || '-';
-        const customerId = c.id ?? '';
-        return `
-        <div class="customer-item"
-            data-customer-id="${customerId}"
-            data-customer-name="${escapeHtml(c.name || '')}"
-            data-customer-phone="${escapeHtml(phone)}">
-            <div class="customer-info">
-                <p class="customer-name">
-                    <button type="button" class="customer-name-btn" data-customer-id="${customerId}" onclick="openCustomerDetailFromButton(event)">
-                        ${escapeHtml(c.name || 'Kh×ch h×ng')}
-                    </button>
-                </p>
-                <p class="customer-phone">${escapeHtml(phone)}</p>
-            </div>
-            <div class="customer-meta">
-                <span class="customer-phone">${escapeHtml(phone)}</span>
-                <span class="customer-sub">${escapeHtml(secondary)}</span>
-            </div>
-        </div>
-        `;
-    }).join('');
-
-    list.innerHTML = customersHtml || '<div class="customer-empty">Chua c× kh×ch h×ng</div>';
 }
 
 function applyCustomerFilter() {
@@ -1276,16 +1413,28 @@ async function createOrder(isPaid) {
     // If shipping (COD) selected in UI, populate shipping object and set paymentMethod to COD
     try {
         // Read checkout customer fields (always visible) and apply locally for receipt
+        // If a member is already selected (selectedCustomer.id > 0), merge the
+        // entered checkout fields into the existing selectedCustomer so we don't
+        // overwrite the member id or their points. Only create an anonymous
+        // customer (id:0) when there is no selected member.
         const cname = document.getElementById('checkoutCustomerName')?.value?.trim() || '';
         const cphone = document.getElementById('checkoutCustomerPhone')?.value?.trim() || '';
         const caddr = document.getElementById('checkoutCustomerAddress')?.value?.trim() || '';
         if (cname || cphone || caddr) {
-            selectedCustomer = {
-                id: 0,
-                name: cname || (selectedCustomer?.name || 'Khách lẻ'),
-                phone: cphone || (selectedCustomer?.phone || '-'),
-                address: caddr || (selectedCustomer?.address || '')
-            };
+            if (selectedCustomer && Number.isFinite(Number(selectedCustomer.id)) && Number(selectedCustomer.id) > 0) {
+                selectedCustomer = Object.assign({}, selectedCustomer, {
+                    name: cname || selectedCustomer.name,
+                    phone: cphone || selectedCustomer.phone,
+                    address: caddr || selectedCustomer.address
+                });
+            } else {
+                selectedCustomer = {
+                    id: 0,
+                    name: cname || (selectedCustomer?.name || 'Khách lẻ'),
+                    phone: cphone || (selectedCustomer?.phone || '-'),
+                    address: caddr || (selectedCustomer?.address || '')
+                };
+            }
         }
     } catch (e) {
         console.warn('Could not read shipping fields', e);
@@ -1324,13 +1473,37 @@ async function createOrder(isPaid) {
         }
         await loadPromotionIndex(true);
         filterProducts(document.getElementById('searchInput')?.value || '');
-        clearCart(true);
+        // Clear items but keep the selected customer (so loyalty points and account association remain)
+        clearCart(false);
+        // Ensure checkout input fields are cleared after order creation
+        try {
+            const cnameEl = document.getElementById('checkoutCustomerName');
+            const cphoneEl = document.getElementById('checkoutCustomerPhone');
+            const caddrEl = document.getElementById('checkoutCustomerAddress');
+            if (cnameEl) cnameEl.value = '';
+            if (cphoneEl) cphoneEl.value = '';
+            if (caddrEl) caddrEl.value = '';
+        } catch (e) {
+            console.warn('Failed to clear checkout inputs', e);
+        }
         if (exchangeDraft) {
             sessionStorage.removeItem('exchangeDraft');
             exchangeDraft = null;
         }
         saveActiveInvoiceState();
-        queuePersistCartState();
+        try {
+            await persistCartStateNow();
+        } catch (err) {
+            console.warn('persistCartStateNow failed', err);
+            queuePersistCartState();
+        }
+        // Refresh authoritative customer data so the UI reflects the correct
+        // point balance after creating the order (prevents showing stale/zero).
+        try {
+            await refreshSelectedCustomerPointsForOrder(data);
+        } catch (e) {
+            console.warn('refreshSelectedCustomerPointsForOrder after createOrder failed', e);
+        }
         return data;
     } catch (err) {
         showPopup('Lỗi kết nối khi tạo đơn hàng.', { type: 'error' });
@@ -1482,9 +1655,34 @@ async function payOrder(orderId) {
         }
         alert('Đã thanh toán chuyển khoản được xác nhận.');
         hideTransferQrModal();
-        clearCart(true);
+        // After confirming transfer payment, clear items but keep selected customer
+        clearCart(false);
         saveActiveInvoiceState();
-        queuePersistCartState();
+        try {
+            const cnameEl = document.getElementById('checkoutCustomerName');
+            const cphoneEl = document.getElementById('checkoutCustomerPhone');
+            const caddrEl = document.getElementById('checkoutCustomerAddress');
+            if (cnameEl) cnameEl.value = '';
+            if (cphoneEl) cphoneEl.value = '';
+            if (caddrEl) caddrEl.value = '';
+        } catch (e) {
+            console.warn('Failed to clear checkout inputs after payOrder', e);
+        }
+        try {
+            await persistCartStateNow();
+        } catch (err) {
+            console.warn('persistCartStateNow failed', err);
+            queuePersistCartState();
+        }
+        // Refresh authoritative customer data after confirming payment so UI
+        // immediately reflects the correct point balance.
+        try {
+            if (selectedCustomer && Number.isFinite(Number(selectedCustomer.id)) && Number(selectedCustomer.id) > 0) {
+                await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+            }
+        } catch (e) {
+            console.warn('refreshCustomerDetailFromApi after payOrder failed', e);
+        }
     } catch (err) {
         alert('Lỗi kết nối khi xác nhận thanh toán.');
     }
@@ -1510,6 +1708,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (closeBtn) closeBtn.addEventListener('click', hideTransferQrModal);
     if (cancelBtn) cancelBtn.addEventListener('click', hideTransferQrModal);
+    // Delegate cart item remove clicks to avoid relying on inline onclick handlers
+    try {
+        const cartContainer = document.getElementById('cartItems');
+        if (cartContainer) {
+            cartContainer.addEventListener('click', (evt) => {
+                const btn = evt.target && evt.target.closest ? evt.target.closest('.cart-item-remove') : null;
+                if (!btn) return;
+                evt.preventDefault();
+                const row = btn.closest('.cart-row');
+                if (!row) return;
+                const idx = Array.prototype.indexOf.call(cartContainer.children, row);
+                if (!Number.isFinite(idx) || idx < 0) return;
+                if (row.classList.contains('return-item')) {
+                    removeReturnItem(idx);
+                } else {
+                    removeFromCart(idx);
+                }
+            });
+        }
+    } catch (e) {
+        console.warn('cart remove delegation failed', e);
+    }
     // shipping fields toggle behavior
     // shipping toggle removed; checkout uses direct customer input fields now
 });
@@ -2328,7 +2548,7 @@ function renderCart() {
                 <span>${formatPrice(item.productPrice * item.quantity)}</span>
                 <div class="cart-item-actions">
                     <span class="cart-item-locked">Đổi</span>
-                    <button class="cart-item-remove" onclick="removeReturnItem(${idx})">×</button>
+                    <button class="cart-item-remove">×</button>
                 </div>
             </div>
         `;
@@ -2376,7 +2596,7 @@ function renderCart() {
             <span>${item.unit || '-'}</span>
             <span>${formatPrice(item.productPrice)}</span>
             <span>${formatPrice(item.productPrice * item.quantity)}</span>
-            <button class="cart-item-remove" onclick="removeFromCart(${idx})">×</button>
+            <button class="cart-item-remove">×</button>
         </div>
     `;
     }).join('');
@@ -2527,6 +2747,10 @@ function openCustomerDetailFromButton(evt) {
 function clearSelectedCustomer(options = {}) {
     const { showList = true } = options;
     selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+    try {
+        localStorage.removeItem(getSelectedCustomerStorageKey());
+        localStorage.removeItem('selected_customer_state');
+    } catch (e) {}
     const selectedView = document.getElementById('selectedCustomer');
     if (selectedView) {
         selectedView.textContent = 'Khách lẻ';
@@ -2610,6 +2834,93 @@ function updateTotal() {
         setDefaultTierByTotal(total);
     } catch (err) {
         console.warn('[updateTotal] error', err);
+    }
+}
+
+// Visually show points added to the currently selected customer in checkout
+function showPointsAdded(pointsAdded) {
+    try {
+        pointsAdded = Number(pointsAdded) || 0;
+        if (pointsAdded <= 0) return;
+        const pointsCurrentEl = document.getElementById('checkoutPointsCurrent');
+        if (!pointsCurrentEl) return;
+
+        const basePoints = getCustomerPoints(selectedCustomer) || 0;
+        const newTotal = basePoints + pointsAdded;
+
+        // Update in-memory selectedCustomer so subsequent operations see the new total
+        try {
+            if (!selectedCustomer) selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+            selectedCustomer.totalPoints = Number.isFinite(Number(newTotal)) ? Number(newTotal) : newTotal;
+            selectedCustomer.monthlyPoints = (Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : 0) + pointsAdded;
+        } catch (e) {}
+
+        // update displayed current points immediately
+        pointsCurrentEl.textContent = formatCompactNumber(newTotal);
+        // also update detail view if open
+        const detailPointsEl = document.getElementById('detailCustomerPoints');
+        if (detailPointsEl) detailPointsEl.textContent = formatCompactNumber(newTotal);
+
+        // persist updated selected customer state locally so points survive refresh
+        try { persistSelectedCustomerState(); } catch (e) { console.warn('[showPointsAdded] persistSelectedCustomerState failed', e); }
+
+        // show a transient badge with the added points
+        const badge = document.createElement('span');
+        badge.className = 'points-added-badge';
+        badge.textContent = ` +${formatCompactNumber(pointsAdded)}`;
+        pointsCurrentEl.insertAdjacentElement('afterend', badge);
+
+        // fade out and remove after a short delay
+        setTimeout(() => badge.classList.add('points-added-fade'), 2100);
+        setTimeout(() => { try { badge.remove(); } catch (e) {} }, 2600);
+    } catch (e) {
+        console.warn('showPointsAdded failed', e);
+    }
+}
+
+function normalizePhoneForOrder(phone) {
+    if (!phone) return '';
+    return String(phone).replace(/\D/g, '');
+}
+
+async function refreshSelectedCustomerPointsForOrder(order) {
+    if (!order) return;
+    const normalizedOrderPhone = normalizePhoneForOrder(order.customerPhone || order.customer_phone || '');
+    const normalizedSelectedPhone = normalizePhoneForOrder(selectedCustomer?.phone || selectedCustomer?.customerPhone || '');
+
+    if (order.customerId) {
+        await refreshCustomerDetailFromApi(order.customerId);
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
+
+    if (selectedCustomer?.id && normalizedSelectedPhone && normalizedOrderPhone && normalizedSelectedPhone === normalizedOrderPhone) {
+        await refreshCustomerDetailFromApi(selectedCustomer.id);
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
+
+    if (normalizedOrderPhone) {
+        await refreshSelectedCustomerByPhone(normalizedOrderPhone);
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
+}
+
+async function refreshSelectedCustomerByPhone(normalizedPhone) {
+    if (!normalizedPhone) return;
+    try {
+        const response = await fetch(`${API_BASE}/customers`, {
+            headers: getAuthHeaders()
+        });
+        if (!response.ok) return;
+        const customersList = await response.json();
+        if (!Array.isArray(customersList)) return;
+        const customer = customersList.find(c => normalizePhoneForOrder(c.phone) === normalizedPhone);
+        if (!customer || !customer.id) return;
+        applyCustomerSelection(customer, { openDetail: false });
+    } catch (err) {
+        console.warn('refreshSelectedCustomerByPhone failed', err);
     }
 }
 
@@ -3109,13 +3420,17 @@ function setupEventListeners() {
             const res = await createOrder(false);
             if (res) {
                 showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
-                // clear checkout customer inputs
-                const cnameEl = document.getElementById('checkoutCustomerName');
-                const cphoneEl = document.getElementById('checkoutCustomerPhone');
-                const caddrEl = document.getElementById('checkoutCustomerAddress');
-                if (cnameEl) cnameEl.value = 'Khách lẻ';
-                if (cphoneEl) cphoneEl.value = '';
-                if (caddrEl) caddrEl.value = '';
+                // clear only checkout input fields (keep selectedCustomer so points persist)
+                try {
+                    const cnameEl = document.getElementById('checkoutCustomerName');
+                    const cphoneEl = document.getElementById('checkoutCustomerPhone');
+                    const caddrEl = document.getElementById('checkoutCustomerAddress');
+                    if (cnameEl) cnameEl.value = 'Khách lẻ';
+                    if (cphoneEl) cphoneEl.value = '';
+                    if (caddrEl) caddrEl.value = '';
+                } catch (e) {
+                    console.warn('Failed to clear checkout inputs', e);
+                }
             }
             return;
         }
@@ -3124,12 +3439,16 @@ function setupEventListeners() {
         const res = await createOrder(false);
         if (res) {
             showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
-            const cnameEl = document.getElementById('checkoutCustomerName');
-            const cphoneEl = document.getElementById('checkoutCustomerPhone');
-            const caddrEl = document.getElementById('checkoutCustomerAddress');
-            if (cnameEl) cnameEl.value = 'Khách lẻ';
-            if (cphoneEl) cphoneEl.value = '';
-            if (caddrEl) caddrEl.value = '';
+            try {
+                const cnameEl = document.getElementById('checkoutCustomerName');
+                const cphoneEl = document.getElementById('checkoutCustomerPhone');
+                const caddrEl = document.getElementById('checkoutCustomerAddress');
+                if (cnameEl) cnameEl.value = 'Khách lẻ';
+                if (cphoneEl) cphoneEl.value = '';
+                if (caddrEl) caddrEl.value = '';
+            } catch (e) {
+                console.warn('Failed to clear checkout inputs', e);
+            }
         }
     });
 
@@ -3426,7 +3745,7 @@ function renderOrderTrackingResult(order) {
         ${deliveryHtml}
         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
         ${itemsHtml}
-        ${order.customerId && !['CANCELLED','RECEIVED'].includes(String(order.status || '').toUpperCase()) ? `<div style="margin-top:12px"><button id="receiveOrderDetailBtn" class="ghost-btn">Đã nhận được hàng</button></div>` : ''}
+        ${((order.customerId || order.customerPhone) && !['CANCELLED','RECEIVED'].includes(String(order.status || '').toUpperCase())) ? `<div style="margin-top:12px"><button id="receiveOrderDetailBtn" class="ghost-btn">Đã nhận được hàng</button></div>` : ''}
     `;
 
     const receiveBtn = el.querySelector('#receiveOrderDetailBtn');
@@ -3434,6 +3753,7 @@ function renderOrderTrackingResult(order) {
         receiveBtn.addEventListener('click', async () => {
             const confirmed = await confirmOrderReceived(order.id);
             if (confirmed) {
+                await refreshSelectedCustomerPointsForOrder(order);
                 await loadOrdersForModal(getCurrentUserId());
             }
         });
@@ -3444,7 +3764,7 @@ function canShowReceiveButton(order) {
     if (!order) return false;
     const status = String(order.status || '').trim().toUpperCase();
     if (status === 'CANCELLED' || status === 'RECEIVED') return false;
-    return order.customerId != null;
+    return order.customerId != null || (order.customerPhone && String(order.customerPhone).trim().length > 0);
 }
 
 async function confirmOrderReceived(orderId) {
@@ -3461,13 +3781,36 @@ async function confirmOrderReceived(orderId) {
     for (const url of endpoints) {
         try {
             const res = await fetch(url, { method: 'POST', headers });
+            const contentType = res.headers.get('content-type') || '';
+            const text = await res.text();
+            let body = null;
+            if (contentType.includes('application/json')) {
+                try {
+                    body = JSON.parse(text || '{}');
+                } catch (err) {
+                    body = null;
+                }
+            }
+
             if (res.ok) {
-                alert('Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
+                if (body && body.message) {
+                    const details = body.pointsAdded != null ? `\nĐã cộng: ${body.pointsAdded} điểm` : '';
+                    alert(`${body.message || 'Đã xác nhận nhận hàng'}${details}`);
+                    if (body && body.pointsAdded != null) {
+                        try { showPointsAdded(Number(body.pointsAdded)); } catch (e) {}
+                    }
+                } else {
+                    alert(text || 'Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
+                }
                 return true;
             }
+
             if (res.status !== 404) {
-                const msg = await res.text();
-                alert(`Không thể xác nhận đơn hàng: ${msg || res.statusText}`);
+                if (body && body.message) {
+                    alert(`Không thể xác nhận đơn hàng: ${body.message}`);
+                } else {
+                    alert(`Không thể xác nhận đơn hàng: ${text || res.statusText}`);
+                }
                 return false;
             }
         } catch (err) {
@@ -3507,8 +3850,10 @@ function saveActiveInvoiceState() {
     const invoice = getActiveInvoice();
     if (!invoice) return;
     invoice.cart = cloneCart(cart);
+    // Persist minimal customer info only. Avoid saving point counts so
+    // saved drafts cannot overwrite server totals on restore.
     invoice.selectedCustomer = selectedCustomer
-        ? { ...selectedCustomer }
+        ? { id: selectedCustomer.id || 0, name: selectedCustomer.name || 'Khách lẻ', phone: selectedCustomer.phone || '-' }
         : { id: 0, name: 'Khách lẻ', phone: '-' };
     invoice.paymentMethod = currentPaymentMethod;
     invoice.cashReceived = document.getElementById('cashReceivedInput')?.value || '';
@@ -3552,7 +3897,17 @@ function applyInvoiceState(invoice) {
     updatePaymentPanels();
 
     if (invoice.selectedCustomer && invoice.selectedCustomer.id > 0) {
-        applyCustomerSelection(invoice.selectedCustomer, { openDetail: false });
+        // If the saved invoice contains an explicit positive point value,
+        // apply it. Otherwise (missing or zero), fetch authoritative data
+        // from server to avoid overwriting a real existing point balance
+        // with a stale/zero value saved in the draft.
+        const sc = invoice.selectedCustomer;
+        const scPoints = Number(sc.totalPoints ?? sc.total_points ?? NaN);
+        if (Number.isFinite(scPoints) && scPoints > 0) {
+            applyCustomerSelection(sc, { openDetail: false });
+        } else {
+            try { refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
+        }
     } else {
         clearSelectedCustomer({ showList: false });
     }
@@ -3805,7 +4160,7 @@ function renderOrdersInModal(orders) {
                         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
-                        ${o.customerId && !['CANCELLED','RECEIVED'].includes(String(o.status || '').toUpperCase()) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
+                        ${((o.customerId || o.customerPhone) && !['CANCELLED','RECEIVED'].includes(String(o.status || '').toUpperCase())) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
                         <button class="ghost-btn small view-order-btn" data-order-id="${o.id}">Xem</button>
                         ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-btn" data-order-id="${o.id}">Hủy</button>` : ''}
                     </div>
@@ -3842,8 +4197,10 @@ function renderOrdersInModal(orders) {
         b.addEventListener('click', async () => {
             const id = b.getAttribute('data-order-id');
             if (!id) return;
+            const order = orders.find(o => String(o.id) === String(id));
             const confirmed = await confirmOrderReceived(id);
             if (confirmed) {
+                await refreshSelectedCustomerPointsForOrder(order);
                 await loadOrdersForModal(getCurrentUserId());
             }
         });
@@ -4052,14 +4409,90 @@ function removeSavedInvoice(draftId) {
 function applyCustomerSelection(customer, options = {}) {
     const { openDetail = false, highlightEvent = null } = options;
     const effectiveTier = getEffectiveTier(customer);
+    // Preserve existing in-memory points when the provided `customer` object
+    // doesn't include point fields (this can happen when restoring saved
+    // invoice/cart state which normalizes out point counts). If the incoming
+    // customer lacks `totalPoints`/`monthlyPoints` but it's the same customer
+    // currently selected, keep the previous values to avoid clobbering with 0.
+    const isSameCustomer = selectedCustomer && selectedCustomer.id === customer.id;
+    const existingTotal = isSameCustomer ? (Number.isFinite(Number(selectedCustomer.totalPoints)) ? Number(selectedCustomer.totalPoints) : selectedCustomer.totalPoints) : undefined;
+    const existingMonthly = isSameCustomer ? (Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : selectedCustomer.monthlyPoints) : undefined;
+
+    // Prefer explicit incoming values when present. If missing, try to use
+    // cached customer in-memory, then localStorage fallback, then existing
+    // selectedCustomer (only when same customer). This avoids clobbering the
+    // UI with 0 when the restored invoice didn't include point counts.
+    let incomingTotal = (customer.totalPoints ?? customer.total_points);
+    let incomingMonthly = (customer.monthlyPoints ?? customer.monthly_points);
+    let resolvedTotal = null;
+    let resolvedMonthly = null;
+
+    if (incomingTotal == null || incomingMonthly == null) {
+        // Try in-memory cache of `customers` list
+        try {
+            const cached = (customers || []).find(c => c && c.id === customer.id && (c.totalPoints != null || c.total_points != null));
+            if (cached) {
+                incomingTotal = incomingTotal == null ? (cached.totalPoints ?? cached.total_points) : incomingTotal;
+                incomingMonthly = incomingMonthly == null ? (cached.monthlyPoints ?? cached.monthly_points) : incomingMonthly;
+                // mark source for debugging
+                console.debug('[applyCustomerSelection] using in-memory cached points for customer', customer.id);
+            } else {
+                // Try localStorage fallback
+                try {
+                    const raw = localStorage.getItem('customer_points_' + customer.id);
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (parsed) {
+                            incomingTotal = incomingTotal == null ? (Number(parsed.totalPoints) || 0) : incomingTotal;
+                            incomingMonthly = incomingMonthly == null ? (Number(parsed.monthlyPoints) || 0) : incomingMonthly;
+                            console.debug('[applyCustomerSelection] using localStorage fallback points for customer', customer.id);
+                        }
+                    }
+                } catch (e) {
+                    // ignore localStorage parse errors
+                }
+            }
+        } catch (e) {
+            console.warn('[applyCustomerSelection] failed to lookup cached/local points', e);
+        }
+    }
+
+    resolvedTotal = incomingTotal != null ? incomingTotal : (existingTotal != null ? existingTotal : 0);
+    resolvedMonthly = incomingMonthly != null ? incomingMonthly : (existingMonthly != null ? existingMonthly : 0);
+
     selectedCustomer = {
         id: customer.id,
         name: customer.name,
         phone: customer.phone,
-        totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
-        monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
-        tier: effectiveTier || customer.tier || ''
+        totalPoints: resolvedTotal,
+        monthlyPoints: resolvedMonthly,
+        tier: effectiveTier || customer.tier || (isSameCustomer ? selectedCustomer.tier : '')
     };
+
+    // Persist the current authoritative points locally so a subsequent
+    // page reload can recover a recent known-good value if the server
+    // endpoint is temporarily unreachable.
+    try {
+        if (selectedCustomer && selectedCustomer.id && Number(selectedCustomer.id) > 0) {
+            const payload = {
+                totalPoints: selectedCustomer.totalPoints || 0,
+                monthlyPoints: selectedCustomer.monthlyPoints || 0,
+                updatedAt: new Date().toISOString()
+            };
+            localStorage.setItem('customer_points_' + selectedCustomer.id, JSON.stringify(payload));
+            persistSelectedCustomerState();
+        }
+    } catch (e) {
+        console.warn('[applyCustomerSelection] failed to persist selectedCustomer points', e);
+    }
+
+    // If the passed customer is missing authoritative point fields, refresh
+    // the full customer details in the background so the UI can be updated
+    // with the server's values when available.
+    if (customer && customer.id && (customer.totalPoints == null && customer.total_points == null)) {
+        // fire-and-forget
+        try { refreshCustomerDetailFromApi(customer.id).catch(() => {}); } catch (e) {}
+    }
 
     document.querySelectorAll('.customer-item').forEach(item => {
         item.classList.remove('active');
@@ -5473,10 +5906,26 @@ async function refreshCustomerDetailFromApi(customerId) {
         if (index >= 0) {
             customers[index] = customer;
         }
-        if (selectedCustomer?.id === customerId) {
-            applyCustomerSelection(customer, { openDetail: false });
+        // persist fetched points to localStorage as a fallback for UI restores
+        try {
+            if (customer && customer.id) {
+                const payload = {
+                    totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
+                    monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
+                    updatedAt: new Date().toISOString()
+                };
+                localStorage.setItem('customer_points_' + customer.id, JSON.stringify(payload));
+            }
+        } catch (e) {
+            console.warn('[refreshCustomerDetailFromApi] failed to persist points to localStorage', e);
         }
+        // Always apply the authoritative customer data we fetched so the UI
+        // reflects the server state (points, tier, etc.). This prevents
+        // situations where a minimal saved invoice/customer object would
+        // temporarily overwrite or zero the displayed points.
+        try { applyCustomerSelection(customer, { openDetail: false }); console.debug('[refreshCustomerDetailFromApi] applied customer', customerId); } catch (e) { console.warn('[refreshCustomerDetailFromApi] applyCustomerSelection failed', e); }
     } catch (err) {
+        console.warn('[refreshCustomerDetailFromApi] failed to fetch customer', customerId, err);
     }
 }
 

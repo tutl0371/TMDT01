@@ -30,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
@@ -154,6 +155,19 @@ public class OrderController {
         ));
     }
 
+    @DeleteMapping("/cart/{userId}")
+    public ResponseEntity<?> clearUserCart(@PathVariable("userId") Long userId) {
+        if (userId == null) {
+            return ResponseEntity.badRequest().body("User id is required");
+        }
+        try {
+            userCartService.clearCartState(userId);
+            return ResponseEntity.ok(Map.of("message", "Cleared cart state for user", "userId", userId));
+        } catch (Exception ex) {
+            return ResponseEntity.status(500).body(Map.of("message", "Failed to clear cart state", "error", ex.getMessage()));
+        }
+    }
+
     @PostMapping("/{id}/pay")
     @Transactional
     public ResponseEntity<?> payOrder(@PathVariable("id") Long orderId,
@@ -187,13 +201,9 @@ public class OrderController {
         }
         paymentRepository.save(payment);
 
-        if (order.getCustomerId() != null) {
-            customerClient.addPoints(
-                    order.getCustomerId(),
-                    order.getTotalAmount(),
-                    "ORDER_" + order.getId()
-            );
-        }
+        // Points will be awarded when order is confirmed as RECEIVED.
+        // Do not add points at payment time to avoid awarding points
+        // before the customer actually receives the goods.
 
         return ResponseEntity.ok("Payment confirmed");
     }
@@ -391,16 +401,15 @@ public class OrderController {
             payment.setPaidAt(LocalDateTime.now());
             paymentRepository.save(payment);
 
-            if (customer != null) {
-                if (pointsUsed > 0) {
-                    customerClient.redeemPoints(customer.getId(), pointsUsed);
+                if (customer != null) {
+                    if (pointsUsed > 0) {
+                        String ref = "ORDER_REDEEM_" + savedOrder.getId();
+                        customerClient.redeemPoints(customer.getId(), pointsUsed, ref);
+                    }
+                    // Points are awarded only when the order is confirmed as
+                    // RECEIVED (customer confirms they received goods). This
+                    // prevents awarding points before delivery/receipt.
                 }
-                customerClient.addPoints(
-                        customer.getId(),
-                        total,
-                        "ORDER_" + savedOrder.getId()
-                );
-            }
         }
 
         try {
@@ -643,9 +652,17 @@ public class OrderController {
         }
 
         if (order.getCustomerId() == null && order.getCustomerPhone() != null && !order.getCustomerPhone().isBlank()) {
-            List<Long> customerIds = customerClient.searchCustomerIds(order.getCustomerPhone());
-            if (customerIds != null && customerIds.size() == 1) {
-                order.setCustomerId(customerIds.get(0));
+            String normalizedPhone = PhoneUtils.normalize(order.getCustomerPhone().trim());
+            order.setCustomerPhone(normalizedPhone);
+            CustomerClient.CustomerSnapshot customer = customerClient.upsertCustomer(
+                    null,
+                    normalizedPhone,
+                    null,
+                    null
+            );
+            if (customer != null && customer.getId() != null) {
+                order.setCustomerId(customer.getId());
+                orderRepository.save(order);
             }
         }
 
@@ -653,15 +670,41 @@ public class OrderController {
             return ResponseEntity.badRequest().body("Không thể cộng điểm vì đơn hàng chưa có khách hàng liên kết");
         }
 
-        customerClient.addPoints(
-                order.getCustomerId(),
-                order.getTotalAmount(),
-                "ORDER_RECEIVED_" + order.getId()
-        );
+        java.util.List<String> reasonsToCheck = java.util.List.of("ORDER_" + order.getId(), "ORDER_RECEIVED_" + order.getId());
+        boolean alreadyAwarded = false;
+        try {
+            alreadyAwarded = customerClient.hasPointHistoryForReferences(order.getCustomerId(), reasonsToCheck);
+        } catch (Exception ignore) {
+        }
+
+        int pointsAdded = 0;
+        if (!alreadyAwarded) {
+            pointsAdded = customerClient.addPoints(
+                    order.getCustomerId(),
+                    order.getTotalAmount(),
+                    "ORDER_RECEIVED_" + order.getId()
+            );
+            if (pointsAdded < 0) {
+                return ResponseEntity.status(500).body(Map.of(
+                        "message", "Không thể cộng điểm cho khách hàng. Vui lòng kiểm tra dịch vụ khách hàng.",
+                        "customerId", order.getCustomerId(),
+                        "customerPhone", order.getCustomerPhone(),
+                        "orderId", order.getId()
+                ));
+            }
+        } else {
+            pointsAdded = 0;
+        }
 
         order.setStatus("RECEIVED");
         orderRepository.save(order);
-        return ResponseEntity.ok("Order confirmed as received");
+        return ResponseEntity.ok(Map.of(
+                "message", "Order confirmed as received",
+                "pointsAdded", pointsAdded,
+                "customerId", order.getCustomerId(),
+                "customerPhone", order.getCustomerPhone(),
+                "orderId", order.getId()
+        ));
     }
 
     @PostMapping("/attach-phone")

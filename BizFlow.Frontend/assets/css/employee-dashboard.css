@@ -767,6 +767,26 @@
     box-shadow: 0 10px 18px rgba(50, 80, 170, 0.12);
 }
 
+/* Badge to show points added to current customer (transient) */
+.points-added-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    background: #e6f9ed;
+    color: #0b8a34;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    vertical-align: middle;
+    opacity: 1;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.points-added-fade {
+    opacity: 0;
+    transform: translateY(-6px);
+}
+
 .empty-icon svg {
     width: 32px;
     height: 32px;

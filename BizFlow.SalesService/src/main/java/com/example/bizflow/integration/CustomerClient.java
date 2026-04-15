@@ -1,15 +1,19 @@
 package com.example.bizflow.integration;
 
+import com.example.bizflow.entity.CustomerTier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import com.example.bizflow.entity.CustomerTier;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
@@ -17,6 +21,8 @@ import java.util.Map;
 
 @Service
 public class CustomerClient {
+
+    private static final Logger logger = LoggerFactory.getLogger(CustomerClient.class);
 
     private final RestTemplate restTemplate;
     private final String baseUrl;
@@ -42,9 +48,9 @@ public class CustomerClient {
         }
     }
 
-    public void addPoints(Long customerId, BigDecimal totalAmount, String reference) {
+    public int addPoints(Long customerId, BigDecimal totalAmount, String reference) {
         if (customerId == null || totalAmount == null) {
-            return;
+            return -1;
         }
         try {
             Map<String, Object> payload = Map.of(
@@ -52,21 +58,41 @@ public class CustomerClient {
                     "totalAmount", totalAmount,
                     "reference", reference
             );
-            restTemplate.postForEntity(baseUrl + "/internal/customers/points/add", payload, Void.class);
-        } catch (org.springframework.web.client.RestClientException ignored) {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(payload, headers);
+            @SuppressWarnings("unchecked")
+            ResponseEntity<java.util.Map<String, Object>> response = restTemplate.postForEntity(
+                    baseUrl + "/internal/customers/points/add",
+                    entity,
+                    (Class<java.util.Map<String, Object>>)(Class<?>)java.util.Map.class
+            );
+            if (response.getStatusCode().is2xxSuccessful()) {
+                java.util.Map<String, Object> body = response.getBody();
+                if (body != null && body.get("pointsAdded") instanceof Number) {
+                    return ((Number) body.get("pointsAdded")).intValue();
+                }
+                // fallback: compute points same as server rule
+                int points = totalAmount.divide(BigDecimal.valueOf(1000), java.math.RoundingMode.DOWN).intValue();
+                return Math.max(0, points);
+            }
+            logger.warn("Failed to add points for customer {}: status={} body={}", customerId, response.getStatusCode(), response.getBody());
+        } catch (org.springframework.web.client.RestClientException ex) {
+            logger.warn("Failed to add points for customer {} due to exception", customerId, ex);
         }
+        return -1;
     }
 
     @SuppressWarnings("unchecked")
-    public int redeemPoints(Long customerId, int points) {
+    public int redeemPoints(Long customerId, int points, String reference) {
         if (customerId == null || points <= 0) {
             return 0;
         }
         try {
-            Map<String, Object> payload = Map.of(
-                    "customerId", customerId,
-                    "points", points
-            );
+            java.util.Map<String, Object> payload = new java.util.HashMap<>();
+            payload.put("customerId", customerId);
+            payload.put("points", points);
+            if (reference != null) payload.put("reference", reference);
             ResponseEntity<Map<String, Object>> response = restTemplate.postForEntity(
                     baseUrl + "/internal/customers/points/redeem",
                     payload,
@@ -115,6 +141,7 @@ public class CustomerClient {
             );
             return response.getBody();
         } catch (org.springframework.web.client.RestClientException ex) {
+            logger.warn("Failed to upsert customer by phone {}", phone, ex);
             return null;
         }
     }
@@ -137,6 +164,25 @@ public class CustomerClient {
         } catch (org.springframework.web.client.RestClientException ex) {
             return null;
         }
+    }
+
+    public boolean hasPointHistoryForReferences(Long customerId, java.util.List<String> references) {
+        if (customerId == null || references == null || references.isEmpty()) return false;
+        try {
+            ResponseEntity<PointHistoryEntry[]> response = restTemplate.getForEntity(
+                    baseUrl + "/internal/customers/" + customerId + "/points/history",
+                    PointHistoryEntry[].class
+            );
+            PointHistoryEntry[] body = response.getBody();
+            if (body == null) return false;
+            for (PointHistoryEntry ph : body) {
+                if (ph == null || ph.getReason() == null) continue;
+                if (references.contains(ph.getReason())) return true;
+            }
+        } catch (org.springframework.web.client.RestClientException ex) {
+            logger.warn("Failed to fetch point history for customer {}", customerId, ex);
+        }
+        return false;
     }
 
     private String normalizeBaseUrl(String raw) {
@@ -219,5 +265,24 @@ public class CustomerClient {
         public void setTier(CustomerTier tier) {
             this.tier = tier;
         }
+    }
+
+    public static class PointHistoryEntry {
+        private Long id;
+        private Integer points;
+        private String reason;
+        private String createdAt;
+
+        public Long getId() { return id; }
+        public void setId(Long id) { this.id = id; }
+
+        public Integer getPoints() { return points; }
+        public void setPoints(Integer points) { this.points = points; }
+
+        public String getReason() { return reason; }
+        public void setReason(String reason) { this.reason = reason; }
+
+        public String getCreatedAt() { return createdAt; }
+        public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
     }
 }
