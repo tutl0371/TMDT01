@@ -142,8 +142,11 @@ function renderClaimDetail(claim) {
         { status: 'PROCESSING', label: 'Đang sửa', icon: '🔧', date: null },
         { status: 'COMPLETED', label: 'Hoàn tất', icon: '✅', date: claim.completedAt }
     ];
-    const statusOrder = ['PENDING', 'RECEIVED', 'PROCESSING', 'COMPLETED', 'REJECTED'];
-    const currentIdx = statusOrder.indexOf(claim.status);
+    let currentIdx = -1;
+    if (claim.status === 'PENDING') currentIdx = 0;
+    else if (claim.status === 'RECEIVED') currentIdx = 1;
+    else if (claim.status === 'PROCESSING') currentIdx = 2;
+    else if (['COMPLETED', 'REJECTED', 'REPAIRED', 'REPLACED'].includes(claim.status)) currentIdx = 3;
 
     const timeline = document.getElementById('claimTimeline');
     timeline.innerHTML = steps.map((step, i) => {
@@ -366,6 +369,15 @@ async function submitWarrantyForm() {
     const idx = parseInt(radio.dataset.index);
     const item = selectedOrderForWarranty.items[idx];
 
+    const submitBtn = document.getElementById('submitWarrantyForm');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<span class="loading-spinner"></span> Đang tạo...';
+    submitBtn.disabled = true;
+
+    // Remove retry button if it exists
+    const existingRetry = document.getElementById('retryWarrantyBtn');
+    if (existingRetry) existingRetry.remove();
+
     try {
         const res = await fetch(`${API_BASE}/warranties/claims`, {
             method: 'POST',
@@ -389,10 +401,32 @@ async function submitWarrantyForm() {
             // Switch to claims tab
             document.querySelector('.tab-btn[data-tab="claims"]').click();
         } else {
-            const msg = await res.text();
-            alert(msg || 'Lỗi tạo phiếu bảo hành');
+            let msg = await res.text();
+            try {
+                const err = JSON.parse(msg);
+                if (err.status === 404) msg = "Không tìm thấy dữ liệu";
+                else if (err.status === 500) msg = "Lỗi server, vui lòng thử lại";
+                else msg = err.message || msg;
+            } catch (e) {}
+            alert(`❌ Không thể tạo bảo hành. ${msg}`);
+
+            // Add retry button
+            const retryBtn = document.createElement('button');
+            retryBtn.id = 'retryWarrantyBtn';
+            retryBtn.className = 'primary-btn';
+            retryBtn.style.backgroundColor = '#f59e0b';
+            retryBtn.style.marginLeft = '8px';
+            retryBtn.innerHTML = '🔄 Thử lại';
+            retryBtn.onclick = submitWarrantyForm;
+            submitBtn.parentNode.appendChild(retryBtn);
         }
-    } catch (e) { alert('Lỗi kết nối'); console.error(e); }
+    } catch (e) { 
+        alert('❌ Không thể tạo bảo hành. Lỗi kết nối'); 
+        console.error(e); 
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
 }
 
 function resetWarrantyForm() {

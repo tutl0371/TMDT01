@@ -21,7 +21,7 @@ RUN mkdir -p /root/.m2 && \
 COPY pom.xml .
 RUN mvn dependency:go-offline -B || mvn dependency:go-offline -B || mvn dependency:resolve -B
 COPY src src
-RUN mvn clean package -DskipTests -B
+RUN mvn clean package -DskipTests -B -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3 || mvn clean package -DskipTests -B -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.count=3
 
 # Stage 2: Runtime
 FROM eclipse-temurin:21-jre

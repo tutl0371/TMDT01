@@ -289,6 +289,15 @@ async function submitShipForm() {
         return;
     }
 
+    const submitBtn = document.getElementById('submitShipForm');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.innerHTML = '<span class="loading-spinner"></span> Đang tạo...';
+    submitBtn.disabled = true;
+
+    // Remove retry button if it exists
+    const existingRetry = document.getElementById('retryShipBtn');
+    if (existingRetry) existingRetry.remove();
+
     try {
         const res = await fetch(`${API_BASE}/shipments`, {
             method: 'POST',
@@ -313,10 +322,32 @@ async function submitShipForm() {
             loadStats();
             document.querySelector('.tab-btn[data-tab="list"]').click();
         } else {
-            const msg = await res.text();
-            alert(msg || 'Lỗi tạo đơn vận chuyển');
+            let msg = await res.text();
+            try {
+                const err = JSON.parse(msg);
+                if (err.status === 404) msg = "Không tìm thấy dữ liệu";
+                else if (err.status === 500) msg = "Lỗi server, vui lòng thử lại";
+                else msg = err.message || msg;
+            } catch (e) {}
+            alert(`❌ Không thể tạo vận chuyển. ${msg}`);
+
+            // Add retry button
+            const retryBtn = document.createElement('button');
+            retryBtn.id = 'retryShipBtn';
+            retryBtn.className = 'primary-btn';
+            retryBtn.style.backgroundColor = '#f59e0b';
+            retryBtn.style.marginLeft = '8px';
+            retryBtn.innerHTML = '🔄 Thử lại';
+            retryBtn.onclick = submitShipForm;
+            submitBtn.parentNode.appendChild(retryBtn);
         }
-    } catch (e) { alert('Lỗi kết nối'); console.error(e); }
+    } catch (e) { 
+        alert('❌ Không thể tạo vận chuyển. Lỗi kết nối'); 
+        console.error(e); 
+    } finally {
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    }
 }
 
 function resetShipForm() {
