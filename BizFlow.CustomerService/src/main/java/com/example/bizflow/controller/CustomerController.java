@@ -98,7 +98,11 @@ public class CustomerController {
 
     @GetMapping("/by-user/{userId}")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> getCustomerByUserId(@PathVariable @NonNull Long userId, HttpServletRequest request) {
+    public ResponseEntity<?> getCustomerByUserId(
+            @PathVariable @NonNull Long userId,
+            @RequestParam(required = false) String username,
+            @RequestParam(required = false) String phone,
+            HttpServletRequest request) {
         try {
             // If the caller is a CUSTOMER role, allow only when the requested userId matches the JWT's userId.
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -126,8 +130,60 @@ public class CustomerController {
                 }
             }
 
-            return customerRepository.findByUserId(userId)
-                    .map(ResponseEntity::ok)
+            var customerOpt = customerRepository.findByUserId(userId);
+            if (customerOpt.isEmpty()) {
+                String fallbackUsername = null;
+                Claims tokenClaims = null;
+                if (username != null && !username.isBlank()) {
+                    fallbackUsername = username.trim();
+                } else {
+                    String authHeader = request.getHeader("Authorization");
+                    String token = null;
+                    if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                        token = authHeader.substring(7);
+                    }
+                    if (token != null) {
+                        try {
+                            tokenClaims = Jwts.parserBuilder()
+                                    .setSigningKey(Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8)))
+                                    .build()
+                                    .parseClaimsJws(token)
+                                    .getBody();
+                            fallbackUsername = tokenClaims.getSubject();
+                        } catch (Exception ignore) {
+                        }
+                    }
+                }
+                if (fallbackUsername != null && !fallbackUsername.isBlank()) {
+                    String fallback = fallbackUsername.trim();
+                    if (fallback.contains("@")) {
+                        customerOpt = customerRepository.findByEmailIgnoreCase(fallback);
+                    }
+                    if (customerOpt.isEmpty()) {
+                        customerOpt = customerRepository.findByUsernameIgnoreCase(fallback);
+                    }
+                }
+                if (customerOpt.isEmpty() && request.getParameter("phone") != null && !phone.isBlank()) {
+                    String normalizedPhone = normalizePhone(phone.trim());
+                    if (normalizedPhone != null && !normalizedPhone.isBlank()) {
+                        customerOpt = customerRepository.findByPhone(normalizedPhone);
+                    }
+                }
+                if (customerOpt.isEmpty() && tokenClaims != null) {
+                    String emailClaim = tokenClaims.get("email", String.class);
+                    if (emailClaim != null && !emailClaim.isBlank()) {
+                        customerOpt = customerRepository.findByEmailIgnoreCase(emailClaim.trim());
+                    }
+                }
+                if (customerOpt.isEmpty() && tokenClaims != null) {
+                    String phoneClaim = tokenClaims.get("phoneNumber", String.class);
+                    if (phoneClaim != null && !phoneClaim.isBlank()) {
+                        String normalizedPhone = phoneClaim.replaceAll("\\D+", "");
+                        customerOpt = customerRepository.findByPhone(normalizedPhone);
+                    }
+                }
+            }
+            return customerOpt.map(ResponseEntity::ok)
                     .orElse(ResponseEntity.notFound().build());
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Error fetching customer by userId: " + e.getMessage());
@@ -172,6 +228,81 @@ public class CustomerController {
         }
     }
 
+    @PostMapping("/upsertByUser")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<?> upsertCustomerByUser(@RequestBody UpsertByUserRequest request) {
+        if (request == null || request.userId == null) {
+            return ResponseEntity.badRequest().body("userId is required");
+        }
+
+        java.util.Optional<Customer> found = customerRepository.findByUserId(request.userId);
+        if (found.isEmpty() && request.phone != null && !request.phone.isBlank()) {
+            String normalizedPhone = normalizePhone(request.phone.trim());
+            if (normalizedPhone != null && !normalizedPhone.isBlank()) {
+                found = customerRepository.findByPhone(normalizedPhone);
+            }
+        }
+        if (found.isEmpty() && request.username != null && !request.username.isBlank()) {
+            found = customerRepository.findByUsernameIgnoreCase(request.username.trim());
+        }
+        if (found.isEmpty() && request.email != null && !request.email.isBlank()) {
+            found = customerRepository.findByEmailIgnoreCase(request.email.trim());
+        }
+        if (found.isEmpty() && request.name != null && !request.name.isBlank()) {
+            found = customerRepository.findByNameIgnoreCase(request.name.trim());
+        }
+
+        return found
+                .map(existing -> {
+                    boolean changed = false;
+                    if (request.name != null && !request.name.isBlank()) {
+                        existing.setName(request.name.trim());
+                        changed = true;
+                    }
+                    if (request.email != null) {
+                        existing.setEmail(trimToNull(request.email));
+                        changed = true;
+                    }
+                    if (request.address != null) {
+                        existing.setAddress(trimToNull(request.address));
+                        changed = true;
+                    }
+                    if (request.phone != null && !request.phone.isBlank()) {
+                        String normalizedPhone = normalizePhone(request.phone.trim());
+                        if (normalizedPhone != null && !normalizedPhone.isBlank()
+                                && (existing.getPhone() == null || !existing.getPhone().equals(normalizedPhone))) {
+                            existing.setPhone(normalizedPhone);
+                            changed = true;
+                        }
+                    }
+                    if (existing.getUserId() == null || !existing.getUserId().equals(request.userId)) {
+                        existing.setUserId(request.userId);
+                        changed = true;
+                    }
+                    if (request.username != null && !request.username.isBlank()
+                            && (existing.getUsername() == null || !existing.getUsername().equals(request.username.trim()))) {
+                        existing.setUsername(request.username.trim());
+                        changed = true;
+                    }
+                    if (changed) customerRepository.save(existing);
+                    return ResponseEntity.ok(existing);
+                })
+                .orElseGet(() -> {
+                    String name = request.name != null && !request.name.isBlank() ? request.name.trim() : "Khách hàng";
+                    String phone = null;
+                    if (request.phone != null && !request.phone.isBlank()) {
+                        phone = normalizePhone(request.phone.trim());
+                    }
+                    Customer created = new Customer(name, phone);
+                    created.setUserId(request.userId);
+                    created.setUsername(trimToNull(request.username));
+                    created.setEmail(trimToNull(request.email));
+                    created.setAddress(trimToNull(request.address));
+                    Customer saved = customerRepository.save(created);
+                    return ResponseEntity.ok(saved);
+                });
+    }
+
     private static String trimToNull(String value) {
         if (value == null) {
             return null;
@@ -200,5 +331,19 @@ public class CustomerController {
         public String cccd;
         public String dob;
         public String gender;
+    }
+
+    private static class UpsertByUserRequest {
+        public Long userId;
+        public String username;
+        public String name;
+        public String email;
+        public String address;
+        public String phone;
+    }
+
+    private static String normalizePhone(String phone) {
+        if (phone == null) return null;
+        return phone.replaceAll("\\D", "");
     }
 }

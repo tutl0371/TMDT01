@@ -123,7 +123,6 @@
                         <span>Đơn giá</span>
                         <span>Thành tiền</span>
                         	<span></span>
-                            <button id="trackOrdersBtn" class="ghost-btn small" style="margin-left:8px;">Theo dõi đơn hàng</button>
                     </div>
                     <div class="cart-items" id="cartItems"></div>
                 </div>
@@ -272,14 +271,6 @@
                     <button id="saveBillBtn" class="ghost-btn small">Lưu</button>
                     <button id="checkoutBtn" class="primary-btn large">Thanh toán</button>
                 </div>
-            </div>
-            <div class="tracking-panel" style="margin-top:14px;padding:12px;border-radius:10px;border:1px solid #eef2fb;background:#fff;">
-                <div style="font-weight:700;margin-bottom:8px;">Theo dõi đơn hàng</div>
-                <div style="display:flex;gap:8px;margin-bottom:8px;">
-                    <input id="trackOrderInput" type="text" placeholder="Nhập mã đơn / số hóa đơn" style="flex:1;padding:8px;border:1px solid #e6eefc;border-radius:8px;" />
-                    <button id="trackOrderBtn" class="ghost-btn">Tra cứu</button>
-                </div>
-                <div id="orderTrackingResult" style="min-height:40px;color:#223; font-size:14px;"></div>
             </div>
         </aside>
     </section>
@@ -754,29 +745,6 @@
         </div>
     </div>
 
-    <!-- Order tracking modal (customer-facing, cancel support) -->
-    <div class="modal" id="orderTrackModal" aria-hidden="true">
-        <div class="modal-content order-tracking">
-            <div class="modal-header">
-                <h3>Theo dõi đơn hàng</h3>
-                <button id="closeOrderTrackModal" class="icon-btn small" type="button" aria-label="Đóng">×</button>
-            </div>
-            <div class="modal-body" style="max-height:60vh;overflow:auto;">
-                <div id="orderTrackCustomerInfo" style="margin-bottom:8px;color:#222;font-weight:600"></div>
-                <div id="orderTrackControls" style="display:none;gap:8px;margin-bottom:8px;">
-                    <input id="orderTrackPhoneInput" type="text" placeholder="Nhập SĐT khách (nếu chưa chọn khách)" style="flex:1;padding:8px;border:1px solid #e6eefc;border-radius:8px;" />
-                    <button id="orderTrackFindBtn" class="ghost-btn">Tìm</button>
-                </div>
-                <div id="orderTrackList">
-                    <div class="muted">Chưa có dữ liệu</div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button class="ghost-btn" id="closeOrderTrackBtn">Đóng</button>
-            </div>
-        </div>
-    </div>
-
     <div class="modal side" id="appMenuModal" aria-hidden="true">
         <div class="modal-content app-menu">
             <div class="modal-header">
@@ -886,6 +854,30 @@
         </div>
     </div>
 
+    <div class="modal" id="orderTrackModal" aria-hidden="true">
+        <div class="modal-content order-track-modal">
+            <div class="modal-header">
+                <h3>Theo dõi đơn hàng</h3>
+                <button id="closeOrderTrackModal" class="icon-btn small" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div class="order-track-body">
+                <div id="orderTrackCustomerInfo" class="muted">Đang tải đơn hàng...</div>
+                <div id="orderTrackControls" style="display:none;gap:8px;align-items:center;margin-top:12px;">
+                    <label style="flex:1;display:flex;gap:8px;align-items:center;">
+                        <span>SĐT / mã đơn</span>
+                        <input id="orderTrackPhoneInput" type="text" placeholder="Nhập số điện thoại hoặc mã đơn" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:6px;" />
+                    </label>
+                    <button id="orderTrackFindBtn" class="primary-btn" type="button">Tìm</button>
+                </div>
+                <div id="orderTrackList" class="order-track-list" style="margin-top:12px;max-height:320px;overflow:auto;"></div>
+                <div id="orderTrackingResult" class="order-track-result" style="margin-top:12px;"></div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="ghost-btn" id="closeOrderTrackBtn">Đóng</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="../assets/js/combo-promotion-ai.js?v=1.0.0" onerror="console.error('Failed to load combo-promotion-ai.js')"></script>
     <script>
@@ -899,7 +891,7 @@
             }
         })();
     </script>
-    <script src="../assets/js/employee-dashboard.js?v=stock-5"></script>
+    <script src="../assets/js/employee-dashboard.js?v=stock-8"></script>
     <script src="../assets/js/app-shell.js"></script>
     <script>
         // Lightweight fallback: if products grid still empty after main script,

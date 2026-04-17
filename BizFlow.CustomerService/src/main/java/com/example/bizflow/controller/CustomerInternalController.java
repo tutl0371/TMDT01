@@ -50,18 +50,18 @@ public class CustomerInternalController {
         }
         int added = pointService.addPoints(request.customerId, request.totalAmount, request.reference);
         if (added < 0) {
-            return ResponseEntity.status(404).body(Map.of("message", "Customer not found"));
+            return ResponseEntity.status(404).body(Map.<String, Object>of("message", "Customer not found"));
         }
 
         // Return authoritative totals so callers can update UI immediately
         return customerRepository.findById(request.customerId)
-                .map(c -> ResponseEntity.ok(Map.of(
+                .map(c -> ResponseEntity.ok(Map.<String, Object>of(
                         "message", "Points added",
                         "pointsAdded", added,
                         "totalPoints", c.getTotalPoints(),
                         "monthlyPoints", c.getMonthlyPoints()
                 )))
-                .orElseGet(() -> ResponseEntity.ok(Map.of("message", "Points added", "pointsAdded", added)));
+                .orElseGet(() -> ResponseEntity.ok(Map.<String, Object>of("message", "Points added", "pointsAdded", added)));
     }
 
     @PostMapping("/points/redeem")
@@ -74,12 +74,12 @@ public class CustomerInternalController {
             if (ref != null && !ref.isBlank() && pointHistoryRepository.existsByCustomerIdAndReason(request.customerId, ref)) {
             // Already redeemed for this reference
             return customerRepository.findById(request.customerId)
-                .map(c -> ResponseEntity.ok(Map.of(
+                .map(c -> ResponseEntity.ok(Map.<String, Integer>of(
                     "redeemed", 0,
                     "totalPoints", c.getTotalPoints() == null ? 0 : c.getTotalPoints(),
                     "monthlyPoints", c.getMonthlyPoints() == null ? 0 : c.getMonthlyPoints()
                 )))
-                .orElseGet(() -> ResponseEntity.ok(Map.of("redeemed", 0)));
+                .orElseGet(() -> ResponseEntity.ok(Map.<String, Integer>of("redeemed", 0)));
             }
         } catch (Exception ignore) {
         }
@@ -87,12 +87,12 @@ public class CustomerInternalController {
         int redeemed = pointService.redeemPoints(request.customerId, request.points, ref);
         final int redeemedFinal = redeemed;
         return customerRepository.findById(request.customerId)
-            .map(c -> ResponseEntity.ok(Map.of(
+            .map(c -> ResponseEntity.ok(Map.<String, Integer>of(
                 "redeemed", redeemedFinal,
                 "totalPoints", c.getTotalPoints() == null ? 0 : c.getTotalPoints(),
                 "monthlyPoints", c.getMonthlyPoints() == null ? 0 : c.getMonthlyPoints()
             )))
-            .orElseGet(() -> ResponseEntity.ok(Map.of("redeemed", redeemedFinal)));
+            .orElseGet(() -> ResponseEntity.ok(Map.<String, Integer>of("redeemed", redeemedFinal)));
     }
 
     @PostMapping("/{customerId}/points/reconcile")
@@ -194,10 +194,22 @@ public class CustomerInternalController {
             return ResponseEntity.badRequest().body("userId is required");
         }
 
-        // Try find by userId first, then by username
+        // Try find by userId first, then existing customer records by phone, username or email
         java.util.Optional<com.example.bizflow.entity.Customer> found = customerRepository.findByUserId(request.userId);
+        if (found.isEmpty() && request.phone != null && !request.phone.isBlank()) {
+            String normalizedPhone = normalizePhone(request.phone.trim());
+            if (normalizedPhone != null && !normalizedPhone.isBlank()) {
+                found = customerRepository.findByPhone(normalizedPhone);
+            }
+        }
         if (found.isEmpty() && request.username != null && !request.username.isBlank()) {
-            found = customerRepository.findByUsername(request.username.trim());
+            found = customerRepository.findByUsernameIgnoreCase(request.username.trim());
+        }
+        if (found.isEmpty() && request.email != null && !request.email.isBlank()) {
+            found = customerRepository.findByEmailIgnoreCase(request.email.trim());
+        }
+        if (found.isEmpty() && request.name != null && !request.name.isBlank()) {
+            found = customerRepository.findByNameIgnoreCase(request.name.trim());
         }
 
         return found
@@ -215,6 +227,14 @@ public class CustomerInternalController {
                         existing.setAddress(trimToNull(request.address));
                         changed = true;
                     }
+                    if (request.phone != null && !request.phone.isBlank()) {
+                        String normalizedPhone = normalizePhone(request.phone.trim());
+                        if (normalizedPhone != null && !normalizedPhone.isBlank()
+                                && (existing.getPhone() == null || !existing.getPhone().equals(normalizedPhone))) {
+                            existing.setPhone(normalizedPhone);
+                            changed = true;
+                        }
+                    }
                     if (existing.getUserId() == null || !existing.getUserId().equals(request.userId)) {
                         existing.setUserId(request.userId);
                         changed = true;
@@ -229,7 +249,11 @@ public class CustomerInternalController {
                 })
                 .orElseGet(() -> {
                     String name = request.name != null && !request.name.isBlank() ? request.name.trim() : "Khách hàng";
-                    com.example.bizflow.entity.Customer created = new com.example.bizflow.entity.Customer(name, null);
+                    String phone = null;
+                    if (request.phone != null && !request.phone.isBlank()) {
+                        phone = normalizePhone(request.phone.trim());
+                    }
+                    com.example.bizflow.entity.Customer created = new com.example.bizflow.entity.Customer(name, phone);
                     created.setUserId(request.userId);
                     created.setUsername(trimToNull(request.username));
                     created.setEmail(trimToNull(request.email));
@@ -275,6 +299,7 @@ public class CustomerInternalController {
         public String name;
         public String email;
         public String address;
+        public String phone;
     }
 
     private static String trimToNull(String value) {

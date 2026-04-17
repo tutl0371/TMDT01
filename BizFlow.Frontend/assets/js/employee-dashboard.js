@@ -215,17 +215,21 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.warn('loadCartStateFromServer failed', e);
     }
     try {
+        await restorePersistedSelectedCustomerState();
+    } catch (e) {
+        console.warn('restorePersistedSelectedCustomerState failed', e);
+    }
+    try {
         await loadCurrentEmployee();
     } catch (e) {
         console.warn('loadCurrentEmployee failed', e);
     }
     try {
-        const persistedCustomer = loadPersistedSelectedCustomerState();
-        if (persistedCustomer && persistedCustomer.id > 0 && (!selectedCustomer || selectedCustomer.id === 0)) {
-            applyCustomerSelection(persistedCustomer, { openDetail: false });
+        if (!selectedCustomer || selectedCustomer.id === 0) {
+            await restorePersistedSelectedCustomerState();
         }
     } catch (e) {
-        console.warn('loadPersistedSelectedCustomerState failed', e);
+        console.warn('restorePersistedSelectedCustomerState failed', e);
     }
     try { fixPaymentPanelText(); } catch (e) { console.warn('fixPaymentPanelText failed', e); }
 
@@ -256,12 +260,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     try {
         updatePaymentPanels();
         const checkoutName = document.getElementById('checkoutCustomerName');
-        if (checkoutName) checkoutName.value = selectedCustomer?.name || '';
+        if (checkoutName) checkoutName.value = '';
         const checkoutPhone = document.getElementById('checkoutCustomerPhone');
-        const phoneVal = selectedCustomer?.phone && selectedCustomer.phone !== '-' ? selectedCustomer.phone : '';
-        if (checkoutPhone) checkoutPhone.value = phoneVal;
+        if (checkoutPhone) checkoutPhone.value = '';
         const checkoutAddress = document.getElementById('checkoutCustomerAddress');
-        if (checkoutAddress) checkoutAddress.value = selectedCustomer?.address || '';
+        if (checkoutAddress) checkoutAddress.value = '';
         // wire input events to keep button state in sync
         const _phoneEl = document.getElementById('checkoutCustomerPhone');
         const _addrEl = document.getElementById('checkoutCustomerAddress');
@@ -427,9 +430,9 @@ function persistSelectedCustomerState() {
             name: selectedCustomer.name || 'Khách lẻ',
             phone: selectedCustomer.phone || '-',
             address: selectedCustomer.address || '',
+            tier: selectedCustomer.tier || '',
             totalPoints: Number.isFinite(Number(selectedCustomer.totalPoints)) ? Number(selectedCustomer.totalPoints) : 0,
             monthlyPoints: Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : 0,
-            tier: selectedCustomer.tier || '',
             updatedAt: new Date().toISOString()
         };
         localStorage.setItem(getSelectedCustomerStorageKey(), JSON.stringify(payload));
@@ -453,14 +456,26 @@ function loadPersistedSelectedCustomerState() {
             name: saved.name || 'Khách lẻ',
             phone: saved.phone || '-',
             address: saved.address || '',
+            tier: saved.tier || '',
             totalPoints: Number.isFinite(Number(saved.totalPoints)) ? Number(saved.totalPoints) : 0,
-            monthlyPoints: Number.isFinite(Number(saved.monthlyPoints)) ? Number(saved.monthlyPoints) : 0,
-            tier: saved.tier || ''
+            monthlyPoints: Number.isFinite(Number(saved.monthlyPoints)) ? Number(saved.monthlyPoints) : 0
         };
     } catch (e) {
         console.warn('[loadPersistedSelectedCustomerState] failed', e);
         return null;
     }
+}
+
+async function restorePersistedSelectedCustomerState() {
+    const persistedCustomer = loadPersistedSelectedCustomerState();
+    if (!persistedCustomer || !persistedCustomer.id) return null;
+    if (!selectedCustomer || selectedCustomer.id === 0 || selectedCustomer.id !== persistedCustomer.id) {
+        applyCustomerSelection(persistedCustomer, { openDetail: false });
+    }
+    if (selectedCustomer && selectedCustomer.id > 0) {
+        await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+    }
+    return selectedCustomer;
 }
 
 function normalizeInvoiceState(raw, index = 0) {
@@ -727,6 +742,29 @@ function loadUserInfo() {
     document.getElementById('userNameDropdown').textContent = username || 'Nhân viên';
 }
 
+async function findExistingCustomerForCurrentUser(userData) {
+    const username = sessionStorage.getItem('username') || userData?.username || '';
+    const email = userData?.email || userData?.emailAddress || userData?.email_address || '';
+    const phone = userData?.phoneNumber || userData?.phone || userData?.phone_number || '';
+    const name = userData?.fullName || userData?.name || userData?.displayName || '';
+
+    const identityCustomer = await refreshSelectedCustomerByIdentity({
+        username,
+        email,
+        phone,
+        name
+    });
+    if (identityCustomer) {
+        return identityCustomer;
+    }
+
+    const normalizedPhone = normalizePhoneForOrder(phone);
+    if (normalizedPhone) {
+        return await refreshSelectedCustomerByPhone(normalizedPhone);
+    }
+    return null;
+}
+
 async function loadCurrentEmployee() {
     const userId = sessionStorage.getItem('userId');
     if (!userId) return;
@@ -773,51 +811,134 @@ async function loadCurrentEmployee() {
         // Try to fetch a linked Customer record for this authenticated user so
         // we can show member points in checkout. Endpoint: GET /api/customers/by-user/{userId}
         try {
-            // If we already restored a saved cart state from the server and an
-            // explicit customer is already selected, preserve that selection.
-            if (cartStateLoaded && selectedCustomer && selectedCustomer.id > 0) {
-                // keep server-restored customer selection
-            } else {
-                const custRes = await fetch(`${API_BASE}/customers/by-user/${userId}`, {
-                    headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
-                });
-                if (custRes.ok) {
-                    const cust = await custRes.json();
-                    selectedCustomer = {
-                        id: cust.id || 0,
-                        name: cust.name || 'Khách lẻ',
-                        phone: cust.phone || '-',
-                        address: cust.address || '',
-                        totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
-                        monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
-                        tier: cust.tier || ''
-                    };
+            if (!selectedCustomer || selectedCustomer.id === 0) {
+                await restorePersistedSelectedCustomerState();
+            }
 
-                    // Prefill checkout fields with member info
-                    const checkoutNameEl = document.getElementById('checkoutCustomerName');
-                    const checkoutPhoneEl = document.getElementById('checkoutCustomerPhone');
-                    const checkoutAddressEl = document.getElementById('checkoutCustomerAddress');
-                    if (checkoutNameEl) checkoutNameEl.value = selectedCustomer.name || '';
-                    if (checkoutPhoneEl) checkoutPhoneEl.value = (selectedCustomer.phone && selectedCustomer.phone !== '-') ? selectedCustomer.phone : '';
-                    if (checkoutAddressEl) checkoutAddressEl.value = selectedCustomer.address || '';
+            if (selectedCustomer && selectedCustomer.id > 0) {
+                // Preserve the selected customer restored from the saved cart or persisted state.
+                // Always refresh authoritative points from the server so the UI shows the
+                // current account balance after reload.
+                await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+            }
 
-                    const searchInput = document.getElementById('customerSearch');
-                    if (searchInput && selectedCustomer.id) {
-                        searchInput.value = selectedCustomer.name || selectedCustomer.phone || '';
-                        searchInput.classList.add('has-selection');
-                        searchInput.readOnly = true;
+            const username = sessionStorage.getItem('username');
+            const userPhone = (data?.phoneNumber || data?.phone || '').toString().trim();
+            const normalizedPhone = normalizePhoneForOrder(userPhone);
+            const queryParts = [];
+            if (username) queryParts.push(`username=${encodeURIComponent(username)}`);
+            if (normalizedPhone) queryParts.push(`phone=${encodeURIComponent(normalizedPhone)}`);
+            const queryString = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+            const custRes = await fetch(`${API_BASE}/customers/by-user/${userId}${queryString}`, {
+                headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+            });
+            if (custRes.ok) {
+                const cust = await custRes.json();
+                if (cust && cust.id) {
+                    const shouldOverrideSelection = !selectedCustomer || selectedCustomer.id === 0 || selectedCustomer.id !== Number(cust.id);
+                    if (shouldOverrideSelection) {
+                        applyCustomerSelection({
+                            id: cust.id,
+                            name: cust.name || 'Khách lẻ',
+                            phone: cust.phone || '-',
+                            address: cust.address || '',
+                            totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
+                            monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
+                            tier: cust.tier || ''
+                        }, { openDetail: false });
                     }
-                    const addBtn = document.getElementById('addCustomerBtn'); if (addBtn) addBtn.style.display = 'none';
-                    const clearBtn = document.getElementById('clearCustomerBtn'); if (clearBtn) clearBtn.style.display = 'inline-flex';
-
-                    // Update UI totals / points display
-                    try { renderCart(); updateTotal(); } catch (e) {}
+                    await refreshCustomerDetailFromApi(Number(cust.id));
+                } else {
+                    const existingCustomer = await findExistingCustomerForCurrentUser(data);
+                    if (existingCustomer) {
+                        await refreshCustomerDetailFromApi(Number(existingCustomer.id));
+                    }
+                    if (!selectedCustomer || selectedCustomer.id === 0) {
+                        const customer = await upsertCurrentUserCustomer(userId, data);
+                        if (customer && customer.id) {
+                            applyCustomerSelection({
+                                id: customer.id,
+                                name: customer.name || 'Khách lẻ',
+                                phone: customer.phone || '-',
+                                address: customer.address || '',
+                                totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
+                                monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
+                                tier: customer.tier || ''
+                            }, { openDetail: false });
+                            await refreshCustomerDetailFromApi(Number(customer.id));
+                        }
+                    }
+                }
+            } else {
+                const userPhone = (data?.phoneNumber || data?.phone || '').toString().trim();
+                const normalizedPhone = normalizePhoneForOrder(userPhone);
+                const identityCustomer = await refreshSelectedCustomerByIdentity({
+                    phone: userPhone,
+                    username,
+                    email: data?.email || data?.emailAddress || null
+                });
+                if (!identityCustomer && normalizedPhone) {
+                    await refreshSelectedCustomerByPhone(normalizedPhone);
+                }
+                if ((!selectedCustomer || selectedCustomer.id === 0) && !cartStateLoaded) {
+                    const customer = await upsertCurrentUserCustomer(userId, data);
+                    if (customer && customer.id) {
+                        applyCustomerSelection({
+                            id: customer.id,
+                            name: customer.name || 'Khách lẻ',
+                            phone: customer.phone || '-',
+                            address: customer.address || '',
+                            totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
+                            monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
+                            tier: customer.tier || ''
+                        }, { openDetail: false });
+                        await refreshCustomerDetailFromApi(Number(customer.id));
+                    }
                 }
             }
         } catch (err) {
             console.warn('Could not fetch customer by user', err);
+            const username = sessionStorage.getItem('username');
+            const existingCustomer = await findExistingCustomerForCurrentUser(data);
+            if (!existingCustomer) {
+                const persistedCustomer = loadPersistedSelectedCustomerState();
+                if ((!selectedCustomer || selectedCustomer.id === 0) && persistedCustomer && persistedCustomer.id > 0) {
+                    applyCustomerSelection(persistedCustomer, { openDetail: false });
+                    await refreshCustomerDetailFromApi(Number(persistedCustomer.id));
+                }
+            }
+        }
+
+        if (selectedCustomer && selectedCustomer.id > 0 && getCustomerPoints(selectedCustomer) === 0) {
+            await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
         }
     } catch (err) {
+    }
+}
+
+async function upsertCurrentUserCustomer(userId, userData) {
+    if (!userId) return null;
+    const body = {
+        userId: Number(userId),
+        username: sessionStorage.getItem('username') || userData?.username || null,
+        email: userData?.email || userData?.emailAddress || userData?.email_address || null,
+        name: userData?.fullName || userData?.name || userData?.username || 'Khách hàng',
+        phone: userData?.phoneNumber || userData?.phone || userData?.phone_number || null
+    };
+    try {
+        const response = await fetch(`${API_BASE}/customers/upsertByUser`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+            },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) return null;
+        return await response.json();
+    } catch (e) {
+        console.warn('[upsertCurrentUserCustomer] failed', e);
+        return null;
     }
 }
 
@@ -2908,19 +3029,76 @@ async function refreshSelectedCustomerPointsForOrder(order) {
 }
 
 async function refreshSelectedCustomerByPhone(normalizedPhone) {
-    if (!normalizedPhone) return;
+    if (!normalizedPhone) return null;
     try {
         const response = await fetch(`${API_BASE}/customers`, {
             headers: getAuthHeaders()
         });
-        if (!response.ok) return;
+        if (!response.ok) return null;
         const customersList = await response.json();
-        if (!Array.isArray(customersList)) return;
+        if (!Array.isArray(customersList)) return null;
         const customer = customersList.find(c => normalizePhoneForOrder(c.phone) === normalizedPhone);
-        if (!customer || !customer.id) return;
+        if (!customer || !customer.id) return null;
         applyCustomerSelection(customer, { openDetail: false });
+        await refreshCustomerDetailFromApi(customer.id);
+        return customer;
     } catch (err) {
         console.warn('refreshSelectedCustomerByPhone failed', err);
+        return null;
+    }
+}
+
+async function refreshSelectedCustomerByIdentity({ username, email, phone, name }) {
+    try {
+        const response = await fetch(`${API_BASE}/customers`, {
+            headers: getAuthHeaders()
+        });
+        if (!response.ok) return null;
+        const customersList = await response.json();
+        if (!Array.isArray(customersList)) return null;
+
+        const normalizedPhone = normalizePhoneForOrder(phone);
+        const byPhone = normalizedPhone
+            ? customersList.find(c => normalizePhoneForOrder(c.phone) === normalizedPhone)
+            : null;
+        if (byPhone && byPhone.id) {
+            applyCustomerSelection(byPhone, { openDetail: false });
+            await refreshCustomerDetailFromApi(byPhone.id);
+            return byPhone;
+        }
+
+        const byUsername = username
+            ? customersList.find(c => c.username && c.username.toString().trim().toLowerCase() === username.toString().trim().toLowerCase())
+            : null;
+        if (byUsername && byUsername.id) {
+            applyCustomerSelection(byUsername, { openDetail: false });
+            await refreshCustomerDetailFromApi(byUsername.id);
+            return byUsername;
+        }
+
+        const byEmail = email
+            ? customersList.find(c => c.email && c.email.toString().trim().toLowerCase() === email.toString().trim().toLowerCase())
+            : null;
+        if (byEmail && byEmail.id) {
+            applyCustomerSelection(byEmail, { openDetail: false });
+            await refreshCustomerDetailFromApi(byEmail.id);
+            return byEmail;
+        }
+
+        const normalizedName = name ? name.toString().trim().toLowerCase() : '';
+        const byName = normalizedName
+            ? customersList.find(c => c.name && c.name.toString().trim().toLowerCase() === normalizedName)
+            : null;
+        if (byName && byName.id) {
+            applyCustomerSelection(byName, { openDetail: false });
+            await refreshCustomerDetailFromApi(byName.id);
+            return byName;
+        }
+
+        return null;
+    } catch (err) {
+        console.warn('refreshSelectedCustomerByIdentity failed', err);
+        return null;
     }
 }
 
@@ -3455,6 +3633,18 @@ function setupEventListeners() {
 
     document.getElementById('logoutBtn').addEventListener('click', () => {
         if (confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
+            const userId = getCurrentUserId();
+            if (userId) {
+                fetch(`${API_BASE}/orders/cart/${userId}`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                }).catch(() => {});
+            }
+            try {
+                clearSelectedCustomer();
+            } catch (e) {
+                console.warn('Failed to clear selected customer on logout', e);
+            }
             persistCartStateNow();
             sessionStorage.clear();
             window.location.href = '/pages/login.html';
@@ -3705,8 +3895,8 @@ function renderOrderTrackingResult(order) {
     const status = escapeHtml(order.status || '-');
     const invoice = escapeHtml(order.invoiceNumber || (order.id ? `#${order.id}` : '-'));
     const total = formatPrice(order.totalAmount || order.total || 0);
-    const customer = escapeHtml(order.customerName || order.customer || order.customerPhone || '-');
-    const phone = escapeHtml(order.customerPhone || '-');
+    const customer = escapeHtml(order.customerName || order.customer || order.customerPhone || order.customer_phone || '-');
+    const phone = escapeHtml(order.customerPhone || order.customer_phone || '-');
     let itemsHtml = '';
     if (Array.isArray(order.items) && order.items.length > 0) {
         itemsHtml = `<div style="margin-top:8px;font-weight:700">Sản phẩm</div>` + order.items.map(it => `
@@ -3737,6 +3927,7 @@ function renderOrderTrackingResult(order) {
         }
     }
 
+    const canReceive = !['CANCELLED','RECEIVED'].includes(String(order.status || '').toUpperCase());
     el.innerHTML = `
         <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
         <div>Trạng thái: <strong>${status}</strong></div>
@@ -3745,7 +3936,7 @@ function renderOrderTrackingResult(order) {
         ${deliveryHtml}
         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
         ${itemsHtml}
-        ${((order.customerId || order.customerPhone) && !['CANCELLED','RECEIVED'].includes(String(order.status || '').toUpperCase())) ? `<div style="margin-top:12px"><button id="receiveOrderDetailBtn" class="ghost-btn">Đã nhận được hàng</button></div>` : ''}
+        ${canReceive ? `<div style="margin-top:12px"><button id="receiveOrderDetailBtn" class="ghost-btn">Đã nhận được hàng</button></div>` : ''}
     `;
 
     const receiveBtn = el.querySelector('#receiveOrderDetailBtn');
@@ -3764,7 +3955,7 @@ function canShowReceiveButton(order) {
     if (!order) return false;
     const status = String(order.status || '').trim().toUpperCase();
     if (status === 'CANCELLED' || status === 'RECEIVED') return false;
-    return order.customerId != null || (order.customerPhone && String(order.customerPhone).trim().length > 0);
+    return !['CANCELLED','RECEIVED'].includes(status);
 }
 
 async function confirmOrderReceived(orderId) {
@@ -3897,15 +4088,13 @@ function applyInvoiceState(invoice) {
     updatePaymentPanels();
 
     if (invoice.selectedCustomer && invoice.selectedCustomer.id > 0) {
-        // If the saved invoice contains an explicit positive point value,
-        // apply it. Otherwise (missing or zero), fetch authoritative data
-        // from server to avoid overwriting a real existing point balance
-        // with a stale/zero value saved in the draft.
         const sc = invoice.selectedCustomer;
+        // Apply the restored customer immediately so the UI can show the
+        // selected customer and use any cached point fallback values.
+        applyCustomerSelection(sc, { openDetail: false });
+
         const scPoints = Number(sc.totalPoints ?? sc.total_points ?? NaN);
-        if (Number.isFinite(scPoints) && scPoints > 0) {
-            applyCustomerSelection(sc, { openDetail: false });
-        } else {
+        if (!Number.isFinite(scPoints) || scPoints <= 0) {
             try { refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
         }
     } else {
@@ -3938,24 +4127,25 @@ function setupInvoiceTabs() {
     if (!container) return;
 
     container.addEventListener('click', (e) => {
-        const trackBtnClicked = e.target.closest('#trackOrdersHeaderBtn');
+        const target = e.target instanceof Element ? e.target : e.target.parentElement;
+        const trackBtnClicked = target?.closest('#trackOrdersHeaderBtn');
         if (trackBtnClicked) {
             openOrderTrackModal();
             return;
         }
-        const addBtn = e.target.closest('#addInvoiceBtn');
+        const addBtn = target?.closest('#addInvoiceBtn');
         if (addBtn) {
             createAndSwitchInvoice();
             return;
         }
 
-        const savedBtn = e.target.closest('#savedInvoiceBtn');
+        const savedBtn = target?.closest('#savedInvoiceBtn');
         if (savedBtn) {
             toggleSavedBillsPanel();
             return;
         }
 
-        const closeBtn = e.target.closest('.tab-close');
+        const closeBtn = target?.closest('.tab-close');
         if (closeBtn) {
             e.stopPropagation();
             const invoiceId = closeBtn.getAttribute('data-close');
@@ -3965,7 +4155,7 @@ function setupInvoiceTabs() {
             return;
         }
 
-        const tab = e.target.closest('.order-tab[data-invoice-id]');
+        const tab = target?.closest('.order-tab[data-invoice-id]');
         if (tab) {
             const invoiceId = tab.getAttribute('data-invoice-id');
             if (invoiceId) {
@@ -4160,7 +4350,7 @@ function renderOrdersInModal(orders) {
                         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
-                        ${((o.customerId || o.customerPhone) && !['CANCELLED','RECEIVED'].includes(String(o.status || '').toUpperCase())) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
+                        ${(!['CANCELLED','RECEIVED'].includes(String(o.status || '').toUpperCase())) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
                         <button class="ghost-btn small view-order-btn" data-order-id="${o.id}">Xem</button>
                         ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-btn" data-order-id="${o.id}">Hủy</button>` : ''}
                     </div>
@@ -4434,23 +4624,7 @@ function applyCustomerSelection(customer, options = {}) {
             if (cached) {
                 incomingTotal = incomingTotal == null ? (cached.totalPoints ?? cached.total_points) : incomingTotal;
                 incomingMonthly = incomingMonthly == null ? (cached.monthlyPoints ?? cached.monthly_points) : incomingMonthly;
-                // mark source for debugging
                 console.debug('[applyCustomerSelection] using in-memory cached points for customer', customer.id);
-            } else {
-                // Try localStorage fallback
-                try {
-                    const raw = localStorage.getItem('customer_points_' + customer.id);
-                    if (raw) {
-                        const parsed = JSON.parse(raw);
-                        if (parsed) {
-                            incomingTotal = incomingTotal == null ? (Number(parsed.totalPoints) || 0) : incomingTotal;
-                            incomingMonthly = incomingMonthly == null ? (Number(parsed.monthlyPoints) || 0) : incomingMonthly;
-                            console.debug('[applyCustomerSelection] using localStorage fallback points for customer', customer.id);
-                        }
-                    }
-                } catch (e) {
-                    // ignore localStorage parse errors
-                }
             }
         } catch (e) {
             console.warn('[applyCustomerSelection] failed to lookup cached/local points', e);
@@ -4469,21 +4643,13 @@ function applyCustomerSelection(customer, options = {}) {
         tier: effectiveTier || customer.tier || (isSameCustomer ? selectedCustomer.tier : '')
     };
 
-    // Persist the current authoritative points locally so a subsequent
-    // page reload can recover a recent known-good value if the server
-    // endpoint is temporarily unreachable.
+    // Persist the selected customer state, but do not store points locally.
     try {
         if (selectedCustomer && selectedCustomer.id && Number(selectedCustomer.id) > 0) {
-            const payload = {
-                totalPoints: selectedCustomer.totalPoints || 0,
-                monthlyPoints: selectedCustomer.monthlyPoints || 0,
-                updatedAt: new Date().toISOString()
-            };
-            localStorage.setItem('customer_points_' + selectedCustomer.id, JSON.stringify(payload));
             persistSelectedCustomerState();
         }
     } catch (e) {
-        console.warn('[applyCustomerSelection] failed to persist selectedCustomer points', e);
+        console.warn('[applyCustomerSelection] failed to persist selectedCustomer state', e);
     }
 
     // If the passed customer is missing authoritative point fields, refresh
@@ -4507,12 +4673,10 @@ function applyCustomerSelection(customer, options = {}) {
         searchInput.readOnly = true;
     }
 
-    customerSearchTerm = '';
-    const customerList = document.getElementById('customerList');
-    if (customerList) {
-        customerList.innerHTML = '';
-        customerList.style.display = 'none';
-    }
+        const selectedCustomerLabel = document.getElementById('selectedCustomer');
+        if (selectedCustomerLabel) {
+            selectedCustomerLabel.textContent = selectedCustomer.name || selectedCustomer.phone || 'Khách lẻ';
+        }
 
     const addBtn = document.getElementById('addCustomerBtn');
     if (addBtn) {
@@ -5906,18 +6070,13 @@ async function refreshCustomerDetailFromApi(customerId) {
         if (index >= 0) {
             customers[index] = customer;
         }
-        // persist fetched points to localStorage as a fallback for UI restores
+        // Do not persist point values locally. The server is the source of truth.
         try {
             if (customer && customer.id) {
-                const payload = {
-                    totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
-                    monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
-                    updatedAt: new Date().toISOString()
-                };
-                localStorage.setItem('customer_points_' + customer.id, JSON.stringify(payload));
+                persistSelectedCustomerState();
             }
         } catch (e) {
-            console.warn('[refreshCustomerDetailFromApi] failed to persist points to localStorage', e);
+            console.warn('[refreshCustomerDetailFromApi] failed to persist selected customer state', e);
         }
         // Always apply the authoritative customer data we fetched so the UI
         // reflects the server state (points, tier, etc.). This prevents
@@ -5934,8 +6093,7 @@ function getCustomerPointsUsed(customer) {
         customer?.pointsUsed ??
         customer?.usedPoints ??
         customer?.redeemedPoints ??
-        customer?.monthlyPoints ??
-        customer?.monthly_points;
+        0;
     return Number.isFinite(Number(used)) ? Number(used) : 0;
 }
 

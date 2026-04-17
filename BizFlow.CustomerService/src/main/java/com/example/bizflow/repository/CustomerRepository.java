@@ -17,6 +17,9 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     Optional<Customer> findByPhone(String phone);
     Optional<Customer> findByUserId(Long userId);
     Optional<Customer> findByUsername(String username);
+    Optional<Customer> findByUsernameIgnoreCase(String username);
+    Optional<Customer> findByEmailIgnoreCase(String email);
+    Optional<Customer> findByNameIgnoreCase(String name);
 
     // 🔒 Khóa bản ghi khi cộng điểm (tránh cộng sai khi nhiều request)
     @Lock(LockModeType.PESSIMISTIC_WRITE)
