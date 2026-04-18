@@ -25,7 +25,6 @@ public class AuthController {
         this.authService = authService;
         this.userService = userService;
     }
-    
     /**
      * API đăng nhập
      * @param loginRequest username và password

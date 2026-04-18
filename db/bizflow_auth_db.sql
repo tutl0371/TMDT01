@@ -83,7 +83,7 @@ INSERT INTO `users` (`id`, `username`, `password`, `email`, `full_name`, `phone_
 --
 -- Indexes for dumped tables
 -- Indexes for table `branches`
---
+
 ALTER TABLE `branches`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `UK_hw68nd07qk3jrjfg70qxq9vb7` (`name`),

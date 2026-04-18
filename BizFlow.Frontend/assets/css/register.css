@@ -39,7 +39,6 @@
     max-width: 240px;
     line-height: 1.4;
 }
-
 @media (max-width: 720px) {
     .register-form .form-grid {
         grid-template-columns: 1fr;

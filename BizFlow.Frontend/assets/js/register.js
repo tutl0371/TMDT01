@@ -23,7 +23,6 @@ async function postRegister(payload) {
   } catch (error) {
     throw new Error(`Không kết nối được tới API đăng ký: ${error.message}`);
   }
-
   if (response.status !== 404) {
     return response;
   }
