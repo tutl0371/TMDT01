@@ -1,4 +1,4 @@
-// Login page JS (scoped)
+// Login page JS(scoped)
 const API_BASE = '/api';
 const ALLOWED_ROLES = ['ADMIN','OWNER','EMPLOYEE', 'MANAGER'];
 
