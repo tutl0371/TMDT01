@@ -973,7 +973,9 @@ public class PromotionServiceImpl implements PromotionService {
             return null;
         }
 
-        int freeUnits = appliedSets * giftQty;
+        // 🔧 FIX: Cap freeUnits để không vượt quá remainingSets (maxQuantity - usedQuantity)
+        // Đảm bảo không tặng quá số sản phẩm được phép của khuyến mãi
+        int freeUnits = Math.min(appliedSets * giftQty, remainingSets);
         int chargeableUnits = Math.max(0, demandQuantity - freeUnits);
         BigDecimal finalTotal = basePrice.multiply(BigDecimal.valueOf(chargeableUnits));
         BigDecimal finalUnit = finalTotal.divide(BigDecimal.valueOf(demandQuantity), 4, RoundingMode.HALF_UP);
