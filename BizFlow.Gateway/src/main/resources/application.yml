@@ -3,6 +3,26 @@ spring:
     name: bizflow-gateway
   cloud:
     gateway:
+      globalcors:
+        add-to-simple-url-handler-mapping: true
+        cors-configurations:
+          '[/**]':
+            allowed-origins:
+              - "http://localhost:3000"
+              - "http://localhost:8080"
+              - "http://localhost:8000"
+            allowed-methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - PATCH
+              - OPTIONS
+              - HEAD
+            allowed-headers:
+              - "*"
+            allow-credentials: true
+            max-age: 3600
       default-filters: []
       routes:
         - id: promotion-service
@@ -54,7 +74,7 @@ spring:
         - id: customer-service
           uri: "http://customer-service:8085/"
           predicates:
-            - Path=/api/customers/**
+            - Path=/api/customers/**,/api/messages/**,/api/conversations/**
         - id: report-service
           uri: "http://report-service:8087/"
           predicates:

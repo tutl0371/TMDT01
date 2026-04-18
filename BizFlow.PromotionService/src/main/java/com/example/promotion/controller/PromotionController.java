@@ -137,6 +137,19 @@ public class PromotionController {
         }
     }
 
+    // POST /api/v1/promotions/calculate-prices/consume
+    @PostMapping("/calculate-prices/consume")
+    public ResponseEntity<List<CartItemPriceResponse>> calculateAndConsumeCartPrices(
+            @RequestBody CartItemPriceRequest request
+    ) {
+        try {
+            List<CartItemPriceResponse> prices = promotionService.calculateAndConsumeCartItemPrices(request);
+            return ResponseEntity.ok(prices);
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
     // GET /api/v1/promotions/validate/{code}
     @GetMapping("/validate/{code}")
     public ResponseEntity<PromotionDTO> validateCode(@PathVariable String code) {

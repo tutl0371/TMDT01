@@ -192,7 +192,8 @@ function renderPromoGrid(list) {
         const basePrice = Number(product.price);
         const promoPrice = Number(entry.promoPrice);
         const imageMarkup = buildProductImageMarkup(product);
-        const discountLabel = entry.promoLabel || '-';
+        const discountLabel = appendRemainingToLabel(entry.promoLabel || '-', promo);
+        const badgeLabel = buildPromoBadgeLabel(promo);
         const promoDates = formatPromoDates(promo.startDate, promo.endDate);
         const bundleInfo = promo.discountType === 'BUNDLE'
             ? getBundleInfo(promo, product.id)
@@ -200,7 +201,7 @@ function renderPromoGrid(list) {
 
         return `
             <div class="promo-card">
-                <div class="promo-badge-km">KM</div>
+                <div class="promo-badge-km">${badgeLabel}</div>
                 
                 <div class="promo-image">
                     ${imageMarkup}
@@ -343,6 +344,29 @@ function getDiscountLabel(promo) {
     return 'Tặng kèm';
 }
 
+function getRemainingPromoQuantity(promo) {
+    const maxQty = Number(promo?.maxQuantity);
+    if (!Number.isFinite(maxQty) || maxQty <= 0) {
+        return null;
+    }
+    if (Number.isFinite(Number(promo?.remainingQuantity))) {
+        return Math.max(0, Number(promo.remainingQuantity));
+    }
+    const usedQty = Math.max(0, Number(promo?.usedQuantity || 0));
+    return Math.max(0, maxQty - usedQty);
+}
+
+function buildPromoBadgeLabel(promo) {
+    const remaining = getRemainingPromoQuantity(promo);
+    return remaining == null ? 'KM' : `KM SL ${remaining}`;
+}
+
+function appendRemainingToLabel(label, promo) {
+    const remaining = getRemainingPromoQuantity(promo);
+    if (remaining == null) return label;
+    return `${label} (SL còn ${remaining})`;
+}
+
 function formatPrice(v) {
     return Number.isFinite(Number(v)) ? `${Math.round(v).toLocaleString('vi-VN')}đ` : '-';
 }
@@ -362,6 +386,11 @@ function formatDate(val) {
 function isPromotionActive(p) {
     if (!p) return false;
     if (p.active === false) return false; // Check active status
+    const maxQty = Number(p.maxQuantity);
+    if (Number.isFinite(maxQty) && maxQty > 0) {
+        const usedQty = Math.max(0, Number(p.usedQuantity || 0));
+        if (usedQty >= maxQty) return false;
+    }
     const now = new Date();
     const start = parsePromotionDate(p.startDate);
     const end = parsePromotionDate(p.endDate);

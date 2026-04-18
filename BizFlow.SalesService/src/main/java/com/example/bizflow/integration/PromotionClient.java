@@ -25,16 +25,27 @@ public class PromotionClient {
     }
 
     public Map<Long, CartItemPriceResponse> calculatePrices(List<CartItem> items) {
+        return requestPrices(items, false);
+    }
+
+    public Map<Long, CartItemPriceResponse> calculateAndConsumePrices(List<CartItem> items) {
+        return requestPrices(items, true);
+    }
+
+    private Map<Long, CartItemPriceResponse> requestPrices(List<CartItem> items, boolean consume) {
         if (items == null || items.isEmpty()) {
             return Collections.emptyMap();
         }
 
         CartItemPriceRequest request = new CartItemPriceRequest();
         request.setItems(items);
+        String endpoint = consume
+                ? "/api/v1/promotions/calculate-prices/consume"
+                : "/api/v1/promotions/calculate-prices";
 
         try {
             ResponseEntity<CartItemPriceResponse[]> response = restTemplate.postForEntity(
-                    baseUrl + "/api/v1/promotions/calculate-prices",
+                    baseUrl + endpoint,
                     request,
                     CartItemPriceResponse[].class
             );
