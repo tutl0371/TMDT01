@@ -82,7 +82,6 @@ INSERT INTO `users` (`id`, `username`, `password`, `email`, `full_name`, `phone_
 --
 -- Indexes for dumped tables
 --
-
 --
 -- Indexes for table `branches`
 --

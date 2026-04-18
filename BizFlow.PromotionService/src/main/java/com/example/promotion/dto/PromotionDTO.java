@@ -22,6 +22,7 @@ public class PromotionDTO {
     private Integer maxQuantity;
     private Integer usedQuantity;
     private Integer remainingQuantity;
+    private Boolean isExhausted;
 
     private List<PromotionTargetDTO> targets;
     private List<BundleItemDTO> bundleItems;
@@ -62,6 +63,9 @@ public class PromotionDTO {
 
     public Integer getRemainingQuantity() { return remainingQuantity; }
     public void setRemainingQuantity(Integer remainingQuantity) { this.remainingQuantity = remainingQuantity; }
+
+    public Boolean getIsExhausted() { return isExhausted; }
+    public void setIsExhausted(Boolean isExhausted) { this.isExhausted = isExhausted; }
 
     public List<PromotionTargetDTO> getTargets() { return targets; }
     public void setTargets(List<PromotionTargetDTO> targets) { this.targets = targets; }
