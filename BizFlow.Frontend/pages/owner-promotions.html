@@ -409,6 +409,19 @@
         }
         .status-success { color: #16a34a; font-weight: 600; }
         .status-error { color: #dc2626; font-weight: 600; }
+        .hidden-select { display: none; }
+        .hidden-text { display: none; padding-top: 12px; }
+        .quota-alert-panel { display: none; border-left: 4px solid #ef4444; }
+        .quota-alert-panel.show { display: block; }
+        .quota-alert-header { display: flex; justify-content: space-between; align-items: center; }
+        .quota-alert-title { margin: 0; }
+        .quota-alert-close { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--muted); }
+        .form-row-inline { display: flex; gap: 8px; }
+        .form-row-inline input { flex: 1; }
+        .form-full-width { grid-column: 1 / -1; }
+        .target-row-flex { display: flex; gap: 8px; }
+        .target-row-item { flex: 1; }
+        .target-remove-btn { background: none; border: 1px solid var(--danger); color: var(--danger); padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
             body.in-drawer .sidebar {
             display: none;
         }
@@ -563,13 +576,13 @@
                 </div>
             </div>
 
-            <div id="quotaAlertPanel" class="card" style="display: none; border-left: 4px solid #ef4444;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div id="quotaAlertPanel" class="card quota-alert-panel">
+                <div class="quota-alert-header">
                     <div>
-                        <div class="card-title" style="margin: 0;">🔔 Thông báo Hạn ngạch Khuyến mãi</div>
+                        <div class="card-title quota-alert-title">🔔 Thông báo Hạn ngạch Khuyến mãi</div>
                         <div id="quotaAlertContent" class="stack"></div>
                     </div>
-                    <button style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--muted);" onclick="closeQuotaAlerts()">×</button>
+                    <button class="quota-alert-close" onclick="closeQuotaAlerts()" title="Đóng thông báo">×</button>
                 </div>
             </div>
 
@@ -580,13 +593,13 @@
                         <span>🔍</span>
                         <input type="text" id="searchInput" placeholder="Tìm theo mã hoặc tên khuyến mãi..." oninput="applyFilters()">
                     </label>
-                    <select id="typeFilter" class="select-box" onchange="applyFilters()">
+                    <select id="typeFilter" class="select-box" onchange="applyFilters()" title="Lọc khuyến mãi theo loại">
                         <option value="ALL">Tất cả loại</option>
                         <option value="PERCENT">Giảm %</option>
                         <option value="FIXED">Giảm tiền</option>
                         <option value="BUNDLE">Combo</option>
                     </select>
-                    <select id="targetFilter" class="select-box" onchange="applyFilters()">
+                    <select id="targetFilter" class="select-box" onchange="applyFilters()" title="Lọc khuyến mãi theo đối tượng">
                         <option value="ALL">Tất cả đối tượng</option>
                         <option value="CATEGORY">Theo danh mục</option>
                         <option value="PRODUCT">Theo sản phẩm</option>
@@ -615,7 +628,7 @@
                         <tr><td colspan="10" class="loading">Đang tải...</td></tr>
                     </tbody>
                 </table>
-                <div id="promoEmpty" class="status-text" style="display:none; padding-top: 12px;">Không có khuyến mãi phù hợp.</div>
+                <div id="promoEmpty" class="status-text hidden-text">Không có khuyến mãi phù hợp.</div>
             </div>
         </div>
     </div>
@@ -634,8 +647,8 @@
                     </div>
                     <div class="form-group">
                         <label>Tên khuyến mãi *</label>
-                        <div style="display: flex; gap: 8px;">
-                            <input type="text" id="promoName" required style="flex: 1;">
+                        <div class="form-row-inline">
+                            <input type="text" id="promoName" required>
                             <button type="button" class="btn-ai-generate" onclick="generatePromotionDetails()" title="AI tự động tạo tên & code">
                                 ✨ AI
                             </button>
@@ -653,7 +666,7 @@
                         <label>Giá trị giảm *</label>
                         <div class="value-field">
                             <input type="number" id="promoValue" min="0" step="0.01" required>
-                            <select id="promoValuePercent" style="display:none;">
+                            <select id="promoValuePercent" class="hidden-select" title="Chọn mức giảm giá">
                                 <option value="">-- Chọn % --</option>
                                 <option value="5">5%</option>
                                 <option value="10">10%</option>
@@ -669,7 +682,7 @@
                                 <option value="90">90%</option>
                                 <option value="100">100%</option>
                             </select>
-                            <select id="promoValueBundle" style="display:none;">
+                            <select id="promoValueBundle" class="hidden-select" title="Chọn mẫu combo">
                                 <option value="1:1">Mua 1 tặng 1</option>
                                 <option value="2:1">Mua 2 tặng 1</option>
                                 <option value="3:1">Mua 3 tặng 1</option>
@@ -691,7 +704,7 @@
                         <input type="number" id="promoMaxQuantity" min="1" step="1" placeholder="Để trống = không giới hạn">
                         <div class="muted">Số lượt giảm giá/combo có thể dùng trước khi quay về giá gốc.</div>
                     </div>
-                    <div class="form-group" style="grid-column: 1 / -1;">
+                    <div class="form-group form-full-width">
                         <label>Mô tả</label>
                         <textarea id="promoDescription" rows="3"></textarea>
                     </div>

@@ -359,10 +359,15 @@ public class PromotionServiceImpl implements PromotionService {
         
         Boolean active = dto.getActive();
         promotion.setActive(active != null ? active : true);
-        promotion.setMaxQuantity(normalizeMaxQuantity(dto.getMaxQuantity()));
-        if (promotion.getUsedQuantity() == null || promotion.getUsedQuantity() < 0) {
-            promotion.setUsedQuantity(0);
-        }
+        
+        // 🔧 FIX: Handle maxQuantity and usedQuantity logic properly
+        // Lưu giữ maxQuantity cũ trước khi đặt cái mới
+        Integer oldMaxQuantity = promotion.getMaxQuantity();
+        Integer newMaxQuantity = normalizeMaxQuantity(dto.getMaxQuantity());
+        promotion.setMaxQuantity(newMaxQuantity);
+        
+        // Xử lý logic reset usedQuantity dựa trên thay đổi maxQuantity
+        handleUsedQuantityOnMaxQuantityChange(promotion, oldMaxQuantity, newMaxQuantity);
 
         if (dto.getTargets() != null) {
             if (promotion.getTargets() == null) {
@@ -1001,6 +1006,89 @@ public class PromotionServiceImpl implements PromotionService {
             return 0;
         }
         return usedQuantity;
+    }
+
+    /**
+     * 🔧 FIX: Xử lý logic reset usedQuantity khi maxQuantity thay đổi.
+     * 
+     * Quy tắc xử lý:
+     * 1. Nếu new maxQuantity = 0/null (vô hạn) → RESET usedQuantity = 0
+     *    - Vô hạn nghĩa là không cần đếm, nên reset
+     * 
+     * 2. Nếu old maxQuantity = 0/null (vô hạn) AND new maxQuantity > 0 (có hạn)
+     *    → RESET usedQuantity = 0
+     *    - Chuyển từ vô hạn sang có hạn, phải bắt đầu lại từ 0
+     * 
+     * 3. Nếu cả old và new đều > 0 (both có hạn) AND new < old usedQuantity
+     *    → CAP usedQuantity = new maxQuantity
+     *    - Đã dùng nhiều hơn giới hạn mới, cần cập nhật
+     * 
+     * 4. Các trường hợp khác → GIỮ usedQuantity cũ không thay đổi
+     *    - Update quantity từ số hạn này sang số hạn khác (giống hoặc lớn hơn)
+     * 
+     * @param promotion Entity hiện tại (sẽ bị cập nhật)
+     * @param oldMaxQuantity Giá trị maxQuantity cũ (trước khi change)
+     * @param newMaxQuantity Giá trị maxQuantity mới (sau khi normalize)
+     */
+    private void handleUsedQuantityOnMaxQuantityChange(
+            Promotion promotion, 
+            Integer oldMaxQuantity, 
+            Integer newMaxQuantity) {
+        
+        // Lấy usedQuantity hiện tại
+        Integer currentUsedQuantity = normalizeUsedQuantity(promotion.getUsedQuantity());
+        
+        // Normalize các giá trị để so sánh
+        Integer normalizedOldMax = normalizeMaxQuantity(oldMaxQuantity);
+        
+        log.info(
+            "[handleUsedQuantityOnMaxQuantityChange] Processing quantity change: " +
+            "oldMax={}, newMax={}, currentUsed={}, normalizedOldMax={}, normalizedNewMax={}",
+            oldMaxQuantity, newMaxQuantity, currentUsedQuantity, normalizedOldMax, newMaxQuantity
+        );
+        
+        // Quy tắc 1: Nếu new maxQuantity = null (vô hạn) → reset usedQuantity
+        if (newMaxQuantity == null) {
+            log.warn(
+                "[handleUsedQuantityOnMaxQuantityChange] Rule 1 triggered: " +
+                "New maxQuantity is unlimited (null), RESETTING usedQuantity from {} to 0",
+                currentUsedQuantity
+            );
+            promotion.setUsedQuantity(0);
+            return;
+        }
+        
+        // Quy tắc 2: Chuyển từ vô hạn (old=null) sang có hạn (new>0)
+        if (normalizedOldMax == null && newMaxQuantity > 0) {
+            log.warn(
+                "[handleUsedQuantityOnMaxQuantityChange] Rule 2 triggered: " +
+                "Transition from unlimited to limited (newMax={}), RESETTING usedQuantity from {} to 0",
+                newMaxQuantity, currentUsedQuantity
+            );
+            promotion.setUsedQuantity(0);
+            return;
+        }
+        
+        // Quy tắc 3: Cả old và new đều có hạn, nhưng new nhỏ hơn usedQuantity hiện tại
+        if (normalizedOldMax != null && normalizedOldMax > 0 &&
+            newMaxQuantity > 0 && newMaxQuantity < currentUsedQuantity) {
+            
+            log.warn(
+                "[handleUsedQuantityOnMaxQuantityChange] Rule 3 triggered: " +
+                "New max quantity ({}) is less than current used quantity ({}), CAPPING usedQuantity to {}",
+                newMaxQuantity, currentUsedQuantity, newMaxQuantity
+            );
+            promotion.setUsedQuantity(newMaxQuantity);
+            return;
+        }
+        
+        // Quy tắc 4: Các trường hợp khác → giữ usedQuantity cũ
+        log.info(
+            "[handleUsedQuantityOnMaxQuantityChange] Rule 4 triggered: " +
+            "No reset needed, keeping usedQuantity unchanged at {}",
+            currentUsedQuantity
+        );
+        // usedQuantity giữ nguyên, không cần thay đổi
     }
 
     private boolean hasRemainingQuota(Promotion promo) {
