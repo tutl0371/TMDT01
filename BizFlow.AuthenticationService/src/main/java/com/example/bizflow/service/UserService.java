@@ -24,20 +24,43 @@ public class UserService {
 
     @SuppressWarnings("null")
     public User createUser(CreateUserRequest request) {
-        if (userRepository.findByUsername(request.getUsername()).isPresent()) {
+        String username = request.getUsername() == null ? null : request.getUsername().trim();
+        String email = request.getEmail() == null ? null : request.getEmail().trim();
+        String phone = request.getPhoneNumber() == null ? null : request.getPhoneNumber().trim();
+
+        if (username == null || username.isEmpty()) {
+            throw new RuntimeException("Username is required");
+        }
+
+        if (userRepository.findByUsername(username).isPresent()) {
             throw new RuntimeException("Username already exists");
         }
 
+        if (email != null && userRepository.existsByEmail(email)) {
+            throw new RuntimeException("Email already in use");
+        }
+
+        if (phone != null && userRepository.existsByPhoneNumber(phone)) {
+            throw new RuntimeException("Phone number already in use");
+        }
+
         User user = new User();
-        user.setUsername(request.getUsername());
+        user.setUsername(username);
 
         String encodedPassword = new PasswordEncoder().encode(request.getPassword());
         user.setPassword(encodedPassword);
         user.setPasswordHash(encodedPassword);
-        user.setEmail(request.getEmail());
+        user.setEmail(email);
         user.setFullName(request.getFullName());
-        user.setPhoneNumber(request.getPhoneNumber());
-        user.setRole(Role.valueOf(request.getRole().toUpperCase()));
+        user.setPhoneNumber(phone);
+
+        String roleStr = request.getRole() == null ? "EMPLOYEE" : request.getRole();
+        try {
+            user.setRole(Role.valueOf(roleStr.toUpperCase()));
+        } catch (Exception e) {
+            user.setRole(Role.EMPLOYEE);
+        }
+
         user.setEnabled(true);
         user.setCreatedAt(LocalDateTime.now());
 
@@ -94,7 +117,7 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // Admin dashboard methods
+    // Admin dashboard method
     public long getUsersCount() {
         return userRepository.count();
     }

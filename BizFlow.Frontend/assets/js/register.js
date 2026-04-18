@@ -1,4 +1,5 @@
 const REGISTER_API_BASE = resolveApiBase();
+
 function resolveApiBase() {
   const configured = window.API_BASE_URL || window.API_BASE;
   if (configured) {
