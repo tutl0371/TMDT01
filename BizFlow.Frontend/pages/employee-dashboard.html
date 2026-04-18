@@ -16,9 +16,9 @@
             </div>
             <span class="app-icon app-blue app-badge">BH</span>
             <div class="order-tabs" id="orderTabs">
-                <button class="order-tab active" data-invoice-id="default">H&#243;a &#273;&#417;n 1 <span class="tab-close">&times;</span></button>
-                <button class="order-tab ghost" id="addInvoiceBtn" title="Th&#234;m h&#243;a &#273;&#417;n">+</button>
-                <button class="order-tab ghost" id="savedInvoiceBtn">H&#272; l&#432;u t&#7841;m</button>
+                <button class="order-tab active" data-invoice-id="default">Gi&#7887; h&#224;ng 1 <span class="tab-close">&times;</span></button>
+                <button class="order-tab ghost" id="addInvoiceBtn" title="Th&#234;m gi&#7887; h&#224;ng">+</button>
+                <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi&#7887; h&#224;ng</button>
             </div>
         </div>
         <div class="header-actions">
@@ -63,11 +63,11 @@
 
     <div class="saved-bills-panel" id="savedBillsPanel" aria-hidden="true">
         <div class="saved-bills-header">
-            <span>Hóa đơn lưu tạm</span>
+            <span>Giỏ hàng </span>
             <button id="closeSavedBills" class="icon-btn mini" type="button" aria-label="Đóng">×</button>
         </div>
         <div class="saved-bills-list" id="savedBillsList"></div>
-        <div class="saved-bills-empty" id="savedBillsEmpty">Chưa có hóa đơn lưu tạm</div>
+        <div class="saved-bills-empty" id="savedBillsEmpty">Chưa có giỏ hàng</div>
     </div>
 
     <section class="pos-toolbar">
@@ -94,26 +94,6 @@
                     <div class="toolbar-search-list" id="toolbarSearchList"></div>
                     <div class="toolbar-search-empty" id="toolbarSearchEmpty">Không có sản phẩm</div>
                 </div>
-            </div>
-            <div class="toolbar-toggle">
-                <label class="switch">
-                    <input type="checkbox" id="splitLine">
-                    <span class="slider"></span>
-                </label>
-                <span>Tách dòng</span>
-            </div>
-            <button class="toolbar-chip" id="employeeSelector">
-                <span class="chip-icon">
-                    <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
-                        <circle cx="12" cy="8" r="3" />
-                        <path d="M5 20a7 7 0 0 1 14 0" />
-                    </svg>
-                </span>
-                <span id="selectedEmployeeName">Đang tải...</span>
-                <span class="chip-caret">&#9662;</span>
-            </button>
-            <div class="employee-dropdown" id="employeeList" style="display: none;">
-                <div class="employee-empty">Đang tải...</div>
             </div>
             <button class="toolbar-chip" type="button" onclick="window.location.href='/pages/promotions.html'">
                 <span class="chip-icon">
@@ -187,7 +167,20 @@
                     </div>
                 </div>
 
-                <div class="products-grid" id="productsGrid"></div>
+                <div class="suggestion-content">
+                    <aside class="category-sidebar" id="categorySidebar">
+                        <div class="category-sidebar-header">
+                            <svg viewBox="0 0 24 24" class="category-header-icon" aria-hidden="true">
+                                <path d="M3 6h18" />
+                                <path d="M3 12h18" />
+                                <path d="M3 18h18" />
+                            </svg>
+                            <span>Danh mục sản phẩm</span>
+                        </div>
+                        <div class="category-list" id="productCategoryList"></div>
+                    </aside>
+                    <div class="products-grid" id="productsGrid"></div>
+                </div>
             </div>
         </div>
 
@@ -331,8 +324,8 @@
                 </div>
 
                 <div class="cart-actions">
-                    <button id="saveBillBtn" class="ghost-btn">L&#432;u t&#7841;m (F10)</button>
-                    <button id="checkoutBtn" class="primary-btn">Thu ti&#7873;n (F9)</button>
+                    <button id="saveBillBtn" class="ghost-btn">Th&#234;m v&#224;o gi&#7887; h&#224;ng (F10)</button>
+                    <button id="checkoutBtn" class="primary-btn">Thanh to&#225;n (F9)</button>
                 </div>
             </div>
         </aside>
@@ -855,6 +848,27 @@
         </div>
     </div>
 
+    <button id="contactSupportBtn" class="contact-support-btn" type="button" aria-label="Liên hệ Owner">💬 Liên hệ</button>
+
+    <div id="toastContainer" style="position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 400px;"></div>
+
+    <div class="modal" id="contactSupportModal" aria-hidden="true">
+        <div class="modal-content contact-support-modal">
+            <div class="modal-header">
+                <h3>Liên hệ Owner</h3>
+                <button id="contactSupportCloseBtn" class="icon-btn small" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div class="contact-support-body">
+                <div class="contact-support-meta" id="contactSupportMeta">Đang kết nối...</div>
+                <div class="contact-support-messages" id="contactSupportMessages"></div>
+                <div class="contact-support-input-row">
+                    <input id="contactSupportInput" type="text" placeholder="Nhập tin nhắn cho Owner..." />
+                    <button id="contactSupportSendBtn" class="primary-btn" type="button">Gửi</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Transfer QR Modal -->
     <div class="modal" id="transferQrModal" aria-hidden="true">
         <div class="modal-content transfer-qr">
@@ -898,7 +912,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="../assets/js/combo-promotion-ai.js?v=1.0.0" onerror="console.error('Failed to load combo-promotion-ai.js')"></script>
-    <script src="../assets/js/employee-dashboard.js?v=stock-1"></script>
+    <script src="../assets/js/employee-dashboard.js?v=stock-3"></script>
     <script src="../assets/js/app-shell.js"></script>
 </body>
 </html>

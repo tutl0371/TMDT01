@@ -31,4 +31,6 @@ public interface PromotionService {
     void activatePromotion(Long id);
     
     List<CartItemPriceResponse> calculateCartItemPrices(CartItemPriceRequest request);
+
+    List<CartItemPriceResponse> calculateAndConsumeCartItemPrices(CartItemPriceRequest request);
 }
