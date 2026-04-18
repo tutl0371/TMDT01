@@ -222,22 +222,25 @@ public class OrderController {
         Long customerId = request.getCustomerId();
         CustomerClient.CustomerSnapshot customer = null;
 
+        // Loyalty points are account-based: when an authenticated user creates
+        // an order, always resolve the linked customer record from that account.
+        if (userId != null && user != null) {
+            customer = resolveOrUpsertCustomerForUser(
+                    userId,
+                    user,
+                    request.getCustomerName(),
+                    request.getCustomerEmail(),
+                    request.getCustomerAddress()
+            );
+            if (customer != null && customer.getId() != null) {
+                customerId = customer.getId();
+            }
+        }
+
         // If client didn't provide existing customerId, try to associate by user first,
         // falling back to phone-based upsert for guest customers.
         if (customerId == null) {
-            if (userId != null && user != null) {
-                CustomerClient.CustomerSnapshot up = customerClient.upsertCustomerByUser(
-                        userId,
-                        resolveUserName(user),
-                        request.getCustomerName(),
-                        request.getCustomerEmail(),
-                        request.getCustomerAddress()
-                );
-                if (up != null) {
-                    customerId = up.getId();
-                    customer = up;
-                }
-            } else if (request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
+            if (request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
                 CustomerClient.CustomerSnapshot up = customerClient.upsertCustomer(
                         request.getCustomerName(),
                         request.getCustomerPhone(),
@@ -406,9 +409,13 @@ public class OrderController {
                         String ref = "ORDER_REDEEM_" + savedOrder.getId();
                         customerClient.redeemPoints(customer.getId(), pointsUsed, ref);
                     }
-                    // Points are awarded only when the order is confirmed as
-                    // RECEIVED (customer confirms they received goods). This
-                    // prevents awarding points before delivery/receipt.
+                    // Award points immediately for paid orders so the current
+                    // authenticated account sees updated points right away.
+                    customerClient.addPoints(
+                            customer.getId(),
+                            total,
+                            "ORDER_" + savedOrder.getId()
+                    );
                 }
         }
 
@@ -651,6 +658,25 @@ public class OrderController {
             return ResponseEntity.ok("Order already confirmed as received");
         }
 
+        if (order.getUserId() != null) {
+            UserClient.UserSnapshot user = userClient.getUser(order.getUserId());
+            if (user != null) {
+                CustomerClient.CustomerSnapshot accountCustomer = resolveOrUpsertCustomerForUser(
+                        order.getUserId(),
+                        user,
+                        null,
+                        null,
+                        null
+                );
+                if (accountCustomer != null && accountCustomer.getId() != null) {
+                    if (!accountCustomer.getId().equals(order.getCustomerId())) {
+                        order.setCustomerId(accountCustomer.getId());
+                        orderRepository.save(order);
+                    }
+                }
+            }
+        }
+
         if (order.getCustomerId() == null && order.getCustomerPhone() != null && !order.getCustomerPhone().isBlank()) {
             String normalizedPhone = PhoneUtils.normalize(order.getCustomerPhone().trim());
             order.setCustomerPhone(normalizedPhone);
@@ -685,12 +711,12 @@ public class OrderController {
                     "ORDER_RECEIVED_" + order.getId()
             );
             if (pointsAdded < 0) {
-                return ResponseEntity.status(500).body(Map.of(
-                        "message", "Không thể cộng điểm cho khách hàng. Vui lòng kiểm tra dịch vụ khách hàng.",
-                        "customerId", order.getCustomerId(),
-                        "customerPhone", order.getCustomerPhone(),
-                        "orderId", order.getId()
-                ));
+                Map<String, Object> errorBody = new HashMap<>();
+                errorBody.put("message", "Không thể cộng điểm cho khách hàng. Vui lòng kiểm tra dịch vụ khách hàng.");
+                errorBody.put("customerId", order.getCustomerId());
+                errorBody.put("customerPhone", order.getCustomerPhone());
+                errorBody.put("orderId", order.getId());
+                return ResponseEntity.status(500).body(errorBody);
             }
         } else {
             pointsAdded = 0;
@@ -698,13 +724,13 @@ public class OrderController {
 
         order.setStatus("RECEIVED");
         orderRepository.save(order);
-        return ResponseEntity.ok(Map.of(
-                "message", "Order confirmed as received",
-                "pointsAdded", pointsAdded,
-                "customerId", order.getCustomerId(),
-                "customerPhone", order.getCustomerPhone(),
-                "orderId", order.getId()
-        ));
+        Map<String, Object> okBody = new HashMap<>();
+        okBody.put("message", "Order confirmed as received");
+        okBody.put("pointsAdded", pointsAdded);
+        okBody.put("customerId", order.getCustomerId());
+        okBody.put("customerPhone", order.getCustomerPhone());
+        okBody.put("orderId", order.getId());
+        return ResponseEntity.ok(okBody);
     }
 
     @PostMapping("/attach-phone")
@@ -916,6 +942,23 @@ public class OrderController {
             return user.getFullName();
         }
         return user.getUsername();
+    }
+
+    private CustomerClient.CustomerSnapshot resolveOrUpsertCustomerForUser(Long userId,
+                                                                           UserClient.UserSnapshot user,
+                                                                           String customerName,
+                                                                           String customerEmail,
+                                                                           String customerAddress) {
+        if (userId == null || user == null) {
+            return null;
+        }
+        return customerClient.upsertCustomerByUser(
+                userId,
+                resolveUserName(user),
+                customerName,
+                customerEmail,
+                customerAddress
+        );
     }
 
     private Map<Long, CatalogClient.ProductSnapshot> buildProductCache(List<OrderItem> items) {

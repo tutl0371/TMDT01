@@ -276,7 +276,13 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.warn('payment panel init failed', e);
     }
 
-    try { initInvoices(); } catch (e) { console.warn('initInvoices failed', e); }
+    try {
+        // Keep invoice/customer state restored from server; only initialize
+        // a fresh invoice when there is no restored invoice state.
+        if (!Array.isArray(invoices) || invoices.length === 0) {
+            initInvoices();
+        }
+    } catch (e) { console.warn('initInvoices failed', e); }
 
     try {
         document.getElementById('productsGrid').innerHTML =
@@ -835,18 +841,16 @@ async function loadCurrentEmployee() {
             if (custRes.ok) {
                 const cust = await custRes.json();
                 if (cust && cust.id) {
-                    const shouldOverrideSelection = !selectedCustomer || selectedCustomer.id === 0 || selectedCustomer.id !== Number(cust.id);
-                    if (shouldOverrideSelection) {
-                        applyCustomerSelection({
-                            id: cust.id,
-                            name: cust.name || 'Khách lẻ',
-                            phone: cust.phone || '-',
-                            address: cust.address || '',
-                            totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
-                            monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
-                            tier: cust.tier || ''
-                        }, { openDetail: false });
-                    }
+                    // Always bind checkout membership to the authenticated account.
+                    applyCustomerSelection({
+                        id: cust.id,
+                        name: cust.name || 'Khách lẻ',
+                        phone: cust.phone || '-',
+                        address: cust.address || '',
+                        totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
+                        monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
+                        tier: cust.tier || ''
+                    }, { openDetail: false });
                     await refreshCustomerDetailFromApi(Number(cust.id));
                 } else {
                     const existingCustomer = await findExistingCustomerForCurrentUser(data);
@@ -1586,9 +1590,9 @@ async function createOrder(isPaid) {
         const caddr = document.getElementById('checkoutCustomerAddress')?.value?.trim() || '';
         if (cname || cphone || caddr) {
             if (selectedCustomer && Number.isFinite(Number(selectedCustomer.id)) && Number(selectedCustomer.id) > 0) {
+                // Keep account identity stable: do not overwrite member name/phone
+                // from temporary checkout input fields.
                 selectedCustomer = Object.assign({}, selectedCustomer, {
-                    name: cname || selectedCustomer.name,
-                    phone: cphone || selectedCustomer.phone,
                     address: caddr || selectedCustomer.address
                 });
             } else {
@@ -3280,6 +3284,11 @@ function normalizePhoneForOrder(phone) {
 
 async function refreshSelectedCustomerPointsForOrder(order) {
     if (!order) return;
+    if (selectedCustomer?.id && Number(selectedCustomer.id) > 0) {
+        await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
     const normalizedOrderPhone = normalizePhoneForOrder(order.customerPhone || order.customer_phone || '');
     const normalizedSelectedPhone = normalizePhoneForOrder(selectedCustomer?.phone || selectedCustomer?.customerPhone || '');
 
@@ -4372,7 +4381,12 @@ function applyInvoiceState(invoice) {
             try { refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
         }
     } else {
-        clearSelectedCustomer({ showList: false });
+        // Account-based loyalty: if a logged-in account customer is already
+        // selected, keep it instead of resetting to guest when a draft has no
+        // explicit customer attached.
+        if (!(selectedCustomer && Number(selectedCustomer.id) > 0 && getCurrentUserId())) {
+            clearSelectedCustomer({ showList: false });
+        }
     }
 
     renderCart();
