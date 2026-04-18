@@ -838,6 +838,7 @@ async function addToCart(productId, productName, productPrice) {
     // Check if product has promotion
     let effectivePrice = basePrice;
     let promoId = null;
+    let exceedsPromoQuota = false;
     
     if (promotionIndex && product.id != null) {
         const promoInfo = promotionIndex.get(product.id);
@@ -845,13 +846,39 @@ async function addToCart(productId, productName, productPrice) {
         
         if (promoInfo?.promo) {
             promoId = promoInfo.promo.id;
+            
+            // Check if adding this quantity would exceed promotion quota
+            const maxQty = Number(promoInfo.promo.maxQuantity);
+            const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
+            
+            if (Number.isFinite(maxQty) && maxQty > 0) {
+                const cartQtyForThisProduct = (cart.find(item => item.productId === productId && !item.isFreeGift)?.quantity || 0);
+                const totalQtyWillBe = cartQtyForThisProduct + qty;
+                const remaining = Math.max(0, maxQty - usedQty - cartQtyForThisProduct);
+                
+                if (totalQtyWillBe > (maxQty - usedQty)) {
+                    // Promotion quota exceeded - ask for confirmation
+                    const promoName = promoInfo.promo.name || promoInfo.promo.code || 'Khuyến mãi';
+                    const confirmMessage = `Khuyến mãi "${promoName}" chỉ còn ${remaining} sản phẩm. Bạn muốn thêm ${qty} sản phẩm không?\n\nSố lượng vượt mức sẽ được tính giá gốc.`;
+                    
+                    if (!confirm(confirmMessage)) {
+                        console.log('[addToCart] User cancelled - promotion quota exceeded');
+                        return;
+                    }
+                    exceedsPromoQuota = true;
+                    console.log('[addToCart] User confirmed - proceeding with mixed pricing');
+                }
+            }
+            
             // For BUNDLE, must calculate with actual quantity
             if (normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
-                effectivePrice = getPromoPrice(basePrice, promoInfo.promo, qty);
+                const cartQtyForThisProduct = (cart.find(item => item.productId === productId && !item.isFreeGift)?.quantity || 0);
+                effectivePrice = getPromoPrice(basePrice, promoInfo.promo, qty, cartQtyForThisProduct);
                 console.log('[addToCart] BUNDLE effectivePrice:', effectivePrice);
             } else {
                 // For other promo types (PERCENT, FIXED), quantity doesn't matter
-                effectivePrice = getPromoPrice(basePrice, promoInfo.promo, 1);
+                const cartQtyForThisProduct = (cart.find(item => item.productId === productId && !item.isFreeGift)?.quantity || 0);
+                effectivePrice = getPromoPrice(basePrice, promoInfo.promo, 1, cartQtyForThisProduct);
                 console.log('[addToCart] Non-BUNDLE effectivePrice:', effectivePrice);
             }
         }
@@ -863,19 +890,35 @@ async function addToCart(productId, productName, productPrice) {
     if (!splitLine) {
         const existingItem = cart.find(item => item.productId === productId && !item.isFreeGift);
         if (existingItem) {
-            const newQty = existingItem.quantity + qty;
+            const oldQty = existingItem.quantity;  // Lưu số lượng cũ
+            const oldPrice = existingItem.productPrice;  // Lưu giá cũ
+            const newQty = oldQty + qty;
             existingItem.quantity = newQty;
             existingItem.stock = stock;
             
-            // Recalculate price for bundle promos
+            // Recalculate price for promos with quota
             if (promotionIndex && product.id != null) {
                 const promoInfo = promotionIndex.get(product.id);
-                if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
-                    existingItem.productPrice = getPromoPrice(basePrice, promoInfo.promo, newQty);
+                if (promoInfo?.promo) {
+                    // Calculate price for newly added items
+                    let newItemPrice = resolvedPrice;
+                    if (normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
+                        newItemPrice = getPromoPrice(basePrice, promoInfo.promo, qty, oldQty);
+                    } else {
+                        newItemPrice = getPromoPrice(basePrice, promoInfo.promo, 1, oldQty);
+                    }
+                    
+                    // Calculate average price: (old_total + new_items_total) / new_qty
+                    const oldTotalPrice = oldQty * oldPrice;
+                    const newTotalPrice = oldTotalPrice + (qty * newItemPrice);
+                    existingItem.productPrice = newTotalPrice / newQty;
+                    
+                    console.log('[addToCart] Updating existing item price - oldQty:', oldQty, 'oldPrice:', oldPrice, 'newItemPrice:', newItemPrice, 'averagePrice:', existingItem.productPrice);
+                    existingItem.promoId = promoInfo?.promo?.id || null;
                 } else {
                     existingItem.productPrice = resolvedPrice;
+                    existingItem.promoId = null;
                 }
-                existingItem.promoId = promoInfo?.promo?.id || null;
             } else {
                 existingItem.productPrice = resolvedPrice;
                 existingItem.promoId = null;
@@ -1295,6 +1338,76 @@ function buildReceiptData(orderResponse, options = {}) {
         invoiceNumber = '-';
     }
 
+    // Split items with promo into separate lines (promo qty vs regular qty)
+    const receiptItems = [];
+    for (const item of cart) {
+        // Check if item has quota-limited promotion
+        if (item.promoId && promotionIndex) {
+            const promoInfo = promotionIndex.get(item.productId);
+            if (promoInfo?.promo) {
+                const maxQty = Number(promoInfo.promo.maxQuantity);
+                const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
+                
+                if (Number.isFinite(maxQty) && maxQty > 0) {
+                    const remaining = Math.max(0, maxQty - usedQty);
+                    const promoQty = Math.min(item.quantity, remaining);
+                    const regularQty = item.quantity - promoQty;
+                    
+                    // Get base price from product
+                    const product = products.find(p => p.id === item.productId);
+                    const basePrice = product ? Number(product.price) : item.productPrice;
+                    const promoPrice = getPromoPrice(basePrice, promoInfo.promo, 1, 0);
+                    
+                    console.log('[buildReceiptData] Split item:', {
+                        name: item.productName,
+                        totalQty: item.quantity,
+                        promoQty,
+                        regularQty,
+                        basePrice,
+                        promoPrice,
+                        promoCode: promoInfo.promo.code
+                    });
+                    
+                    // Add promo portion
+                    if (promoQty > 0) {
+                        receiptItems.push({
+                            productId: item.productId,
+                            name: `${item.productName} (KM)`,
+                            quantity: promoQty,
+                            price: promoPrice,
+                            total: promoQty * promoPrice,
+                            isPromo: true
+                        });
+                    }
+                    
+                    // Add regular portion (if any)
+                    if (regularQty > 0) {
+                        receiptItems.push({
+                            productId: item.productId,
+                            name: item.productName,
+                            quantity: regularQty,
+                            price: basePrice,
+                            total: regularQty * basePrice,
+                            isPromo: false
+                        });
+                    }
+                    
+                    continue;
+                }
+            }
+        }
+        
+        // No quota split needed - add as is
+        receiptItems.push({
+            productId: item.productId,
+            name: item.productName || '-',
+            quantity: item.quantity || 0,
+            price: item.productPrice || 0,
+            total: (item.productPrice || 0) * (item.quantity || 0),
+            isPromo: item.promoId ? true : false
+        });
+    }
+
     return {
         invoiceNumber,
         createdAt: new Date(),
@@ -1309,13 +1422,7 @@ function buildReceiptData(orderResponse, options = {}) {
         total,
         cashReceived,
         change,
-        items: cart.map(item => ({
-            productId: item.productId,
-            name: item.productName || '-',
-            quantity: item.quantity || 0,
-            price: item.productPrice || 0,
-            total: (item.productPrice || 0) * (item.quantity || 0)
-        }))
+        items: receiptItems
     };
 }
 
@@ -1737,7 +1844,26 @@ function buildPromotionIndex(promos, productList) {
     const productMap = new Map((productList || []).map((p) => [p.id, p]));
     const targetMap = new Map();
 
-    (promos || []).forEach((promo) => {
+    // Filter: exclude promotions with exhausted quota
+    const activePromos = (promos || []).filter(promo => {
+        const max = Number(promo?.maxQuantity);
+        const used = Math.max(0, Number(promo?.usedQuantity || 0));
+        
+        // If no max quantity, always active
+        if (!Number.isFinite(max) || max <= 0) {
+            return true;
+        }
+        
+        // If used >= max, promote is exhausted
+        if (used >= max) {
+            console.log(`[buildPromotionIndex] Filtering out exhausted promotion: ${promo.code} (${used}/${max})`);
+            return false;
+        }
+        
+        return true;
+    });
+
+    activePromos.forEach((promo) => {
         const targetIds = new Set();
         const targets = promo.targets || [];
         const bundles = promo.bundleItems || [];
@@ -1811,12 +1937,15 @@ function selectBestPromotion(product, promos) {
     return { promo: candidates[0]?.promo || null, price: NaN };
 }
 
-function getPromoPrice(basePrice, promo, quantity = 1) {
+function getPromoPrice(basePrice, promo, quantity = 1, currentCartQty = 0) {
     console.log('[getPromoPrice] FULL INPUT:', JSON.stringify({ 
         basePrice, 
         promoType: promo?.discountType, 
         promoCode: promo?.code,
         promoName: promo?.name,
+        maxQuantity: promo?.maxQuantity,
+        usedQuantity: promo?.usedQuantity,
+        currentCartQty: currentCartQty,
         bundleItems: promo?.bundleItems,
         quantity 
     }, null, 2));
@@ -1825,21 +1954,44 @@ function getPromoPrice(basePrice, promo, quantity = 1) {
         console.log('[getPromoPrice] Invalid input - basePrice:', basePrice, 'promo:', promo);
         return NaN;
     }
-    const value = Number(promo.discountValue);
+    
     const qty = Math.max(1, Number(quantity) || 1);
+    
+    // Check quota first
+    const maxQty = Number(promo.maxQuantity);
+    const backendUsedQty = Math.max(0, Number(promo.usedQuantity || 0));
+    // Adjust usedQty to account for items already in cart
+    const usedQty = backendUsedQty + Math.max(0, Number(currentCartQty || 0));
+    let appliedQty = qty;  // Quantity that gets promotion
+    let regularQty = 0;    // Quantity that gets base price
+    
+    if (Number.isFinite(maxQty) && maxQty > 0) {
+        const remaining = Math.max(0, maxQty - usedQty);
+        appliedQty = Math.min(qty, remaining);
+        regularQty = qty - appliedQty;
+        console.log('[getPromoPrice] Quota check - max:', maxQty, 'backendUsed:', backendUsedQty, 'cartQty:', currentCartQty, 'totalUsed:', usedQty, 'remaining:', remaining, 'appliedQty:', appliedQty, 'regularQty:', regularQty);
+    }
+    
+    // If no promotion can be applied
+    if (appliedQty === 0) {
+        console.log('[getPromoPrice] No quota remaining, returning basePrice:', basePrice);
+        return basePrice;
+    }
+    
+    const value = Number(promo.discountValue);
+    let discountedUnitPrice = basePrice;  // Price per unit with discount
     
     switch (normalizeDiscountType(promo.discountType)) {
         case 'PERCENT':
             if (!Number.isFinite(value)) return NaN;
-            return Math.max(0, basePrice * (1 - value / 100));
+            discountedUnitPrice = Math.max(0, basePrice * (1 - value / 100));
+            break;
         case 'FIXED':
             if (!Number.isFinite(value)) return NaN;
-            return Math.max(0, basePrice - value);
+            discountedUnitPrice = Math.max(0, basePrice - value);
+            break;
         case 'BUNDLE':
             // Bundle logic: "Mua X tặng Y"
-            // Example: Mua 3 t?ng 1 (value = 1)
-            // - mainQuantity: 3 (s? lu?ng c?n mua)
-            // - giftQuantity: 1 (s? lu?ng du?c t?ng)
             console.log('[getPromoPrice BUNDLE] bundleItems:', promo.bundleItems);
             
             if (!promo.bundleItems || promo.bundleItems.length === 0) {
@@ -1849,32 +2001,41 @@ function getPromoPrice(basePrice, promo, quantity = 1) {
             // Get first bundle item (assume 1 bundle per promo)
             const bundle = promo.bundleItems[0];
             const mainQty = Number(bundle.mainQuantity) || 3;  // Mua 3
-            const giftQty = Number(bundle.giftQuantity) || 1;  // T?ng 1
+            const giftQty = Number(bundle.giftQuantity) || 1;  // Tặng 1
             const setSize = mainQty + giftQty;  // 1 set = 4 chai
             
-            console.log('[getPromoPrice BUNDLE] bundle config:', { mainQty, giftQty, setSize, qty });
+            console.log('[getPromoPrice BUNDLE] bundle config:', { mainQty, giftQty, setSize, appliedQty, regularQty });
             
-            // Calculate number of complete sets
-            const completeSets = Math.floor(qty / setSize);
-            const remainingQty = qty % setSize;
+            // Only calculate bundle for appliedQty
+            const completeSets = Math.floor(appliedQty / setSize);
+            const remainingAfterSets = appliedQty % setSize;
             
-            // Price = (complete sets * price of mainQty) + (remaining * full price)
-            const bundlePrice = (completeSets * mainQty * basePrice) + (remainingQty * basePrice);
-            const unitPrice = bundlePrice / qty;
+            const bundlePrice = (completeSets * mainQty * basePrice) + (remainingAfterSets * basePrice) + (regularQty * basePrice);
+            const finalUnitPrice = bundlePrice / qty;
             
             console.log('[getPromoPrice BUNDLE] calculation:', { 
                 completeSets, 
-                remainingQty, 
+                remainingAfterSets,
+                regularQty,
                 bundlePrice, 
-                unitPrice 
+                finalUnitPrice 
             });
             
-            return Math.max(0, unitPrice);  // Return unit price
+            return Math.max(0, finalUnitPrice);
         case 'FREE_GIFT':
-            return basePrice;
+            discountedUnitPrice = basePrice;
+            break;
         default:
             return NaN;
     }
+    
+    // Mixed price calculation: appliedQty with discount + regularQty at base price
+    const totalPrice = (appliedQty * discountedUnitPrice) + (regularQty * basePrice);
+    const finalUnitPrice = totalPrice / qty;
+    
+    console.log('[getPromoPrice] Final calculation - appliedQty:', appliedQty, 'regularQty:', regularQty, 'discountedUnit:', discountedUnitPrice, 'totalPrice:', totalPrice, 'finalUnit:', finalUnitPrice);
+    
+    return Math.max(0, finalUnitPrice);
 }
 
 function normalizeDiscountType(value) {
@@ -2043,22 +2204,59 @@ function renderCart() {
 
 function updateQty(idx, change) {
     if (cart[idx] && !cart[idx].isReturnItem) {
-        cart[idx].quantity = Math.max(1, cart[idx].quantity + change);
+        const oldQty = cart[idx].quantity;
+        const newQty = Math.max(1, oldQty + change);
         
-        // Recalculate bundle price if this item has a bundle promotion
-        const item = cart[idx];
-        if (item.promoId) {
-            const promoInfo = promotionIndex.get(item.productId);
-            if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
-                // Get base price from product
-                const product = products.find(p => p.id === item.productId);
-                const basePrice = product ? Number(product.price) : item.productPrice;
-                console.log('[updateQty] Recalculating BUNDLE:', { productId: item.productId, basePrice, newQty: item.quantity });
-                // Recalculate price with new quantity
-                item.productPrice = getPromoPrice(basePrice, promoInfo.promo, item.quantity);
+        // Check promotion quota if quantity is increasing
+        if (newQty > oldQty && cart[idx].promoId) {
+            const promoInfo = promotionIndex.get(cart[idx].productId);
+            if (promoInfo?.promo) {
+                const maxQty = Number(promoInfo.promo.maxQuantity);
+                const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
+                const effectiveUsedQty = usedQty + oldQty;  // Account for items in cart
+                
+                if (Number.isFinite(maxQty) && maxQty > 0) {
+                    const remaining = Math.max(0, maxQty - effectiveUsedQty);
+                    
+                    if ((newQty - oldQty) > remaining) {
+                        // Promotion quota exceeded - ask for confirmation
+                        const promoName = promoInfo.promo.name || promoInfo.promo.code || 'Khuyến mãi';
+                        const confirmMessage = `Khuyến mãi "${promoName}" chỉ còn ${remaining} sản phẩm. Bạn muốn tăng lên ${newQty} sản phẩm không?\n\nSố lượng vượt mức sẽ được tính giá gốc.`;
+                        
+                        if (!confirm(confirmMessage)) {
+                            console.log('[updateQty] User cancelled - promotion quota exceeded');
+                            return;
+                        }
+                        console.log('[updateQty] User confirmed - proceeding with mixed pricing');
+                    }
+                }
             }
         }
         
+        // Recalculate price if this item has any promotion (especially with quota)
+        const item = cart[idx];
+        if (item.promoId) {
+            const promoInfo = promotionIndex.get(item.productId);
+            if (promoInfo?.promo) {
+                // Get base price from product
+                const product = products.find(p => p.id === item.productId);
+                const basePrice = product ? Number(product.price) : item.productPrice;
+                const quantityChange = newQty - oldQty;
+                
+                console.log('[updateQty] Recalculating price:', { productId: item.productId, basePrice, oldQty, newQty, quantityChange, promoCode: promoInfo.promo.code });
+                
+                // Calculate price for the quantity being added in this change
+                const newItemAvgPrice = getPromoPrice(basePrice, promoInfo.promo, quantityChange, oldQty);
+                // Update total price: old items at old price + new items at new price
+                const oldTotalPrice = oldQty * item.productPrice;
+                const newTotalPrice = oldTotalPrice + (quantityChange * newItemAvgPrice);
+                item.productPrice = newTotalPrice / newQty;
+                
+                console.log('[updateQty] Price updated - oldAvg:', oldTotalPrice / oldQty, 'newItemAvg:', newItemAvgPrice, 'finalAvg:', item.productPrice);
+            }
+        }
+        
+        cart[idx].quantity = newQty;
         renderCart();
         updateTotal();
         queuePersistCartState();
@@ -2069,24 +2267,63 @@ function setQty(idx, value) {
     const qty = parseInt(value, 10) || 1;
     if (cart[idx] && !cart[idx].isReturnItem) {
         const oldQty = cart[idx].quantity;
-        cart[idx].quantity = Math.max(1, qty);
+        const newQty = Math.max(1, qty);
         
-        // Recalculate bundle price if this item has a bundle promotion
-        const item = cart[idx];
-        if (item.promoId) {
-            const promoInfo = promotionIndex.get(item.productId);
-            if (promoInfo?.promo && normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
-                // Get base price from product
-                const product = products.find(p => p.id === item.productId);
-                const basePrice = product ? Number(product.price) : item.productPrice;
-                console.log('[setQty] Recalculating BUNDLE:', { productId: item.productId, basePrice, newQty: item.quantity });
-                // Recalculate price with new quantity
-                item.productPrice = getPromoPrice(basePrice, promoInfo.promo, item.quantity);
+        // Check promotion quota if quantity is increasing
+        if (newQty > oldQty && cart[idx].promoId) {
+            const promoInfo = promotionIndex.get(cart[idx].productId);
+            if (promoInfo?.promo) {
+                const maxQty = Number(promoInfo.promo.maxQuantity);
+                const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
+                const effectiveUsedQty = usedQty + oldQty;  // Account for items in cart
+                
+                if (Number.isFinite(maxQty) && maxQty > 0) {
+                    const remaining = Math.max(0, maxQty - effectiveUsedQty);
+                    
+                    if ((newQty - oldQty) > remaining) {
+                        // Promotion quota exceeded - ask for confirmation
+                        const promoName = promoInfo.promo.name || promoInfo.promo.code || 'Khuyến mãi';
+                        const confirmMessage = `Khuyến mãi "${promoName}" chỉ còn ${remaining} sản phẩm. Bạn muốn thay đổi lên ${newQty} sản phẩm không?\n\nSố lượng vượt mức sẽ được tính giá gốc.`;
+                        
+                        if (!confirm(confirmMessage)) {
+                            console.log('[setQty] User cancelled - promotion quota exceeded');
+                            return;
+                        }
+                        console.log('[setQty] User confirmed - proceeding with mixed pricing');
+                    }
+                }
             }
         }
         
+        // Recalculate price if this item has any promotion (especially with quota)
+        const item = cart[idx];
+        if (item.promoId) {
+            const promoInfo = promotionIndex.get(item.productId);
+            if (promoInfo?.promo) {
+                // Get base price from product
+                const product = products.find(p => p.id === item.productId);
+                const basePrice = product ? Number(product.price) : item.productPrice;
+                const quantityChange = newQty - oldQty;
+                
+                if (quantityChange !== 0) {
+                    console.log('[setQty] Recalculating price:', { productId: item.productId, basePrice, oldQty, newQty, quantityChange, promoCode: promoInfo.promo.code });
+                    
+                    // Calculate price for the quantity being added/removed in this change
+                    const newItemAvgPrice = getPromoPrice(basePrice, promoInfo.promo, Math.abs(quantityChange), oldQty);
+                    // Update total price: old items at old price + new items at new price
+                    const oldTotalPrice = oldQty * item.productPrice;
+                    const newTotalPrice = oldTotalPrice + (quantityChange * newItemAvgPrice);
+                    item.productPrice = newTotalPrice / newQty;
+                    
+                    console.log('[setQty] Price updated - oldAvg:', oldTotalPrice / oldQty, 'changeAvg:', newItemAvgPrice, 'finalAvg:', item.productPrice);
+                }
+            }
+        }
+        
+        cart[idx].quantity = newQty;
+        
         // Nếu giảm số lượng, kiểm tra và xóa quà tặng không hợp lệ ngay
-        if (qty < oldQty) {
+        if (newQty < oldQty) {
             console.log('[setQty] Quantity decreased, checking gifts...');
             // Tạm thời đánh dấu cần kiểm tra lại
             setTimeout(() => {

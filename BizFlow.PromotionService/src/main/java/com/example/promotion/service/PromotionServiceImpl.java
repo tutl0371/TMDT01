@@ -48,6 +48,12 @@ public class PromotionServiceImpl implements PromotionService {
     @Value("${nifi.promotion.signal-url:}")
     private String nifiSignalUrl;
 
+    @Value("${services.customer-service:http://customer-service:8085}")
+    private String customerServiceUrl;
+
+    private static final Long SYSTEM_USER_ID = 0L; // System account for notifications
+    private static final Long OWNER_USER_ID = 1L;  // Owner user ID
+
     public PromotionServiceImpl(
             PromotionRepository promotionRepository,
             CacheManager cacheManager,
@@ -62,10 +68,22 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public List<PromotionDTO> getAllPromotions() {
-        return promotionRepository.findAll()
-                .stream()
+        List<Promotion> all = promotionRepository.findAll();
+        log.info("[getAllPromotions] Total promotions in DB: {}", all.size());
+        
+        List<PromotionDTO> result = all.stream()
+                .peek(promo -> {
+                    boolean hasQuota = hasRemainingQuota(promo);
+                    Integer max = normalizeMaxQuantity(promo.getMaxQuantity());
+                    Integer used = normalizeUsedQuantity(promo.getUsedQuantity());
+                    log.info("[getAllPromotions] Checking code={}, active={}, used={}, max={}, hasQuota={}", 
+                        promo.getCode(), promo.getActive(), used, max, hasQuota);
+                })
                 .map(this::toDTO)
                 .collect(Collectors.toList());
+        
+        log.info("[getAllPromotions] Returned: {} promotions (including exhausted)", result.size());
+        return result;
     }
 
     @Override
@@ -103,10 +121,22 @@ public class PromotionServiceImpl implements PromotionService {
     @Override
     @Cacheable(cacheNames = "activePromotions", key = "'active'")
     public List<PromotionDTO> getActivePromotions() {
-        return promotionRepository.findActivePromotions(LocalDateTime.now())
-                .stream()
+        List<Promotion> allActive = promotionRepository.findActivePromotions(LocalDateTime.now());
+        log.info("[getActivePromotions] Total active promotions: {}", allActive.size());
+        
+        List<PromotionDTO> result = allActive.stream()
+                .peek(promo -> {
+                    Integer max = normalizeMaxQuantity(promo.getMaxQuantity());
+                    Integer used = normalizeUsedQuantity(promo.getUsedQuantity());
+                    boolean hasQuota = hasRemainingQuota(promo);
+                    log.info("[getActivePromotions] Code={}, used={}, max={}, hasQuota={}", 
+                        promo.getCode(), used, max, hasQuota);
+                })
                 .map(this::toDTO)
                 .collect(Collectors.toList());
+        
+        log.info("[getActivePromotions] Returned: {} promotions (including exhausted)", result.size());
+        return result;
     }
 
     @Override
@@ -246,6 +276,7 @@ public class PromotionServiceImpl implements PromotionService {
         dto.setMaxQuantity(promotion.getMaxQuantity());
         dto.setUsedQuantity(normalizeUsedQuantity(promotion.getUsedQuantity()));
         dto.setRemainingQuantity(calculateRemainingQuantity(promotion));
+        dto.setIsExhausted(isQuotaExhausted(promotion));
 
         try {
             List<PromotionTarget> targets = promotion.getTargets();
@@ -308,8 +339,24 @@ public class PromotionServiceImpl implements PromotionService {
             promotion.setPromotionType(mapPromotionTypeFromDiscount(dto.getDiscountType()));
         }
         promotion.setDiscountValue(dto.getDiscountValue());
-        promotion.setStartDate(dto.getStartDate());
-        promotion.setEndDate(dto.getEndDate());
+        
+        // Ensure startDate is set and not in future
+        LocalDateTime startDate = dto.getStartDate();
+        if (startDate == null) {
+            startDate = LocalDateTime.now();
+        } else if (startDate.isAfter(LocalDateTime.now())) {
+            // If startDate is in future, set to now to make promotion active immediately
+            startDate = LocalDateTime.now();
+        }
+        promotion.setStartDate(startDate);
+        
+        LocalDateTime endDate = dto.getEndDate();
+        if (endDate == null) {
+            // Default: 30 days from now
+            endDate = LocalDateTime.now().plusDays(30);
+        }
+        promotion.setEndDate(endDate);
+        
         Boolean active = dto.getActive();
         promotion.setActive(active != null ? active : true);
         promotion.setMaxQuantity(normalizeMaxQuantity(dto.getMaxQuantity()));
@@ -657,11 +704,23 @@ public class PromotionServiceImpl implements PromotionService {
             return responses;
         }
 
-        List<Promotion> activePromos = promotionRepository.findActivePromotions(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        List<Promotion> activePromos = promotionRepository.findActivePromotions(now);
+        log.info("===== CALCULATE CART PRICES (consumeQuota={}) =====", consumeQuota);
+        log.info("findActivePromotions returned {} promotions at {}", activePromos.size(), now);
+        for (Promotion promo : activePromos) {
+            log.info("  PROMO: {} | Code={} | StartDt={} | EndDt={} | UsedQty={} | MaxQty={}", 
+                promo.getId(), promo.getCode(), promo.getStartDate(), promo.getEndDate(), 
+                promo.getUsedQuantity(), promo.getMaxQuantity());
+        }
 
         for (CartItemPriceRequest.CartItem item : request.getItems()) {
+            log.info("Processing item: productId={} | qty={} | basePrice={}", 
+                item.getProductId(), item.getQuantity(), item.getBasePrice());
             CartItemPriceResponse response = calculateSingleItemPrice(item, activePromos, consumeQuota);
             responses.add(response);
+            log.info("  Result: appliedPromo={} | finalPrice={} | discount={}", 
+                response.getPromoCode(), response.getFinalPrice(), response.getDiscount());
         }
 
         return responses;
@@ -694,33 +753,48 @@ public class PromotionServiceImpl implements PromotionService {
         BigDecimal bestPrice = null;
         int bestConsumption = 0;
 
+        log.info("  Evaluate {} promotions for item {}", promotions.size(), item.getProductId());
         for (Promotion promo : promotions) {
+            log.info("    EVAL: promo {} (code={}) | hasRemainingQuota={}", 
+                promo.getId(), promo.getCode(), hasRemainingQuota(promo));
             PromotionSelection candidate = evaluatePromotionForItem(promo, item, basePrice, demandQuantity);
             if (candidate == null) {
+                log.info("      -> evaluatePromotionForItem returned null (doesn't apply to item or no quota)");
                 continue;
             }
+            log.info("      -> candidate price={} | consumeAmount={}", candidate.finalPrice, candidate.consumeAmount);
             if (bestPrice == null || candidate.finalPrice.compareTo(bestPrice) < 0) {
                 bestPrice = candidate.finalPrice;
                 bestPromo = promo;
                 bestConsumption = candidate.consumeAmount;
+                log.info("      -> NEW BEST PROMO");
             }
         }
 
         if (consumeQuota && bestPromo != null && bestConsumption > 0) {
+            log.info("  LOCK & INCREMENT: promo {} | consumeAmount={}", bestPromo.getId(), bestConsumption);
             Optional<Promotion> lockedOpt = promotionRepository.findByIdForUpdate(bestPromo.getId());
             if (lockedOpt.isPresent()) {
                 Promotion locked = lockedOpt.get();
+                log.info("    BEFORE: usedQty={} | maxQty={}", locked.getUsedQuantity(), locked.getMaxQuantity());
                 PromotionSelection lockedSelection = evaluatePromotionForItem(locked, item, basePrice, demandQuantity);
                 if (lockedSelection != null && lockedSelection.consumeAmount > 0) {
                     bestPromo = locked;
                     bestPrice = lockedSelection.finalPrice;
                     bestConsumption = lockedSelection.consumeAmount;
                     locked.setUsedQuantity(normalizeUsedQuantity(locked.getUsedQuantity()) + bestConsumption);
-                    promotionRepository.save(locked);
+                    log.info("    AFTER: usedQty={} | maxQty={}", locked.getUsedQuantity(), locked.getMaxQuantity());
+                    savePromotionConsumingQuota(locked);  // This clears cache
+                    log.info("    SAVED with cache evict");
+                    // Notify owner if quota is exhausted
+                    notifyQuotaExhausted(locked);
                 } else {
+                    log.info("    lockedSelection is null or consumeAmount <= 0");
                     bestPromo = null;
                     bestPrice = basePrice;
                 }
+            } else {
+                log.info("    findByIdForUpdate returned empty");
             }
         }
 
@@ -750,37 +824,45 @@ public class PromotionServiceImpl implements PromotionService {
         Long categoryId = item.getCategoryId();
 
         List<PromotionTarget> targets = promo.getTargets();
+        log.debug("      appliesToItem: promo {} has {} targets", promo.getId(), targets == null ? 0 : targets.size());
         if (targets != null) {
             for (PromotionTarget target : targets) {
                 if (target == null || target.getTargetId() == null || target.getTargetType() == null) {
                     continue;
                 }
+                log.debug("        target: type={} id={}", target.getTargetType(), target.getTargetId());
                 if (target.getTargetType() == PromotionTarget.TargetType.PRODUCT
                         && productId != null
                         && productId.equals(target.getTargetId())) {
+                    log.debug("        -> MATCH on product");
                     return true;
                 }
                 if (target.getTargetType() == PromotionTarget.TargetType.CATEGORY
                         && categoryId != null
                         && categoryId.equals(target.getTargetId())) {
+                    log.debug("        -> MATCH on category");
                     return true;
                 }
             }
         }
 
         List<BundleItem> bundleItems = promo.getBundleItems();
+        log.debug("      appliesToItem: promo {} has {} bundleItems", promo.getId(), bundleItems == null ? 0 : bundleItems.size());
         if (bundleItems != null && normalizeDiscountType(promo) == Promotion.DiscountType.BUNDLE) {
             for (BundleItem bundle : bundleItems) {
                 if (bundle == null) {
                     continue;
                 }
                 Long mainId = bundle.getMainProductId() != null ? bundle.getMainProductId() : bundle.getProductId();
+                log.debug("        bundle: mainId={}", mainId);
                 if (productId.equals(mainId)) {
+                    log.debug("        -> MATCH on bundle");
                     return true;
                 }
             }
         }
 
+        log.debug("      appliesToItem: promo {} does NOT apply to product {}", promo.getId(), productId);
         return false;
     }
 
@@ -791,11 +873,17 @@ public class PromotionServiceImpl implements PromotionService {
             int demandQuantity
     ) {
         if (promo == null || basePrice == null || demandQuantity <= 0 || !appliesToItem(promo, item)) {
+            if (promo != null && item != null) {
+                log.debug("      evaluatePromotionForItem: promo {} doesn't apply to item {}", 
+                    promo.getId(), item.getProductId());
+            }
             return null;
         }
 
         Promotion.DiscountType type = normalizeDiscountType(promo);
         if (type == null || !hasRemainingQuota(promo)) {
+            log.debug("      evaluatePromotionForItem: promo {} type={} hasQuota={}", 
+                promo.getId(), type, hasRemainingQuota(promo));
             return null;
         }
 
@@ -926,6 +1014,17 @@ public class PromotionServiceImpl implements PromotionService {
         return normalizeUsedQuantity(promo.getUsedQuantity()) < max;
     }
 
+    private boolean isQuotaExhausted(Promotion promo) {
+        if (promo == null) {
+            return false;
+        }
+        Integer max = normalizeMaxQuantity(promo.getMaxQuantity());
+        if (max == null) {
+            return false;  // No quota limit means not exhausted
+        }
+        return normalizeUsedQuantity(promo.getUsedQuantity()) >= max;
+    }
+
     private int remainingQuotaForConsumption(Promotion promo) {
         Integer max = normalizeMaxQuantity(promo.getMaxQuantity());
         if (max == null) {
@@ -940,6 +1039,60 @@ public class PromotionServiceImpl implements PromotionService {
             return null;
         }
         return Math.max(0, max - normalizeUsedQuantity(promotion.getUsedQuantity()));
+    }
+
+    private void notifyQuotaExhausted(Promotion promotion) {
+        if (promotion == null || promotion.getMaxQuantity() == null) {
+            return;
+        }
+        
+        Integer used = normalizeUsedQuantity(promotion.getUsedQuantity());
+        Integer max = promotion.getMaxQuantity();
+        
+        // Only send notification when quota is exactly exhausted
+        if (!used.equals(max)) {
+            return;
+        }
+        
+        try {
+            // Schedule notification after transaction commit
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    sendQuotaExhaustedMessage(promotion);
+                }
+            });
+        } catch (Exception ex) {
+            log.warn("Failed to register transaction synchronization for quota exhausted notification", ex);
+            // Try to send immediately as fallback
+            sendQuotaExhaustedMessage(promotion);
+        }
+    }
+
+    private void sendQuotaExhaustedMessage(Promotion promotion) {
+        try {
+            String messageContent = String.format(
+                "🎁 Khuyến mãi \"%s\" (mã: %s) đã hết hạn ngạch sử dụng.\n" +
+                "Đã áp dụng cho %d lần. Không thể áp dụng thêm nữa, giá sẽ quay về giá gốc cho các khách hàng tiếp theo.",
+                promotion.getName(),
+                promotion.getCode(),
+                promotion.getMaxQuantity()
+            );
+            
+            Map<String, Object> messagePayload = new HashMap<>();
+            messagePayload.put("senderId", SYSTEM_USER_ID);
+            messagePayload.put("receiverId", OWNER_USER_ID);
+            messagePayload.put("senderName", "BizFlow System");
+            messagePayload.put("receiverName", "Owner");
+            messagePayload.put("content", messageContent);
+            
+            String url = customerServiceUrl + "/api/messages";
+            restTemplate.postForObject(url, messagePayload, Map.class);
+            
+            log.info("Sent quota exhausted notification for promotion: {}", promotion.getCode());
+        } catch (Exception ex) {
+            log.error("Failed to send quota exhausted notification for promotion: {}", promotion.getCode(), ex);
+        }
     }
 
     private static final class PromotionSelection {
@@ -966,5 +1119,10 @@ public class PromotionServiceImpl implements PromotionService {
         } catch (org.springframework.web.client.RestClientException ex) {
             log.warn("Failed to send NiFi signal to {}", nifiSignalUrl, ex);
         }
+    }
+
+    @CacheEvict(cacheNames = "activePromotions", allEntries = true)
+    private void savePromotionConsumingQuota(Promotion promotion) {
+        promotionRepository.save(promotion);
     }
 }
