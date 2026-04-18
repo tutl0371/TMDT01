@@ -6777,12 +6777,73 @@ function handleUpsellAddMore(suggestion) {
     }
 }
 
+function findPromotionById(promoId) {
+    if (promoId == null || !Array.isArray(allPromotions)) {
+        return null;
+    }
+    return allPromotions.find((promo) => Number(promo?.id) === Number(promoId)) || null;
+}
+
+function readBundleNumber(bundle, camelKey, snakeKey, fallback = 0) {
+    const value = bundle?.[camelKey] ?? bundle?.[snakeKey];
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+}
+
+function capGiftQuantityByQuota(gift) {
+    const requestedQty = Math.max(0, Number(gift?.quantity || 0));
+    if (requestedQty <= 0) {
+        return 0;
+    }
+
+    const promo = findPromotionById(gift?.promo_id);
+    if (!promo) {
+        return requestedQty;
+    }
+
+    const bundle = (promo.bundleItems || []).find((item) => {
+        const giftProductId = readBundleNumber(item, 'giftProductId', 'gift_product_id', null);
+        return Number(giftProductId) === Number(gift?.product_id);
+    });
+
+    if (!bundle) {
+        return requestedQty;
+    }
+
+    const mainProductId = readBundleNumber(bundle, 'mainProductId', 'main_product_id', null);
+    const mainQty = Math.max(1, readBundleNumber(bundle, 'mainQuantity', 'main_quantity', 1));
+    const giftQty = Math.max(1, readBundleNumber(bundle, 'giftQuantity', 'gift_quantity', 1));
+
+    const purchasedMainQty = cart
+        .filter((item) => !item.isFreeGift && Number(item.productId) === Number(mainProductId))
+        .reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0);
+
+    const eligibleSets = Math.floor(purchasedMainQty / mainQty);
+    const eligibleGiftQty = eligibleSets * giftQty;
+
+    const maxQty = Number(promo.maxQuantity);
+    const usedQty = Math.max(0, Number(promo.usedQuantity || 0));
+    let allowedGiftQty = eligibleGiftQty;
+
+    if (Number.isFinite(maxQty) && maxQty > 0) {
+        allowedGiftQty = Math.max(0, Math.min(eligibleGiftQty, maxQty - usedQty));
+    }
+
+    return Math.max(0, Math.min(requestedQty, allowedGiftQty));
+}
+
 /**
  * Tự động thêm quà tặng vào giỏ
  */
 async function autoAddGiftToCart(gift) {
     console.log('[autoAddGiftToCart] Adding gift:', gift);
     console.log('[autoAddGiftToCart] Products cache:', products?.length || 0, 'items');
+
+    const cappedGiftQty = capGiftQuantityByQuota(gift);
+    if (cappedGiftQty <= 0) {
+        console.log('[autoAddGiftToCart] Gift skipped due to quota/eligibility:', gift);
+        return;
+    }
     
     // Lookup tên sản phẩm từ cache hoặc API
     let productName = gift.product_name || null;
@@ -6834,9 +6895,9 @@ async function autoAddGiftToCart(gift) {
     
     if (existingGift) {
         // Cập nhật số lượng và tên nếu khác
-        if (existingGift.quantity !== gift.quantity) {
-            console.log('[autoAddGiftToCart] Updating gift quantity:', gift.quantity);
-            existingGift.quantity = gift.quantity;
+        if (existingGift.quantity !== cappedGiftQty) {
+            console.log('[autoAddGiftToCart] Updating gift quantity:', cappedGiftQty);
+            existingGift.quantity = cappedGiftQty;
         }
         if (existingGift.productName !== productName) {
             existingGift.productName = productName;
@@ -6850,7 +6911,7 @@ async function autoAddGiftToCart(gift) {
             productId: gift.product_id,
             productName: productName,
             productPrice: 0, // Miễn phí
-            quantity: gift.quantity,
+            quantity: cappedGiftQty,
             productCode: '',
             unit: '',
             stock: 999, // Set stock cao để không bị check "out of stock"
@@ -6865,7 +6926,7 @@ async function autoAddGiftToCart(gift) {
         
         // Hiển thị thông báo
         ComboPromotionUI.showNotification(
-            `✨ Đã thêm ${gift.quantity} ${productName} (Quà tặng)`,
+            `✨ Đã thêm ${cappedGiftQty} ${productName} (Quà tặng)`,
             'success'
         );
     }
@@ -6878,9 +6939,13 @@ async function removeIneligibleGifts(validGifts) {
     // Tạo Map các gift hợp lệ với số lượng
     const validGiftMap = new Map();
     (validGifts || []).forEach(g => {
+        const cappedQty = capGiftQuantityByQuota(g);
+        if (cappedQty <= 0) {
+            return;
+        }
         const key = `${g.product_id}-${g.promo_id}`;
         validGiftMap.set(key, {
-            quantity: g.quantity,
+            quantity: cappedQty,
             productName: g.product_name
         });
     });
