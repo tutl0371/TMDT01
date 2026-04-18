@@ -118,7 +118,7 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // Admin dashboard methods
+    // Admin dashboard method
     public long getUsersCount() {
         return userRepository.count();
     }

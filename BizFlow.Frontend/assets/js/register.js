@@ -1,4 +1,44 @@
-const REGISTER_API_BASE = '/api';
+const REGISTER_API_BASE = resolveApiBase();
+
+function resolveApiBase() {
+  const configured = window.API_BASE_URL || window.API_BASE;
+  if (configured) {
+    return configured;
+  }
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:8000/api';
+  }
+  return `${window.location.origin}/api`;
+}
+
+async function postRegister(payload) {
+  const primaryUrl = `${REGISTER_API_BASE}/auth/register`;
+  let response;
+  try {
+    response = await fetch(primaryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    throw new Error(`Không kết nối được tới API đăng ký: ${error.message}`);
+  }
+
+  if (response.status !== 404) {
+    return response;
+  }
+
+  const fallbackUrl = 'http://localhost:8000/api/auth/register';
+  if (primaryUrl === fallbackUrl) {
+    return response;
+  }
+
+  return fetch(fallbackUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
 
 function showRegisterMessage(id, message, visible) {
   const el = document.getElementById(id);
@@ -86,17 +126,13 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const response = await fetch(`${REGISTER_API_BASE}/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username,
-          password,
-          email,
-          fullName,
-          phoneNumber: phoneNumber || null,
-          role: 'EMPLOYEE'
-        })
+      const response = await postRegister({
+        username,
+        password,
+        email,
+        fullName,
+        phoneNumber: phoneNumber || null,
+        role: 'EMPLOYEE'
       });
 
       const payload = await response.json().catch(() => ({}));

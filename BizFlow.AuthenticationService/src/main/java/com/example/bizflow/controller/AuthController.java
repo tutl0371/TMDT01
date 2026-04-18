@@ -1,5 +1,4 @@
 package com.example.bizflow.controller;
-
 import com.example.bizflow.dto.LoginRequest;
 import com.example.bizflow.dto.LoginResponse;
 import com.example.bizflow.dto.CreateUserRequest;
@@ -70,9 +69,8 @@ public class AuthController {
         response.put("hash", encoder.encode(password));
         return ResponseEntity.ok(response);
     }
-
     /**
-     * API đăng ký người dùng (public). Mặc định role = EMPLOYEE nếu không cung cấp.
+     * API đăng ký người dùng. Mặc định role = EMPLOYEE nếu không cung cấp.
      */
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody CreateUserRequest request) {

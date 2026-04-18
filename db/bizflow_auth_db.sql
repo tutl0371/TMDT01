@@ -77,13 +77,11 @@ INSERT INTO `users` (`id`, `username`, `password`, `email`, `full_name`, `phone_
 (3, 'test', '$2a$10$iDS5.CarVV4hxkD1P5oVYePzl/M8gs3jse7bGOAjhQBZ6iefSllWy', 'test@bizflow.com', 'Test User', NULL, 'EMPLOYEE', 1, NULL, '2025-12-21 10:47:36', '2026-02-03 14:09:53', NULL, '$2a$10$iDS5.CarVV4hxkD1P5oVYePzl/M8gs3jse7bGOAjhQBZ6iefSllWy'),
 (4, 'vietphd', '$2a$10$hTmAfVr7LjuSr5AxSKrpJeleoHtsiZn1RuVH9jub038t4C5SAIhiq', 'nhanvien1@gmail.com', 'Phạm Huy Đức Việt', '0902313141', 'EMPLOYEE', 1, NULL, '2025-12-24 16:44:38', '2026-02-03 14:09:53', NULL, '$2a$10$hTmAfVr7LjuSr5AxSKrpJeleoHtsiZn1RuVH9jub038t4C5SAIhiq'),
 (7, 'Tutl', '$2a$10$0P6niSx/VIjhEfnjFVv.cOWuRpb.WTEhAvCEdTzUO9BFyuDVwp2je', 'Tutl@gmail.com', 'Trần Long Tú', '0866066043', 'EMPLOYEE', 1, NULL, '2026-01-03 21:57:14', '2026-02-03 14:09:53', NULL, '$2a$10$0P6niSx/VIjhEfnjFVv.cOWuRpb.WTEhAvCEdTzUO9BFyuDVwp2je'),
-(8, 'TanBinh', '$2a$10$C2DybkhUAxwMFkLTSIVnteX834ZBW/Glnvg2OKPZxVzNZJvAYCIyW', 'tanbinh@gmail.com', 'Tấn Bình', '0866066042', 'OWNER', 1, 2, '2026-01-21 22:25:46', '2026-02-03 14:09:53', NULL, '$2a$10$C2DybkhUAxwMFkLTSIVnteX834ZBW/Glnvg2OKPZxVzNZJvAYCIyW');
+(8, 'TanBinh', '$2a$10$C2DybkhUAxwMFkLTSIVnteX834ZBW/Glnvg2OKPZxVzNZJvAYCIyW', 'tanbinh@gmail.com', 'Tấn Bình', '0866066042', 'OWNER', 1, 2, '2026-01-21 22:25:46', '2026-02-03 14:09:53', NULL, '$2a$10$C2DybkhUAxwMFkLTSIVnteX834ZBW/Glnvg2OKPZxVzNZJvAYCIyW'),
+(9, 'admin_tuan', '$2a$10$BWk2vGVqgLlmJTQq7LigSObKFjeXPY6Olq5BhdsAM2tCYb.Tdaq2.', 'admin.tuan@bizflow.com', 'Admin Tuan', '0909999888', 'ADMIN', 1, NULL, '2026-04-10 22:00:00', '2026-04-10 22:00:00', 'Created for admin product management', '$2a$10$BWk2vGVqgLlmJTQq7LigSObKFjeXPY6Olq5BhdsAM2tCYb.Tdaq2.');
 
 --
 -- Indexes for dumped tables
---
-
---
 -- Indexes for table `branches`
 --
 ALTER TABLE `branches`
@@ -115,7 +113,7 @@ ALTER TABLE `branches`
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` bigint NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- Constraints for dumped tables
