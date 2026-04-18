@@ -968,14 +968,16 @@ public class PromotionServiceImpl implements PromotionService {
             return null;
         }
 
-        int appliedSets = Math.min(possibleSets, remainingSets);
+        // 🔧 FIX: Cap appliedSets theo remainingSets / giftQty để không vượt quá số sản phẩm được phép tặng
+        // remainingSets = maxQuantity - usedQuantity = số sản phẩm còn được tặng
+        // appliedSets = số lần áp dụng khuyến mãi = remainingSets / giftQty
+        int maxAppliableSets = giftQty > 0 ? remainingSets / giftQty : 0;
+        int appliedSets = Math.min(possibleSets, maxAppliableSets);
         if (appliedSets <= 0) {
             return null;
         }
 
-        // 🔧 FIX: Cap freeUnits để không vượt quá remainingSets (maxQuantity - usedQuantity)
-        // Đảm bảo không tặng quá số sản phẩm được phép của khuyến mãi
-        int freeUnits = Math.min(appliedSets * giftQty, remainingSets);
+        int freeUnits = appliedSets * giftQty;
         int chargeableUnits = Math.max(0, demandQuantity - freeUnits);
         BigDecimal finalTotal = basePrice.multiply(BigDecimal.valueOf(chargeableUnits));
         BigDecimal finalUnit = finalTotal.divide(BigDecimal.valueOf(demandQuantity), 4, RoundingMode.HALF_UP);
