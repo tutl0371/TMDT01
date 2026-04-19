@@ -968,7 +968,11 @@ public class PromotionServiceImpl implements PromotionService {
             return null;
         }
 
-        int appliedSets = Math.min(possibleSets, remainingSets);
+        // 🔧 FIX: Cap appliedSets theo remainingSets / giftQty để không vượt quá số sản phẩm được phép tặng
+        // remainingSets = maxQuantity - usedQuantity = số sản phẩm còn được tặng
+        // appliedSets = số lần áp dụng khuyến mãi = remainingSets / giftQty
+        int maxAppliableSets = giftQty > 0 ? remainingSets / giftQty : 0;
+        int appliedSets = Math.min(possibleSets, maxAppliableSets);
         if (appliedSets <= 0) {
             return null;
         }

@@ -291,6 +291,7 @@ function formatDateTime(dateString) {
         minute: '2-digit'
     });
 }
+ 
 
 function getTierName(tier) {
     const tierMap = {

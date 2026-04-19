@@ -32,3 +32,12 @@ window.API_CONFIG = API_CONFIG;
 
 console.log('🚀 BizFlow Config loaded:', isProduction ? 'PRODUCTION' : 'DEVELOPMENT');
 console.log('📍 Gateway URL:', API_CONFIG.GATEWAY_URL);
+
+// Set API base URLs used by legacy scripts. This forces frontend to call
+// the gateway when running on localhost (dev server at :3000), avoiding
+// requests to the wrong origin (e.g. /api on :3000).
+const resolvedApiBase = (API_CONFIG && API_CONFIG.GATEWAY_URL)
+    ? API_CONFIG.GATEWAY_URL.replace(/\/$/, '') + '/api'
+    : '/api';
+window.API_BASE = resolvedApiBase;
+window.API_BASE_URL = resolvedApiBase;

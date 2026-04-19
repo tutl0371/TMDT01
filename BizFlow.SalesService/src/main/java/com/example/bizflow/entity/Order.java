@@ -19,6 +19,9 @@ public class Order {
 
     @Column(name = "customer_id")
     private Long customerId;
+    
+    @Column(name = "customer_phone")
+    private String customerPhone;
 
     @Column(name = "total_amount", nullable = false, precision = 15, scale = 2)
     private BigDecimal totalAmount = BigDecimal.ZERO;
@@ -51,6 +54,12 @@ public class Order {
     @Column(name = "note", length = 255)
     private String note;
 
+    @Column(name = "estimated_delivery_from")
+    private LocalDateTime estimatedDeliveryFrom;
+
+    @Column(name = "estimated_delivery_to")
+    private LocalDateTime estimatedDeliveryTo;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -82,6 +91,14 @@ public class Order {
 
     public void setCustomerId(Long customerId) {
         this.customerId = customerId;
+    }
+
+    public String getCustomerPhone() {
+        return customerPhone;
+    }
+
+    public void setCustomerPhone(String customerPhone) {
+        this.customerPhone = customerPhone;
     }
 
     public BigDecimal getTotalAmount() {
@@ -170,6 +187,22 @@ public class Order {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getEstimatedDeliveryFrom() {
+        return estimatedDeliveryFrom;
+    }
+
+    public void setEstimatedDeliveryFrom(LocalDateTime estimatedDeliveryFrom) {
+        this.estimatedDeliveryFrom = estimatedDeliveryFrom;
+    }
+
+    public LocalDateTime getEstimatedDeliveryTo() {
+        return estimatedDeliveryTo;
+    }
+
+    public void setEstimatedDeliveryTo(LocalDateTime estimatedDeliveryTo) {
+        this.estimatedDeliveryTo = estimatedDeliveryTo;
     }
 
     public List<OrderItem> getItems() {

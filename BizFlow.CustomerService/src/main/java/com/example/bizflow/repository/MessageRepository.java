@@ -2,8 +2,10 @@ package com.example.bizflow.repository;
 
 import com.example.bizflow.entity.Message;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -30,4 +32,19 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
         ORDER BY m.createdAt DESC, m.id DESC
     """)
     List<Message> findConversationLatestMessages(@Param("ownerId") Long ownerId);
+
+    @Modifying
+    @Transactional
+    @Query("""
+        UPDATE Message m
+        SET m.isRead = true
+        WHERE m.senderId = :senderId AND m.receiverId = :receiverId AND m.isRead = false
+    """)
+    int markMessagesAsRead(@Param("senderId") Long senderId, @Param("receiverId") Long receiverId);
+
+    @Query("""
+        SELECT COUNT(m) FROM Message m
+        WHERE m.senderId = :senderId AND m.receiverId = :receiverId AND m.isRead = false
+    """)
+    long countUnreadMessages(@Param("senderId") Long senderId, @Param("receiverId") Long receiverId);
 }

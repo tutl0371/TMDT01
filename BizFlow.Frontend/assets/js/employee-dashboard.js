@@ -52,6 +52,7 @@ let globalUnreadPollTimer = null;
 let cartPersistTimer = null;
 let isRestoringCartState = false;
 let isCartPersisting = false;
+let cartStateLoaded = false;
 const FALLBACK_CATEGORY_LABEL = 'Khac';
 const customerOrderCache = new Map();
 const TIER_DISCOUNT_BY_100 = {
@@ -68,13 +69,29 @@ const PRODUCT_ICON = `
         <path d="M9 8V6a3 3 0 0 1 6 0v2" />
     </svg>
 `;
+// Lightweight SVG fallback (data URI) used when an <img> fails to load.
+const FALLBACK_SVG_DATA_URI = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 200' width='300' height='200'>
+        <rect width='100%' height='100%' rx='12' fill='%23f0f4f8' />
+        <g transform='translate(65,30) scale(6)'>
+            <path d='M6 8h12l-1.2 11H7.2L6 8Z' fill='%239aa3b6' />
+            <path d='M9 8V6a3 3 0 0 1 6 0v2' fill='%239aa3b6' />
+        </g>
+    </svg>`
+);
 const PRODUCT_IMAGE_LIST_URL = `${API_BASE}/product-images`;
 const PRODUCT_IMAGE_LIST_FALLBACK_URL = '/assets/data/product-image-files.json';
 const productImageMap = new Map();
 const productImageEntries = [];
 let productImageMapReady = false;
+const syntheticCategoryMap = new Map();
+let nextSyntheticCategoryId = -1;
 const POINTS_EARN_RATE_VND = 1000;
 const EARN_POLICY_POINTS = 100;
+
+// Points redemption variables
+let usePointsEnabled = false;
+let pointsToUse = 0;
 
 const FALLBACK_PRODUCTS = [
     {
@@ -139,34 +156,149 @@ const FALLBACK_PRODUCTS = [
     }
 ];
 
+// Ensure the page remains interactive: remove common blocking overlays
+// and re-enable pointer events. Also attach a temporary debug click
+// logger to help trace issues where clicks are swallowed.
+function ensureInteractive() {
+    try {
+        const selectors = ['.modal-backdrop', '.overlay', '.app-overlay', '#pageOverlay', '.fullscreen-overlay'];
+        selectors.forEach(sel => {
+            try {
+                document.querySelectorAll(sel).forEach(el => el.remove());
+            } catch (e) {}
+        });
+        try { document.body.style.pointerEvents = 'auto'; } catch (e) {}
+        const main = document.querySelector('body') || document.getElementById('app') || document.getElementById('root');
+        if (main) try { main.style.pointerEvents = 'auto'; } catch (e) {}
+        console.debug('[ensureInteractive] removed blocking overlays');
+    } catch (e) {
+        console.warn('[ensureInteractive] error', e);
+    }
+
+    try {
+        if (!window.__debugClickAttached) {
+            document.addEventListener('click', function (ev) {
+                console.debug('[DEBUG CLICK] target=', ev.target);
+            }, { capture: true });
+            window.__debugClickAttached = true;
+        }
+    } catch (e) {}
+}
+
+// Checkout validation helpers (global) — used by multiple event handlers and renderers
+function isCheckoutValid() {
+    try {
+        if (getCurrentUserId()) {
+            return true;
+        }
+        const phoneEl = document.getElementById('checkoutCustomerPhone');
+        const addrEl = document.getElementById('checkoutCustomerAddress');
+        const phone = phoneEl ? (phoneEl.value || '').trim() : '';
+        const addr = addrEl ? (addrEl.value || '').trim() : '';
+        return phone.length > 0 && addr.length > 0;
+    } catch (e) {
+        return false;
+    }
+}
+function updateCheckoutButtonState() {
+    try {
+        const btn = document.getElementById('checkoutBtn');
+        if (!btn) return;
+        btn.disabled = !isCheckoutValid() || !Array.isArray(cart) || cart.length === 0;
+    } catch (e) {}
+}
+
 window.addEventListener('DOMContentLoaded', async () => {
-    checkAuth();
-    loadUserInfo();
-    await loadCurrentEmployee();
-    fixPaymentPanelText();
-    selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+    // Defensive init: run critical startup steps but do not allow
+    // one failure to prevent attaching UI event handlers.
+    try { checkAuth(); } catch (e) { console.warn('checkAuth failed', e); }
+    try { loadUserInfo(); } catch (e) { console.warn('loadUserInfo failed', e); }
+    try {
+        await loadCartStateFromServer();
+    } catch (e) {
+        console.warn('loadCartStateFromServer failed', e);
+    }
+    try {
+        await restorePersistedSelectedCustomerState();
+    } catch (e) {
+        console.warn('restorePersistedSelectedCustomerState failed', e);
+    }
+    try {
+        await loadCurrentEmployee();
+    } catch (e) {
+        console.warn('loadCurrentEmployee failed', e);
+    }
+    try {
+        if (!selectedCustomer || selectedCustomer.id === 0) {
+            await restorePersistedSelectedCustomerState();
+        }
+    } catch (e) {
+        console.warn('restorePersistedSelectedCustomerState failed', e);
+    }
+    try { fixPaymentPanelText(); } catch (e) { console.warn('fixPaymentPanelText failed', e); }
+
+    // Initialize selectedCustomer only when it wasn't loaded by loadCurrentEmployee()
+    if (!selectedCustomer || !(selectedCustomer.id > 0)) {
+        selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+    }
     const selectedCustomerLabel = document.getElementById('selectedCustomer');
     if (selectedCustomerLabel) {
-        selectedCustomerLabel.textContent = 'Khách lẻ';
+        selectedCustomerLabel.textContent = (selectedCustomer && selectedCustomer.id > 0) ? (selectedCustomer.name || 'Khách lẻ') : 'Khách lẻ';
     }
-    setupEventListeners();
-    setupCustomerModal();
-    setupProductDetailModal();
-    setupInventoryModal();
-    setupCustomerDetailModal();
-    setupEmployeeSelector();
-    setupAppMenuModal();
-    setupInvoiceModal();
-    setupContactSupport();
-    toggleCashPanel(true);
-    initInvoices();
-    await loadCartStateFromServer();
 
-    document.getElementById('productsGrid').innerHTML =
-        '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
+    // Ensure page is interactive (remove blocking overlays) before wiring handlers
+    try { ensureInteractive(); } catch (e) { console.warn('ensureInteractive failed', e); }
+    // Always attach UI handlers; protect each setup call so one failure doesn't block others
+    try { setupEventListeners(); } catch (e) { console.warn('setupEventListeners failed', e); }
+    try { setupOrderTracking(); } catch (e) { console.warn('setupOrderTracking failed', e); }
+    try { setupCustomerModal(); } catch (e) { console.warn('setupCustomerModal failed', e); }
+    try { setupProductDetailModal(); } catch (e) { console.warn('setupProductDetailModal failed', e); }
+    try { setupInventoryModal(); } catch (e) { console.warn('setupInventoryModal failed', e); }
+    try { setupCustomerDetailModal(); } catch (e) { console.warn('setupCustomerDetailModal failed', e); }
+    try { setupEmployeeSelector(); } catch (e) { console.warn('setupEmployeeSelector failed', e); }
+    try { setupAppMenuModal(); } catch (e) { console.warn('setupAppMenuModal failed', e); }
+    try { setupInvoiceModal(); } catch (e) { console.warn('setupInvoiceModal failed', e); }
+    try { setupContactSupport(); } catch (e) { console.warn('setupContactSupport failed', e); }
 
-    await Promise.all([loadProductImageMap(), loadProducts()]);
-    applyExchangeDraft();
+    // initialize payment panels and prefill checkout customer fields
+    try {
+        updatePaymentPanels();
+        const checkoutName = document.getElementById('checkoutCustomerName');
+        if (checkoutName) checkoutName.value = '';
+        const checkoutPhone = document.getElementById('checkoutCustomerPhone');
+        if (checkoutPhone) checkoutPhone.value = '';
+        const checkoutAddress = document.getElementById('checkoutCustomerAddress');
+        if (checkoutAddress) checkoutAddress.value = '';
+        // wire input events to keep button state in sync
+        const _phoneEl = document.getElementById('checkoutCustomerPhone');
+        const _addrEl = document.getElementById('checkoutCustomerAddress');
+        _phoneEl?.addEventListener('input', updateCheckoutButtonState);
+        _addrEl?.addEventListener('input', updateCheckoutButtonState);
+        // initial state
+        updateCheckoutButtonState();
+    } catch (e) {
+        console.warn('payment panel init failed', e);
+    }
+
+    try {
+        // Keep invoice/customer state restored from server; only initialize
+        // a fresh invoice when there is no restored invoice state.
+        if (!Array.isArray(invoices) || invoices.length === 0) {
+            initInvoices();
+        }
+    } catch (e) { console.warn('initInvoices failed', e); }
+
+    try {
+        document.getElementById('productsGrid').innerHTML =
+            '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
+    } catch (e) {}
+
+    // Load product image map and products in background; do not block UI setup
+    (async () => {
+        try { await loadProductImageMap(); } catch (e) { console.warn('loadProductImageMap failed', e); }
+        try { await loadProducts(); } catch (e) { console.warn('loadProducts failed', e); }
+        try { applyExchangeDraft(); } catch (e) { console.warn('applyExchangeDraft failed', e); }
+    })();
 
     const customerSearchInput = document.getElementById('customerSearch');
     customerSearchInput?.addEventListener('focus', () => {
@@ -251,6 +383,8 @@ function applyExchangeDraft() {
         if (addBtn) {
             addBtn.style.display = 'none';
         }
+        // Refresh authoritative customer details (points, tier) from server
+        try { refreshCustomerDetailFromApi(exchangeDraft.customerId).catch(() => {}); } catch (e) {}
         const clearBtn = document.getElementById('clearCustomerBtn');
         if (clearBtn) {
             clearBtn.style.display = 'inline-flex';
@@ -261,11 +395,33 @@ function applyExchangeDraft() {
     updateTotal();
     sessionStorage.removeItem('exchangeDraft');
     queuePersistCartState();
+
+    // UX: bring attention to cart and allow immediate checkout (marketplace-style)
+    try {
+        const cartArea = document.getElementById('cartArea');
+        if (cartArea) {
+            cartArea.classList.add('cart-highlight');
+            setTimeout(() => cartArea.classList.remove('cart-highlight'), 800);
+        }
+        const checkoutBtn = document.getElementById('checkoutBtn');
+        if (checkoutBtn) {
+            checkoutBtn.disabled = false;
+            checkoutBtn.focus({ preventScroll: false });
+            checkoutBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    } catch (e) {
+        console.warn('Failed to focus checkout after addToCart', e);
+    }
 }
 
 function getCurrentUserId() {
     const raw = parseInt(sessionStorage.getItem('userId'), 10);
     return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function getSelectedCustomerStorageKey() {
+    const userId = getCurrentUserId();
+    return userId ? `selected_customer_state_${userId}` : 'selected_customer_state';
 }
 
 function getAuthHeaders() {
@@ -276,14 +432,77 @@ function getAuthHeaders() {
     };
 }
 
+function persistSelectedCustomerState() {
+    try {
+        if (!selectedCustomer || !selectedCustomer.id) return;
+        const payload = {
+            id: selectedCustomer.id,
+            name: selectedCustomer.name || 'Khách lẻ',
+            phone: selectedCustomer.phone || '-',
+            address: selectedCustomer.address || '',
+            tier: selectedCustomer.tier || '',
+            totalPoints: Number.isFinite(Number(selectedCustomer.totalPoints)) ? Number(selectedCustomer.totalPoints) : 0,
+            monthlyPoints: Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : 0,
+            updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem(getSelectedCustomerStorageKey(), JSON.stringify(payload));
+    } catch (e) {
+        console.warn('[persistSelectedCustomerState] failed', e);
+    }
+}
+
+function loadPersistedSelectedCustomerState() {
+    try {
+        const preferredKey = getSelectedCustomerStorageKey();
+        let raw = localStorage.getItem(preferredKey);
+        if (!raw) {
+            raw = localStorage.getItem('selected_customer_state');
+        }
+        if (!raw) return null;
+        const saved = JSON.parse(raw);
+        if (!saved || !saved.id) return null;
+        return {
+            id: saved.id,
+            name: saved.name || 'Khách lẻ',
+            phone: saved.phone || '-',
+            address: saved.address || '',
+            tier: saved.tier || '',
+            totalPoints: Number.isFinite(Number(saved.totalPoints)) ? Number(saved.totalPoints) : 0,
+            monthlyPoints: Number.isFinite(Number(saved.monthlyPoints)) ? Number(saved.monthlyPoints) : 0
+        };
+    } catch (e) {
+        console.warn('[loadPersistedSelectedCustomerState] failed', e);
+        return null;
+    }
+}
+
+async function restorePersistedSelectedCustomerState() {
+    const persistedCustomer = loadPersistedSelectedCustomerState();
+    if (!persistedCustomer || !persistedCustomer.id) return null;
+    if (!selectedCustomer || selectedCustomer.id === 0 || selectedCustomer.id !== persistedCustomer.id) {
+        applyCustomerSelection(persistedCustomer, { openDetail: false });
+    }
+    if (selectedCustomer && selectedCustomer.id > 0) {
+        await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+    }
+    return selectedCustomer;
+}
+
 function normalizeInvoiceState(raw, index = 0) {
     const fallbackName = `Giỏ hàng ${index + 1}`;
     return {
         id: raw?.id || `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: raw?.name || fallbackName,
         cart: Array.isArray(raw?.cart) ? raw.cart.map(item => ({ ...item })) : [],
-        selectedCustomer: raw?.selectedCustomer
-            ? { ...raw.selectedCustomer }
+        // Persist only minimal customer info (id/name/phone). Do NOT store
+        // `totalPoints`/`monthlyPoints` in the saved cart to avoid stale
+        // values overwriting server-authoritative totals on restore.
+        selectedCustomer: (raw?.selectedCustomer)
+            ? {
+                id: raw.selectedCustomer.id || 0,
+                name: raw.selectedCustomer.name || raw.selectedCustomer.phone || 'Khách lẻ',
+                phone: raw.selectedCustomer.phone || '-'
+            }
             : { id: 0, name: 'Khách lẻ', phone: '-' },
         paymentMethod: raw?.paymentMethod || 'CASH',
         cashReceived: raw?.cashReceived || '',
@@ -360,6 +579,25 @@ async function loadCartStateFromServer() {
 
         isRestoringCartState = true;
         applyCartStatePayload(data.state);
+        // mark that we successfully restored a server-saved cart state so
+        // we should not overwrite selectedCustomer with linked user customer
+        // during the subsequent loadCurrentEmployee() step.
+        cartStateLoaded = true;
+
+        // Ensure any selectedCustomer restored from the saved cart is refreshed
+        // from the customer service so points are up-to-date (avoid stale points
+        // persisted inside a saved invoice object).
+        try {
+            const invoices = data.state?.invoices || [];
+            for (const inv of invoices) {
+                const sc = inv?.selectedCustomer;
+                if (sc && sc.id && Number(sc.id) > 0) {
+                    try { await refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to refresh customers from restored cart state', e);
+        }
     } catch (err) {
         console.warn('Cannot load persisted cart state', err);
     } finally {
@@ -408,8 +646,16 @@ function resolveApiBase() {
         return 'http://localhost:8000/api';
     }
 
-    if (['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port !== '8080') {
-        return '/api';
+    // When developing locally: if served from port 3000 (frontend dev server)
+    // call the gateway directly. Otherwise keep using '/api' so a dev proxy
+    // (if configured) continues to work.
+    if (['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+        if (window.location.port === '3000') {
+            return 'http://localhost:8000/api';
+        }
+        if (window.location.port !== '8080') {
+            return '/api';
+        }
     }
 
     return `${window.location.origin}/api`;
@@ -506,6 +752,29 @@ function loadUserInfo() {
     document.getElementById('userNameDropdown').textContent = username || 'Nhân viên';
 }
 
+async function findExistingCustomerForCurrentUser(userData) {
+    const username = sessionStorage.getItem('username') || userData?.username || '';
+    const email = userData?.email || userData?.emailAddress || userData?.email_address || '';
+    const phone = userData?.phoneNumber || userData?.phone || userData?.phone_number || '';
+    const name = userData?.fullName || userData?.name || userData?.displayName || '';
+
+    const identityCustomer = await refreshSelectedCustomerByIdentity({
+        username,
+        email,
+        phone,
+        name
+    });
+    if (identityCustomer) {
+        return identityCustomer;
+    }
+
+    const normalizedPhone = normalizePhoneForOrder(phone);
+    if (normalizedPhone) {
+        return await refreshSelectedCustomerByPhone(normalizedPhone);
+    }
+    return null;
+}
+
 async function loadCurrentEmployee() {
     const userId = sessionStorage.getItem('userId');
     if (!userId) return;
@@ -548,7 +817,136 @@ async function loadCurrentEmployee() {
             const initial = (data.fullName || data.username || 'E')[0]?.toUpperCase() || 'E';
             userInitialEl.textContent = initial;
         }
+
+        // Try to fetch a linked Customer record for this authenticated user so
+        // we can show member points in checkout. Endpoint: GET /api/customers/by-user/{userId}
+        try {
+            if (!selectedCustomer || selectedCustomer.id === 0) {
+                await restorePersistedSelectedCustomerState();
+            }
+
+            if (selectedCustomer && selectedCustomer.id > 0) {
+                // Preserve the selected customer restored from the saved cart or persisted state.
+                // Always refresh authoritative points from the server so the UI shows the
+                // current account balance after reload.
+                await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+            }
+
+            const username = sessionStorage.getItem('username');
+            const userPhone = (data?.phoneNumber || data?.phone || '').toString().trim();
+            const normalizedPhone = normalizePhoneForOrder(userPhone);
+            const queryParts = [];
+            if (username) queryParts.push(`username=${encodeURIComponent(username)}`);
+            if (normalizedPhone) queryParts.push(`phone=${encodeURIComponent(normalizedPhone)}`);
+            const queryString = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+            const custRes = await fetch(`${API_BASE}/customers/by-user/${userId}${queryString}`, {
+                headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+            });
+            if (custRes.ok) {
+                const cust = await custRes.json();
+                if (cust && cust.id) {
+                    // Always bind checkout membership to the authenticated account.
+                    applyCustomerSelection({
+                        id: cust.id,
+                        name: cust.name || 'Khách lẻ',
+                        phone: cust.phone || '-',
+                        address: cust.address || '',
+                        totalPoints: cust.totalPoints ?? cust.total_points ?? 0,
+                        monthlyPoints: cust.monthlyPoints ?? cust.monthly_points ?? 0,
+                        tier: cust.tier || ''
+                    }, { openDetail: false });
+                    await refreshCustomerDetailFromApi(Number(cust.id));
+                } else {
+                    const existingCustomer = await findExistingCustomerForCurrentUser(data);
+                    if (existingCustomer) {
+                        await refreshCustomerDetailFromApi(Number(existingCustomer.id));
+                    }
+                    if (!selectedCustomer || selectedCustomer.id === 0) {
+                        const customer = await upsertCurrentUserCustomer(userId, data);
+                        if (customer && customer.id) {
+                            applyCustomerSelection({
+                                id: customer.id,
+                                name: customer.name || 'Khách lẻ',
+                                phone: customer.phone || '-',
+                                address: customer.address || '',
+                                totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
+                                monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
+                                tier: customer.tier || ''
+                            }, { openDetail: false });
+                            await refreshCustomerDetailFromApi(Number(customer.id));
+                        }
+                    }
+                }
+            } else {
+                const userPhone = (data?.phoneNumber || data?.phone || '').toString().trim();
+                const normalizedPhone = normalizePhoneForOrder(userPhone);
+                const identityCustomer = await refreshSelectedCustomerByIdentity({
+                    phone: userPhone,
+                    username,
+                    email: data?.email || data?.emailAddress || null
+                });
+                if (!identityCustomer && normalizedPhone) {
+                    await refreshSelectedCustomerByPhone(normalizedPhone);
+                }
+                if ((!selectedCustomer || selectedCustomer.id === 0) && !cartStateLoaded) {
+                    const customer = await upsertCurrentUserCustomer(userId, data);
+                    if (customer && customer.id) {
+                        applyCustomerSelection({
+                            id: customer.id,
+                            name: customer.name || 'Khách lẻ',
+                            phone: customer.phone || '-',
+                            address: customer.address || '',
+                            totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
+                            monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
+                            tier: customer.tier || ''
+                        }, { openDetail: false });
+                        await refreshCustomerDetailFromApi(Number(customer.id));
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('Could not fetch customer by user', err);
+            const username = sessionStorage.getItem('username');
+            const existingCustomer = await findExistingCustomerForCurrentUser(data);
+            if (!existingCustomer) {
+                const persistedCustomer = loadPersistedSelectedCustomerState();
+                if ((!selectedCustomer || selectedCustomer.id === 0) && persistedCustomer && persistedCustomer.id > 0) {
+                    applyCustomerSelection(persistedCustomer, { openDetail: false });
+                    await refreshCustomerDetailFromApi(Number(persistedCustomer.id));
+                }
+            }
+        }
+
+        if (selectedCustomer && selectedCustomer.id > 0 && getCustomerPoints(selectedCustomer) === 0) {
+            await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+        }
     } catch (err) {
+    }
+}
+
+async function upsertCurrentUserCustomer(userId, userData) {
+    if (!userId) return null;
+    const body = {
+        userId: Number(userId),
+        username: sessionStorage.getItem('username') || userData?.username || null,
+        email: userData?.email || userData?.emailAddress || userData?.email_address || null,
+        name: userData?.fullName || userData?.name || userData?.username || 'Khách hàng',
+        phone: userData?.phoneNumber || userData?.phone || userData?.phone_number || null
+    };
+    try {
+        const response = await fetch(`${API_BASE}/customers/upsertByUser`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}`
+            },
+            body: JSON.stringify(body)
+        });
+        if (!response.ok) return null;
+        return await response.json();
+    } catch (e) {
+        console.warn('[upsertCurrentUserCustomer] failed', e);
+        return null;
     }
 }
 
@@ -574,11 +972,14 @@ async function loadProducts() {
         }
 
         const shelvesData = await response.json();
-        
+
         console.log('[loadProducts] Raw shelves data:', shelvesData);
-        
+
+        // Support two response shapes: either an array or an object { value: [...] }
+        const shelvesArray = Array.isArray(shelvesData) ? shelvesData : (Array.isArray(shelvesData?.value) ? shelvesData.value : []);
+
         // CHỈ map những sản phẩm có quantity > 0 (đang thực sự bán)
-        products = shelvesData
+        products = shelvesArray
             .filter(shelf => shelf.quantity > 0)
             .map(shelf => ({
                 id: shelf.productId,
@@ -598,7 +999,35 @@ async function loadProducts() {
         
         if (products.length === 0) {
             console.warn('[loadProducts] No products on shelves with quantity > 0');
-            products = [];
+            // Try alternative endpoint (through gateway) in case API_BASE is not reachable
+            try {
+                const altRes = await fetch('/api/inventory/shelves');
+                if (altRes.ok) {
+                    const altData = await altRes.json();
+                    const altArray = Array.isArray(altData) ? altData : (Array.isArray(altData?.value) ? altData.value : []);
+                    products = altArray.filter(shelf => shelf.quantity > 0).map(shelf => ({
+                        id: shelf.productId,
+                        name: shelf.productName,
+                        code: shelf.productCode,
+                        barcode: shelf.productCode,
+                        price: shelf.price || 0,
+                        stock: shelf.quantity,
+                        categoryId: shelf.categoryId,
+                        categoryName: shelf.categoryName || shelf.category || shelf.groupName || '',
+                        unit: shelf.unit || 'cái',
+                        status: 'active'
+                    }));
+                    console.log('[loadProducts] Loaded from gateway fallback:', products.length);
+                }
+            } catch (e) {
+                console.warn('[loadProducts] Gateway fallback failed', e);
+            }
+
+            // Final fallback to embedded sample products so UI isn't empty
+            if (products.length === 0) {
+                console.warn('[loadProducts] Using FALLBACK_PRODUCTS as last resort');
+                products = FALLBACK_PRODUCTS.slice();
+            }
         }
         
         await loadPromotionIndex();
@@ -614,24 +1043,39 @@ async function loadProducts() {
 
 async function loadProductImageMap() {
     if (productImageMapReady) return;
-    productImageMapReady = true;
     try {
         const files = await fetchProductImageList();
-        if (!Array.isArray(files)) {
+        if (!Array.isArray(files) || files.length === 0) {
+            productImageMapReady = false;
+            console.warn('[loadProductImageMap] No image list available');
             return;
         }
+
+        // reset existing maps to avoid duplicates on retry
+        productImageMap.clear();
+        productImageEntries.length = 0;
+
         files.forEach((filePath) => {
             if (!filePath || typeof filePath !== 'string') return;
             const filename = filePath.split('/').pop() || '';
             const baseName = filename.replace(/\.[^.]+$/, '');
-            const key = normalizeProductKey(baseName);
-            if (!key) return;
-            if (!productImageMap.has(key)) {
-                productImageMap.set(key, filePath);
+            try {
+                const key = normalizeProductKey(baseName);
+                if (!key) return;
+                if (!productImageMap.has(key)) {
+                    productImageMap.set(key, filePath);
+                }
+                productImageEntries.push({ key, path: filePath });
+            } catch (e) {
+                console.warn('[loadProductImageMap] key error for', filePath, e);
             }
-            productImageEntries.push({ key, path: filePath });
         });
+
+        productImageMapReady = true;
+        console.log('[loadProductImageMap] loaded', productImageEntries.length, 'entries');
     } catch (err) {
+        productImageMapReady = false;
+        console.warn('[loadProductImageMap] Error fetching image list', err);
     }
 }
 
@@ -687,8 +1131,15 @@ function getProductImageSrc(product) {
     const nameKey = normalizeProductKey(product?.name || '');
     if (!nameKey) return '';
 
+    // direct match by normalized product name
     if (productImageMap.has(nameKey)) {
         return productImageMap.get(nameKey);
+    }
+
+    // try match by product code or barcode
+    const codeKey = normalizeProductKey(product?.code || product?.barcode || '');
+    if (codeKey && productImageMap.has(codeKey)) {
+        return productImageMap.get(codeKey);
     }
 
     // Fallback: try to match by containment (product name is a subset of filename or vice versa)
@@ -701,80 +1152,107 @@ function getProductImageSrc(product) {
             }
         }
     }
+    if (bestMatch) return bestMatch.path;
 
-    return bestMatch ? bestMatch.path : '';
+    // token scoring: prefer entries that match the most tokens from product name
+    const tokens = (nameKey.match(/[a-z0-9]{3,}/g) || []);
+    if (tokens.length > 0) {
+        let scored = null;
+        for (const entry of productImageEntries) {
+            if (!entry || !entry.key) continue;
+            let score = 0;
+            for (const t of tokens) {
+                if (entry.key.includes(t)) score++;
+            }
+            if (score > 0 && (!scored || score > scored.score || (score === scored.score && entry.key.length < scored.entry.key.length))) {
+                scored = { entry, score };
+            }
+        }
+        if (scored) return scored.entry.path;
+    }
+
+    // very small prefix match: try first 6 chars
+    const prefix = nameKey.slice(0, 6);
+    if (prefix) {
+        for (const entry of productImageEntries) {
+            if (entry && entry.key && entry.key.startsWith(prefix)) {
+                return entry.path;
+            }
+        }
+    }
+
+    return '';
 }
 
 function buildProductImageMarkup(product) {
     const imageSrc = getProductImageSrc(product);
     if (!imageSrc) {
-        return PRODUCT_ICON;
+        const safeName = escapeHtml(product?.name || 'Sản phẩm');
+        const pid = product?.id || '';
+        // render a placeholder background so rendering doesn't produce broken <img>
+        return `<div class="product-image-bg missing-product-image" data-product-name="${safeName}" data-product-id="${pid}" style="background-image:url('${FALLBACK_SVG_DATA_URI}');"></div>`;
     }
     const safeName = escapeHtml(product?.name || 'Sản phẩm');
-    return `<img src="${encodeURI(imageSrc)}" alt="${safeName}" loading="lazy" />`;
+    // Add simple onerror fallback that switches to a safe SVG data-URI placeholder
+    const encoded = encodeURI(imageSrc);
+    return `<div class="product-image-bg" data-product-name="${safeName}" data-product-id="${product?.id||''}" style="background-image:url('${encoded}');"></div>`;
 }
 
 async function loadCustomers() {
     if (customersLoaded) return;
 
-    try {
-        const response = await fetch(`${API_BASE}/customers`, {
-            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}` }
-        });
-
-        if (!response.ok) {
-            if (response.status === 401) {
-                sessionStorage.clear();
-                window.location.href = '/pages/login.html';
-                return;
-            }
-            throw new Error('Failed to load customers');
-        }
-
-        const rawCustomers = await response.json();
-        customers = dedupeCustomers(rawCustomers);
-        applyCustomerFilter();
-        customersLoaded = true;
-    } catch (err) {
-    }
-}
-
-function renderCustomers(customers) {
     const list = document.getElementById('customerList');
     if (!list) return;
 
-    if (!customers || customers.length === 0) {
-        const emptyMessage = customerSearchTerm ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng';
-        list.innerHTML = `<div class="customer-empty">${emptyMessage}</div>`;
-        return;
+    try {
+        const response = await fetch(`${API_BASE}/customers`, {
+            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('accessToken') || ''}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data)) {
+                customers = data;
+            } else if (data?.value && Array.isArray(data.value)) {
+                customers = data.value;
+            } else {
+                customers = [];
+            }
+        } else {
+            console.warn('[loadCustomers] failed to fetch customers', response.status, response.statusText);
+        }
+    } catch (err) {
+        console.warn('[loadCustomers] Error fetching customers', err);
+        customers = customers || [];
+    } finally {
+        customersLoaded = true;
+        const customersHtml = (customers || []).map(c => {
+            const phone = c.phone || '-';
+            const secondary = c.email || c.address || '-';
+            const customerId = c.id ?? '';
+            return `
+            <div class="customer-item"
+                data-customer-id="${customerId}"
+                data-customer-name="${escapeHtml(c.name || '')}"
+                data-customer-phone="${escapeHtml(phone)}">
+                <div class="customer-info">
+                    <p class="customer-name">
+                        <button type="button" class="customer-name-btn" data-customer-id="${customerId}" onclick="openCustomerDetailFromButton(event)">
+                            ${escapeHtml(c.name || 'Khách hàng')}
+                        </button>
+                    </p>
+                    <p class="customer-phone">${escapeHtml(phone)}</p>
+                </div>
+                <div class="customer-meta">
+                    <span class="customer-phone">${escapeHtml(phone)}</span>
+                    <span class="customer-sub">${escapeHtml(secondary)}</span>
+                </div>
+            </div>
+            `;
+        }).join('');
+
+        list.innerHTML = customersHtml || '<div class="customer-empty">Chưa có khách hàng</div>';
     }
-
-    const customersHtml = customers.map(c => {
-        const phone = c.phone || '-';
-        const secondary = c.email || c.address || '-';
-        const customerId = c.id ?? '';
-        return `
-        <div class="customer-item"
-            data-customer-id="${customerId}"
-            data-customer-name="${escapeHtml(c.name || '')}"
-            data-customer-phone="${escapeHtml(phone)}">
-            <div class="customer-info">
-                <p class="customer-name">
-                    <button type="button" class="customer-name-btn" data-customer-id="${customerId}" onclick="openCustomerDetailFromButton(event)">
-                        ${escapeHtml(c.name || 'Kh×ch h×ng')}
-                    </button>
-                </p>
-                <p class="customer-phone">${escapeHtml(phone)}</p>
-            </div>
-            <div class="customer-meta">
-                <span class="customer-phone">${escapeHtml(phone)}</span>
-                <span class="customer-sub">${escapeHtml(secondary)}</span>
-            </div>
-        </div>
-        `;
-    }).join('');
-
-    list.innerHTML = customersHtml || '<div class="customer-empty">Chua c× kh×ch h×ng</div>';
 }
 
 function applyCustomerFilter() {
@@ -803,6 +1281,95 @@ function applyCustomerFilter() {
     });
 
     renderCustomers(filtered);
+}
+
+// Try to resolve images for rendered placeholders by attempting common filename variants.
+async function resolveMissingImagesOnPage(maxPerRun = 40) {
+    try {
+        const imgs = Array.from(document.querySelectorAll('.missing-product-image'));
+        if (!imgs || imgs.length === 0) return;
+        let count = 0;
+        for (const img of imgs) {
+            if (count >= maxPerRun) break;
+            const name = img.dataset.productName || '';
+            const pid = img.dataset.productId || '';
+            const found = await tryFindImageForProduct(name, pid);
+            if (found) {
+                // if element is background container, update background-image; otherwise update src
+                if (img.tagName.toLowerCase() === 'img') {
+                    img.src = found;
+                } else {
+                    img.style.backgroundImage = `url('${found}')`;
+                }
+                img.classList.remove('missing-product-image');
+                try {
+                    const key = normalizeProductKey(name);
+                    if (key && !productImageMap.has(key)) {
+                        productImageMap.set(key, found);
+                        productImageEntries.push({ key, path: found });
+                    }
+                } catch (e) {}
+            }
+            count++;
+        }
+    } catch (e) {
+        console.warn('[resolveMissingImagesOnPage] error', e);
+    }
+}
+
+function generateFilenameCandidates(name, code) {
+    const exts = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+    const raw = (name || '').toString().trim();
+    const stripped = stripDiacritics(raw).toLowerCase();
+    const tokens = stripped.replace(/[^a-z0-9\s]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+    const candidates = new Set();
+
+    function pushBase(b) {
+        if (!b) return;
+        exts.forEach(e => candidates.add(b + e));
+    }
+
+    // original raw variations
+    pushBase(raw);
+    pushBase(raw.replace(/\s+/g, '-'));
+    pushBase(raw.replace(/\s+/g, '_'));
+    pushBase(stripped);
+    pushBase(tokens.join('-'));
+    pushBase(tokens.join(''));
+    pushBase(tokens.join('_'));
+
+    // remove parentheses content
+    const noPar = raw.replace(/\(.*?\)/g, '').trim();
+    pushBase(noPar);
+    pushBase(noPar.replace(/\s+/g, '-'));
+
+    // code-based
+    if (code) {
+        pushBase(code.toString());
+        pushBase(code.toString().toLowerCase());
+    }
+
+    return Array.from(candidates).map(fn => '/assets/img/img_sanpham/' + fn);
+}
+
+async function tryFindImageForProduct(name, code) {
+    const candidates = generateFilenameCandidates(name, code);
+    for (const c of candidates) {
+        try {
+            const encoded = c.split('/').map((seg, idx) => idx === 0 ? seg : encodeURIComponent(seg)).join('/');
+            // try GET but only asking for headers may be blocked; do a lightweight GET
+            const res = await fetch(encoded, { method: 'GET', cache: 'no-store' });
+            if (res && res.ok) {
+                const ct = res.headers.get('content-type') || '';
+                if (ct.startsWith('image/') || c.toLowerCase().match(/\.(jpg|jpeg|png|webp|gif)$/)) {
+                    return encoded;
+                }
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+    return null;
 }
 
 function getSuggestedCustomers() {
@@ -996,7 +1563,10 @@ async function createOrder(isPaid) {
         paid: isPaid,
         // Always send the chosen payment method so backend can create pending transfer payments with tokens
         paymentMethod: currentPaymentMethod,
-        usePoints: isPaid ? shouldUseMemberPoints() : false,
+        // Optional shipping info (filled when user chooses COD)
+        shipping: null,
+        usePoints: shouldUseMemberPoints(),
+        pointsToUse: usePointsEnabled && pointsToUse > 0 ? pointsToUse : 0,
         orderType: exchangeDraft ? 'EXCHANGE' : null,
         originalOrderId: exchangeDraft?.originalOrderId || null,
         items: cart.map(item => ({
@@ -1004,6 +1574,52 @@ async function createOrder(isPaid) {
             quantity: item.quantity
         }))
     };
+
+    // include explicit customer info when customer isn't an existing record
+    if (selectedCustomer) {
+        payload.customerName = selectedCustomer.name || null;
+        payload.customerPhone = selectedCustomer.phone || null;
+        payload.customerAddress = selectedCustomer.address || null;
+        payload.customerEmail = selectedCustomer.email || null;
+    }
+
+    // If shipping (COD) selected in UI, populate shipping object and set paymentMethod to COD
+    try {
+        // Read checkout customer fields (always visible) and apply locally for receipt
+        // If a member is already selected (selectedCustomer.id > 0), merge the
+        // entered checkout fields into the existing selectedCustomer so we don't
+        // overwrite the member id or their points. Only create an anonymous
+        // customer (id:0) when there is no selected member.
+        const cname = document.getElementById('checkoutCustomerName')?.value?.trim() || '';
+        const cphone = document.getElementById('checkoutCustomerPhone')?.value?.trim() || '';
+        const caddr = document.getElementById('checkoutCustomerAddress')?.value?.trim() || '';
+        if (cname || cphone || caddr) {
+            if (selectedCustomer && Number.isFinite(Number(selectedCustomer.id)) && Number(selectedCustomer.id) > 0) {
+                // Keep account identity stable: do not overwrite member name/phone
+                // from temporary checkout input fields.
+                selectedCustomer = Object.assign({}, selectedCustomer, {
+                    address: caddr || selectedCustomer.address
+                });
+            } else {
+                selectedCustomer = {
+                    id: 0,
+                    name: cname || (selectedCustomer?.name || 'Khách lẻ'),
+                    phone: cphone || (selectedCustomer?.phone || '-'),
+                    address: caddr || (selectedCustomer?.address || '')
+                };
+            }
+        }
+    } catch (e) {
+        console.warn('Could not read shipping fields', e);
+    }
+
+    // Ensure payload includes any customer info entered in checkout fields
+    if (selectedCustomer) {
+        payload.customerName = selectedCustomer.name || payload.customerName || null;
+        payload.customerPhone = selectedCustomer.phone || payload.customerPhone || null;
+        payload.customerAddress = selectedCustomer.address || payload.customerAddress || null;
+        payload.customerEmail = selectedCustomer.email || payload.customerEmail || null;
+    }
 
     try {
         const res = await fetch(`${API_BASE}/orders`, {
@@ -1022,7 +1638,7 @@ async function createOrder(isPaid) {
         }
 
         const data = await res.json();
-        const receiptData = buildReceiptData(data, { usePoints: isPaid && shouldUseMemberPoints() });
+        const receiptData = buildReceiptData(data, { usePoints: shouldUseMemberPoints() });
         const invoiceCode = receiptData.invoiceNumber || '-';
         if (isPaid) {
             await openInvoiceModal(receiptData);
@@ -1030,13 +1646,37 @@ async function createOrder(isPaid) {
         }
         await loadPromotionIndex(true);
         filterProducts(document.getElementById('searchInput')?.value || '');
-        clearCart(true);
+        // Clear items but keep the selected customer (so loyalty points and account association remain)
+        clearCart(false);
+        // Ensure checkout input fields are cleared after order creation
+        try {
+            const cnameEl = document.getElementById('checkoutCustomerName');
+            const cphoneEl = document.getElementById('checkoutCustomerPhone');
+            const caddrEl = document.getElementById('checkoutCustomerAddress');
+            if (cnameEl) cnameEl.value = '';
+            if (cphoneEl) cphoneEl.value = '';
+            if (caddrEl) caddrEl.value = '';
+        } catch (e) {
+            console.warn('Failed to clear checkout inputs', e);
+        }
         if (exchangeDraft) {
             sessionStorage.removeItem('exchangeDraft');
             exchangeDraft = null;
         }
         saveActiveInvoiceState();
-        queuePersistCartState();
+        try {
+            await persistCartStateNow();
+        } catch (err) {
+            console.warn('persistCartStateNow failed', err);
+            queuePersistCartState();
+        }
+        // Refresh authoritative customer data so the UI reflects the correct
+        // point balance after creating the order (prevents showing stale/zero).
+        try {
+            await refreshSelectedCustomerPointsForOrder(data);
+        } catch (e) {
+            console.warn('refreshSelectedCustomerPointsForOrder after createOrder failed', e);
+        }
         return data;
     } catch (err) {
         showPopup('Lỗi kết nối khi tạo đơn hàng.', { type: 'error' });
@@ -1188,9 +1828,40 @@ async function payOrder(orderId) {
         }
         alert('Đã thanh toán chuyển khoản được xác nhận.');
         hideTransferQrModal();
-        clearCart(true);
+        
+        // Reset points after payment
+        usePointsEnabled = false;
+        pointsToUse = 0;
+        updatePointsDisplayInfo();
+        
+        // After confirming transfer payment, clear items but keep selected customer
+        clearCart(false);
         saveActiveInvoiceState();
-        queuePersistCartState();
+        try {
+            const cnameEl = document.getElementById('checkoutCustomerName');
+            const cphoneEl = document.getElementById('checkoutCustomerPhone');
+            const caddrEl = document.getElementById('checkoutCustomerAddress');
+            if (cnameEl) cnameEl.value = '';
+            if (cphoneEl) cphoneEl.value = '';
+            if (caddrEl) caddrEl.value = '';
+        } catch (e) {
+            console.warn('Failed to clear checkout inputs after payOrder', e);
+        }
+        try {
+            await persistCartStateNow();
+        } catch (err) {
+            console.warn('persistCartStateNow failed', err);
+            queuePersistCartState();
+        }
+        // Refresh authoritative customer data after confirming payment so UI
+        // immediately reflects the correct point balance.
+        try {
+            if (selectedCustomer && Number.isFinite(Number(selectedCustomer.id)) && Number(selectedCustomer.id) > 0) {
+                await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+            }
+        } catch (e) {
+            console.warn('refreshCustomerDetailFromApi after payOrder failed', e);
+        }
     } catch (err) {
         alert('Lỗi kết nối khi xác nhận thanh toán.');
     }
@@ -1216,7 +1887,164 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (closeBtn) closeBtn.addEventListener('click', hideTransferQrModal);
     if (cancelBtn) cancelBtn.addEventListener('click', hideTransferQrModal);
+    // Delegate cart item remove clicks to avoid relying on inline onclick handlers
+    try {
+        const cartContainer = document.getElementById('cartItems');
+        if (cartContainer) {
+            cartContainer.addEventListener('click', (evt) => {
+                const btn = evt.target && evt.target.closest ? evt.target.closest('.cart-item-remove') : null;
+                if (!btn) return;
+                evt.preventDefault();
+                const row = btn.closest('.cart-row');
+                if (!row) return;
+                const idx = Array.prototype.indexOf.call(cartContainer.children, row);
+                if (!Number.isFinite(idx) || idx < 0) return;
+                if (row.classList.contains('return-item')) {
+                    removeReturnItem(idx);
+                } else {
+                    removeFromCart(idx);
+                }
+            });
+        }
+    } catch (e) {
+        console.warn('cart remove delegation failed', e);
+    }
+    // shipping fields toggle behavior
+    // shipping toggle removed; checkout uses direct customer input fields now
+    
+    // Setup points modal
+    setupUsePointsModal();
 });
+
+function setupUsePointsModal() {
+    const usePointsBtn = document.getElementById('usePointsBtn');
+    const usePointsModal = document.getElementById('usePointsModal');
+    const closeBtn = document.getElementById('closeUsePointsModal');
+    const cancelBtn = document.getElementById('cancelUsePointsBtn');
+    const confirmBtn = document.getElementById('confirmUsePointsBtn');
+    const usePointsInput = document.getElementById('usePointsInput');
+    
+    if (!usePointsBtn || !usePointsModal) return;
+    
+    // Open modal when button clicked
+    usePointsBtn.addEventListener('click', () => {
+        const currentPoints = getCustomerPoints(selectedCustomer) || 0;
+        const tier = getEffectiveTier(selectedCustomer);
+        const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
+        
+        if (currentPoints < 100) {
+            alert('Khách hàng cần có ít nhất 100 điểm để sử dụng!');
+            return;
+        }
+        
+        document.getElementById('usePointsCurrentPoints').textContent = formatCompactNumber(currentPoints);
+        document.getElementById('usePointsRateInfo').textContent = formatPrice(rate);
+        
+        // Reset input
+        usePointsInput.value = '';
+        usePointsInput.focus();
+        
+        usePointsModal.classList.add('show');
+        usePointsModal.setAttribute('aria-hidden', 'false');
+    });
+    
+    // Close modal
+    const closeModal = () => {
+        usePointsModal.classList.remove('show');
+        usePointsModal.setAttribute('aria-hidden', 'true');
+        usePointsEnabled = false;
+        pointsToUse = 0;
+    };
+    
+    closeBtn?.addEventListener('click', closeModal);
+    cancelBtn?.addEventListener('click', closeModal);
+    
+    // Update discount preview on input change
+    usePointsInput?.addEventListener('input', () => {
+        updatePointsDiscountPreview();
+    });
+    
+    // Handle confirm
+    confirmBtn?.addEventListener('click', () => {
+        const pointsInput = parseInt(usePointsInput.value) || 0;
+        const currentPoints = getCustomerPoints(selectedCustomer) || 0;
+        
+        if (pointsInput <= 0) {
+            alert('Vui lòng nhập số điểm lớn hơn 0');
+            return;
+        }
+        
+        if (pointsInput > currentPoints) {
+            alert('Số điểm sử dụng không được vượt quá điểm hiện có');
+            return;
+        }
+        
+        if (pointsInput % 100 !== 0) {
+            alert('Số điểm phải là bội số của 100');
+            return;
+        }
+        
+        // Save points to use
+        usePointsEnabled = true;
+        pointsToUse = pointsInput;
+        
+        // Close modal without resetting flags
+        usePointsModal.classList.remove('show');
+        usePointsModal.setAttribute('aria-hidden', 'true');
+        
+        // Update checkout display
+        updatePointsDisplayInfo();
+        updateTotal();
+    });
+    
+    // Close modal when clicking outside
+    usePointsModal.addEventListener('click', (e) => {
+        if (e.target === usePointsModal) {
+            closeModal();
+        }
+    });
+}
+
+function updatePointsDiscountPreview() {
+    const usePointsInput = document.getElementById('usePointsInput');
+    const pointsInput = parseInt(usePointsInput.value) || 0;
+    const tier = getEffectiveTier(selectedCustomer);
+    const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
+    
+    const steps = Math.floor(pointsInput / 100);
+    const discount = steps * rate;
+    
+    const discountEl = document.getElementById('usePointsDiscountPreview');
+    if (discountEl) {
+        discountEl.textContent = formatPrice(discount);
+    }
+}
+
+function updatePointsDisplayInfo() {
+    const pointsUsedInfo = document.getElementById('pointsUsedInfo');
+    const checkoutPointsUsed = document.getElementById('checkoutPointsUsed');
+    const checkoutPointsDiscount = document.getElementById('checkoutPointsDiscount');
+    
+    if (usePointsEnabled && pointsToUse > 0) {
+        if (pointsUsedInfo) {
+            // Calculate discount for display
+            const tier = getEffectiveTier(selectedCustomer);
+            const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
+            const steps = Math.floor(pointsToUse / 100);
+            const discountAmount = steps * rate;
+            
+            pointsUsedInfo.style.display = 'block';
+            checkoutPointsUsed.textContent = formatCompactNumber(pointsToUse);
+            if (checkoutPointsDiscount) {
+                checkoutPointsDiscount.textContent = formatPrice(discountAmount);
+            }
+        }
+    } else {
+        if (pointsUsedInfo) {
+            pointsUsedInfo.style.display = 'none';
+        }
+    }
+}
 
 // Reload promotions khi quay lại trang để cập nhật trạng thái active/inactive
 document.addEventListener('visibilitychange', () => {
@@ -1502,6 +2330,29 @@ function renderSupportMessages(messages) {
     box.scrollTop = box.scrollHeight;
 }
 
+async function markSupportMessagesAsRead() {
+    const currentUserId = Number(sessionStorage.getItem('userId'));
+    const ownerId = getValidSupportOwnerId();
+    if (!Number.isFinite(currentUserId) || !ownerId) return;
+
+    try {
+        const token = sessionStorage.getItem('accessToken') || '';
+        await fetch(`${API_BASE}/messages/mark-as-read`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                senderId: ownerId,
+                receiverId: currentUserId
+            })
+        });
+    } catch (error) {
+        console.error('Error marking messages as read:', error);
+    }
+}
+
 async function loadSupportMessages() {
     const currentUserId = Number(sessionStorage.getItem('userId'));
     const ownerId = getValidSupportOwnerId();
@@ -1514,20 +2365,14 @@ async function loadSupportMessages() {
     if (!res.ok) return;
 
     const data = await res.json();
+    
+    // Mark all messages as read FIRST
+    await markSupportMessagesAsRead();
+    
+    // Then render and update badge
     renderSupportMessages(data || []);
-
-    // Count unread messages from owner
-    const unreadCount = (data || []).filter(m => !m.isRead && Number(m.senderId) === ownerId).length;
-    
-    // Update unread badge
-    updateSupportUnreadBadge(unreadCount);
-    
-    // Show notification if new unread messages arrived
-    if (unreadCount > 0 && unreadCount > lastMessageCount) {
-        showToastNotification('Chăm sóc khách hàng đã gửi tin nhắn', 'info');
-    }
-    
-    lastMessageCount = unreadCount;
+    updateSupportUnreadBadge(0);
+    lastMessageCount = 0;
 }
 
 async function sendSupportMessage() {
@@ -1613,7 +2458,6 @@ function updateSupportUnreadBadge(count) {
             font-weight: 700;
             z-index: 999;
         `;
-        btn.style.position = 'relative';
         btn.appendChild(badge);
     }
 }
@@ -1664,6 +2508,10 @@ async function openSupportModal() {
         return;
     }
 
+    // Reset badge immediately
+    updateSupportUnreadBadge(0);
+    lastMessageCount = 0;
+
     if (meta) {
         meta.textContent = 'Đang chat với: Chăm sóc khách hàng';
     }
@@ -1687,6 +2535,13 @@ function closeSupportModal() {
     modal.classList.remove('show');
     modal.setAttribute('aria-hidden', 'true');
     clearSupportPolling();
+    
+    // Mark as read one more time before closing to be sure
+    markSupportMessagesAsRead().then(() => {
+        // Reset badge after marking
+        updateSupportUnreadBadge(0);
+        lastMessageCount = 0;
+    });
 }
 
 function setupContactSupport() {
@@ -1710,6 +2565,17 @@ function setupContactSupport() {
             closeSupportModal();
         }
     });
+
+    // Mark all old messages as read on page load to avoid showing old unread count
+    const userId = Number(sessionStorage.getItem('userId'));
+    if (Number.isFinite(userId)) {
+        resolveOwnerContact().then(() => {
+            const ownerId = getValidSupportOwnerId();
+            if (ownerId) {
+                markSupportMessagesAsRead().catch(() => {});
+            }
+        }).catch(() => {});
+    }
 }
 
 function startGlobalUnreadPolling() {
@@ -1748,20 +2614,19 @@ function startGlobalUnreadPolling() {
                 
                 if (res.ok) {
                     const data = await res.json();
-                    const unreadCount = (data || []).filter(m => !m.isRead && Number(m.senderId) === ownerId).length;
+                    const unreadCount = (data || []).filter(m => m.isRead !== true && Number(m.senderId) === ownerId).length;
                     
-                    // Update badge even when modal is closed
-                    updateSupportUnreadBadge(unreadCount);
-                    
-                    // Show notification for new messages only if modal is closed
+                    // Only update badge when modal is CLOSED
                     const modalEl = document.getElementById('contactSupportModal');
                     if (modalEl && !modalEl.classList.contains('show')) {
-                        if (unreadCount > lastMessageCount && unreadCount > 0) {
+                        // Show badge với số tin nhắn chưa đọc
+                        updateSupportUnreadBadge(unreadCount);
+                        
+                        // Show notification for new messages
+                        if (unreadCount > 0 && unreadCount > lastMessageCount) {
                             showToastNotification('Chăm sóc khách hàng đã gửi tin nhắn', 'info');
                         }
-                    }
-                    
-                    if (unreadCount !== lastMessageCount) {
+                        
                         lastMessageCount = unreadCount;
                     }
                 }
@@ -2126,6 +2991,8 @@ function renderCart() {
             emptyState.style.display = 'grid';
         }
         toggleEmptyState(true);
+        // Ensure checkout button state reflects empty cart
+        try { updateCheckoutButtonState(); } catch (e) {}
         return;
     }
 
@@ -2148,7 +3015,7 @@ function renderCart() {
                 <span>${formatPrice(item.productPrice * item.quantity)}</span>
                 <div class="cart-item-actions">
                     <span class="cart-item-locked">Đổi</span>
-                    <button class="cart-item-remove" onclick="removeReturnItem(${idx})">×</button>
+                    <button class="cart-item-remove">×</button>
                 </div>
             </div>
         `;
@@ -2196,10 +3063,12 @@ function renderCart() {
             <span>${item.unit || '-'}</span>
             <span>${formatPrice(item.productPrice)}</span>
             <span>${formatPrice(item.productPrice * item.quantity)}</span>
-            <button class="cart-item-remove" onclick="removeFromCart(${idx})">×</button>
+            <button class="cart-item-remove">×</button>
         </div>
     `;
     }).join('');
+    // Update checkout button state whenever cart is re-rendered
+    try { updateCheckoutButtonState(); } catch (e) {}
 }
 
 function updateQty(idx, change) {
@@ -2421,6 +3290,16 @@ function openCustomerDetailFromButton(evt) {
 function clearSelectedCustomer(options = {}) {
     const { showList = true } = options;
     selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+    try {
+        localStorage.removeItem(getSelectedCustomerStorageKey());
+        localStorage.removeItem('selected_customer_state');
+    } catch (e) {}
+    
+    // Reset points usage
+    usePointsEnabled = false;
+    pointsToUse = 0;
+    updatePointsDisplayInfo();
+    
     const selectedView = document.getElementById('selectedCustomer');
     if (selectedView) {
         selectedView.textContent = 'Khách lẻ';
@@ -2456,43 +3335,204 @@ function clearSelectedCustomer(options = {}) {
 }
 
 function updateTotal() {
-    const memberSummary = getMemberDiscountForTotal(getTotalAmount());
-    const toggle = document.getElementById('usePointsToggle');
-    const canUsePoints = memberSummary.points >= 100 && Boolean(TIER_DISCOUNT_BY_100[getEffectiveTier(selectedCustomer)]);
-    if (toggle) {
-        toggle.disabled = !canUsePoints;
-        if (!canUsePoints) {
-            toggle.checked = false;
+    try {
+        const memberSummary = getMemberDiscountForTotal(getTotalAmount());
+        const toggle = document.getElementById('usePointsToggle');
+        const canUsePoints = memberSummary.points >= 100 && Boolean(TIER_DISCOUNT_BY_100[getEffectiveTier(selectedCustomer)]);
+        if (toggle) {
+            toggle.disabled = !canUsePoints;
+            if (!canUsePoints) {
+                toggle.checked = false;
+            }
         }
+        const baseSubtotal = cart.reduce((sum, item) => {
+            const qty = item.quantity || 0;
+            if (qty <= 0) {
+                return sum + (item.productPrice * qty);
+            }
+            const product = products.find(p => p.id === item.productId) || {};
+            const basePrice = Number(product.price);
+            if (!Number.isFinite(basePrice)) {
+                return sum + (item.productPrice * qty);
+            }
+            return sum + (basePrice * qty);
+        }, 0);
+        const discountedSubtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
+        const promoValue = Math.max(0, baseSubtotal - discountedSubtotal);
+        const usePoints = shouldUseMemberPoints();
+        const memberDiscount = usePoints ? memberSummary.discount : 0;
+        const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
+        const total = Math.max(0, discountedSubtotal - memberDiscount);
+        
+        setText('subtotal', formatPrice(baseSubtotal));
+        setText('promoAmount', formatPrice(promoValue));
+        setText('totalAmount', formatPrice(total));
+        setText('amountDue', formatPrice(total));
+        setText('memberPoints', formatCompactNumber(memberSummary.points));
+        setText('memberDiscountAmount', formatPrice(memberDiscount));
+        setText('memberPointsUsed', formatCompactNumber(pointsUsed));
+        // Show checkout points: current and points that will be earned from this order
+        try {
+            const pointsCurrentEl = document.getElementById('checkoutPointsCurrent');
+            const pointsEarnEl = document.getElementById('checkoutPointsEarn');
+            const pointsToAdd = Math.max(0, Math.floor(total / POINTS_EARN_RATE_VND));
+            if (pointsCurrentEl) pointsCurrentEl.textContent = formatCompactNumber(getCustomerPoints(selectedCustomer));
+            if (pointsEarnEl) pointsEarnEl.textContent = formatCompactNumber(pointsToAdd);
+        } catch (e) {}
+        updateChangeDue(total);
+        setDefaultTierByTotal(total);
+    } catch (err) {
+        console.warn('[updateTotal] error', err);
     }
-    const baseSubtotal = cart.reduce((sum, item) => {
-        const qty = item.quantity || 0;
-        if (qty <= 0) {
-            return sum + (item.productPrice * qty);
-        }
-        const product = products.find(p => p.id === item.productId) || {};
-        const basePrice = Number(product.price);
-        if (!Number.isFinite(basePrice)) {
-            return sum + (item.productPrice * qty);
-        }
-        return sum + (basePrice * qty);
-    }, 0);
-    const discountedSubtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
-    const promoValue = Math.max(0, baseSubtotal - discountedSubtotal);
-    const usePoints = shouldUseMemberPoints();
-    const memberDiscount = usePoints ? memberSummary.discount : 0;
-    const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
-    const total = Math.max(0, discountedSubtotal - memberDiscount);
+}
 
-    document.getElementById('subtotal').textContent = formatPrice(baseSubtotal);
-    document.getElementById('promoAmount').textContent = formatPrice(promoValue);
-    document.getElementById('totalAmount').textContent = formatPrice(total);
-    document.getElementById('amountDue').textContent = formatPrice(total);
-    setText('memberPoints', formatCompactNumber(memberSummary.points));
-    setText('memberDiscountAmount', formatPrice(memberDiscount));
-    setText('memberPointsUsed', formatCompactNumber(pointsUsed));
-    updateChangeDue(total);
-    setDefaultTierByTotal(total);
+// Visually show points added to the currently selected customer in checkout
+function showPointsAdded(pointsAdded) {
+    try {
+        pointsAdded = Number(pointsAdded) || 0;
+        if (pointsAdded <= 0) return;
+        const pointsCurrentEl = document.getElementById('checkoutPointsCurrent');
+        if (!pointsCurrentEl) return;
+
+        const basePoints = getCustomerPoints(selectedCustomer) || 0;
+        const newTotal = basePoints + pointsAdded;
+
+        // Update in-memory selectedCustomer so subsequent operations see the new total
+        try {
+            if (!selectedCustomer) selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
+            selectedCustomer.totalPoints = Number.isFinite(Number(newTotal)) ? Number(newTotal) : newTotal;
+            selectedCustomer.monthlyPoints = (Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : 0) + pointsAdded;
+        } catch (e) {}
+
+        // update displayed current points immediately
+        pointsCurrentEl.textContent = formatCompactNumber(newTotal);
+        // also update detail view if open
+        const detailPointsEl = document.getElementById('detailCustomerPoints');
+        if (detailPointsEl) detailPointsEl.textContent = formatCompactNumber(newTotal);
+
+        // persist updated selected customer state locally so points survive refresh
+        try { persistSelectedCustomerState(); } catch (e) { console.warn('[showPointsAdded] persistSelectedCustomerState failed', e); }
+
+        // show a transient badge with the added points
+        const badge = document.createElement('span');
+        badge.className = 'points-added-badge';
+        badge.textContent = ` +${formatCompactNumber(pointsAdded)}`;
+        pointsCurrentEl.insertAdjacentElement('afterend', badge);
+
+        // fade out and remove after a short delay
+        setTimeout(() => badge.classList.add('points-added-fade'), 2100);
+        setTimeout(() => { try { badge.remove(); } catch (e) {} }, 2600);
+    } catch (e) {
+        console.warn('showPointsAdded failed', e);
+    }
+}
+
+function normalizePhoneForOrder(phone) {
+    if (!phone) return '';
+    return String(phone).replace(/\D/g, '');
+}
+
+async function refreshSelectedCustomerPointsForOrder(order) {
+    if (!order) return;
+    if (selectedCustomer?.id && Number(selectedCustomer.id) > 0) {
+        await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
+    const normalizedOrderPhone = normalizePhoneForOrder(order.customerPhone || order.customer_phone || '');
+    const normalizedSelectedPhone = normalizePhoneForOrder(selectedCustomer?.phone || selectedCustomer?.customerPhone || '');
+
+    if (order.customerId) {
+        await refreshCustomerDetailFromApi(order.customerId);
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
+
+    if (selectedCustomer?.id && normalizedSelectedPhone && normalizedOrderPhone && normalizedSelectedPhone === normalizedOrderPhone) {
+        await refreshCustomerDetailFromApi(selectedCustomer.id);
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
+
+    if (normalizedOrderPhone) {
+        await refreshSelectedCustomerByPhone(normalizedOrderPhone);
+        try { await persistCartStateNow(); } catch (e) {}
+        return;
+    }
+}
+
+async function refreshSelectedCustomerByPhone(normalizedPhone) {
+    if (!normalizedPhone) return null;
+    try {
+        const response = await fetch(`${API_BASE}/customers`, {
+            headers: getAuthHeaders()
+        });
+        if (!response.ok) return null;
+        const customersList = await response.json();
+        if (!Array.isArray(customersList)) return null;
+        const customer = customersList.find(c => normalizePhoneForOrder(c.phone) === normalizedPhone);
+        if (!customer || !customer.id) return null;
+        applyCustomerSelection(customer, { openDetail: false });
+        await refreshCustomerDetailFromApi(customer.id);
+        return customer;
+    } catch (err) {
+        console.warn('refreshSelectedCustomerByPhone failed', err);
+        return null;
+    }
+}
+
+async function refreshSelectedCustomerByIdentity({ username, email, phone, name }) {
+    try {
+        const response = await fetch(`${API_BASE}/customers`, {
+            headers: getAuthHeaders()
+        });
+        if (!response.ok) return null;
+        const customersList = await response.json();
+        if (!Array.isArray(customersList)) return null;
+
+        const normalizedPhone = normalizePhoneForOrder(phone);
+        const byPhone = normalizedPhone
+            ? customersList.find(c => normalizePhoneForOrder(c.phone) === normalizedPhone)
+            : null;
+        if (byPhone && byPhone.id) {
+            applyCustomerSelection(byPhone, { openDetail: false });
+            await refreshCustomerDetailFromApi(byPhone.id);
+            return byPhone;
+        }
+
+        const byUsername = username
+            ? customersList.find(c => c.username && c.username.toString().trim().toLowerCase() === username.toString().trim().toLowerCase())
+            : null;
+        if (byUsername && byUsername.id) {
+            applyCustomerSelection(byUsername, { openDetail: false });
+            await refreshCustomerDetailFromApi(byUsername.id);
+            return byUsername;
+        }
+
+        const byEmail = email
+            ? customersList.find(c => c.email && c.email.toString().trim().toLowerCase() === email.toString().trim().toLowerCase())
+            : null;
+        if (byEmail && byEmail.id) {
+            applyCustomerSelection(byEmail, { openDetail: false });
+            await refreshCustomerDetailFromApi(byEmail.id);
+            return byEmail;
+        }
+
+        const normalizedName = name ? name.toString().trim().toLowerCase() : '';
+        const byName = normalizedName
+            ? customersList.find(c => c.name && c.name.toString().trim().toLowerCase() === normalizedName)
+            : null;
+        if (byName && byName.id) {
+            applyCustomerSelection(byName, { openDetail: false });
+            await refreshCustomerDetailFromApi(byName.id);
+            return byName;
+        }
+
+        return null;
+    } catch (err) {
+        console.warn('refreshSelectedCustomerByIdentity failed', err);
+        return null;
+    }
 }
 
 function getTotalAmount() {
@@ -2560,9 +3600,15 @@ function getCustomerPoints(customer) {
 }
 
 function getMemberDiscountForTotal(total) {
-    const points = getCustomerPoints(selectedCustomer);
+    let points = getCustomerPoints(selectedCustomer);
     const tier = getEffectiveTier(selectedCustomer);
     const rate = TIER_DISCOUNT_BY_100[tier] || 0;
+    
+    // If user specified points to use, use that instead of max available
+    if (usePointsEnabled && pointsToUse > 0) {
+        points = Math.min(pointsToUse, points || 0);
+    }
+    
     if (!points || points < 100 || rate <= 0) {
         return { points, pointsUsed: 0, discount: 0 };
     }
@@ -2576,13 +3622,8 @@ function getMemberDiscountForTotal(total) {
 }
 
 function shouldUseMemberPoints() {
-    const toggle = document.getElementById('usePointsToggle');
-    if (toggle && toggle.checked === false) {
-        return false;
-    }
-    const points = getCustomerPoints(selectedCustomer);
-    const tier = getEffectiveTier(selectedCustomer);
-    return points >= 100 && Boolean(TIER_DISCOUNT_BY_100[tier]);
+    // Use points if employee enabled it and points were specified
+    return usePointsEnabled && pointsToUse > 0;
 }
 
 function showPopup(message, options = {}) {
@@ -2719,9 +3760,19 @@ function updateChangeDue(forcedTotal = null) {
         return;
     }
 
-    const totalAmount = forcedTotal !== null
-        ? forcedTotal
-        : parseInt(document.getElementById('totalAmount').textContent.replace(/\D/g, ''), 10) || 0;
+    let totalAmount = 0;
+    if (forcedTotal !== null) {
+        totalAmount = forcedTotal;
+    } else {
+        const totalEl = document.getElementById('totalAmount');
+        if (totalEl && typeof totalEl.textContent === 'string' && totalEl.textContent.trim()) {
+            totalAmount = parseInt(totalEl.textContent.replace(/\D/g, ''), 10) || 0;
+        } else {
+            // fallback to computed cart total when DOM element missing
+            totalAmount = getTotalAmount();
+        }
+    }
+
     const cashReceived = parseInt(document.getElementById('cashReceivedInput')?.value, 10) || 0;
     const change = Math.max(0, cashReceived - totalAmount);
     changeLabel.textContent = formatPrice(change);
@@ -2731,6 +3782,27 @@ function toggleCashPanel(show) {
     const panel = document.getElementById('cashPanel');
     if (!panel) return;
     panel.style.display = show ? 'block' : 'none';
+}
+
+function updatePaymentPanels() {
+    const cashPanel = document.getElementById('cashPanel');
+    const transferPanel = document.getElementById('transferPanel');
+    const cardPanel = document.getElementById('cardPanel');
+    if (cashPanel) cashPanel.style.display = currentPaymentMethod === 'CASH' ? 'block' : 'none';
+    if (transferPanel) transferPanel.style.display = currentPaymentMethod === 'TRANSFER' ? 'block' : 'none';
+    if (cardPanel) cardPanel.style.display = currentPaymentMethod === 'CARD' ? 'block' : 'none';
+
+    document.querySelectorAll('.method-btn').forEach(btn => {
+        const m = btn.dataset.method;
+        if (m === currentPaymentMethod) {
+            btn.classList.add('active');
+            btn.setAttribute('data-active', 'true');
+        } else {
+            btn.classList.remove('active');
+            btn.setAttribute('data-active', 'false');
+        }
+    });
+    updateChangeDue();
 }
 
 function setDefaultTierByTotal(total) {
@@ -2823,8 +3895,7 @@ function setupEventListeners() {
     document.querySelectorAll('input[name="paymentMethod"]').forEach(input => {
         input.addEventListener('change', () => {
             currentPaymentMethod = input.value;
-            toggleCashPanel(currentPaymentMethod === 'CASH');
-            updateChangeDue();
+            updatePaymentPanels();
             queuePersistCartState();
         });
     });
@@ -2888,6 +3959,23 @@ function setupEventListeners() {
         applyCustomerFilter();
     });
 
+    // Wire visible payment method buttons to the hidden radio inputs
+    document.querySelectorAll('.method-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const method = btn.dataset.method;
+            if (!method) return;
+            const input = document.querySelector(`input[name="paymentMethod"][value="${method}"]`);
+            if (input) {
+                input.checked = true;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            } else {
+                currentPaymentMethod = method;
+                updatePaymentPanels();
+                queuePersistCartState();
+            }
+        });
+    });
+
     document.querySelectorAll('.quick-cash .chip').forEach(btn => {
         btn.addEventListener('click', () => {
             const cashInput = document.getElementById('cashReceivedInput');
@@ -2897,6 +3985,21 @@ function setupEventListeners() {
             updateChangeDue();
         });
     });
+
+    // Order tracking handlers
+    const trackBtn = document.getElementById('trackOrderBtn');
+    const trackInput = document.getElementById('trackOrderInput');
+    if (trackBtn && trackInput) {
+        trackBtn.addEventListener('click', async () => {
+            await trackOrder();
+        });
+        trackInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                await trackOrder();
+            }
+        });
+    }
 
     const clearCartBtn = document.getElementById('clearCartBtn');
     clearCartBtn?.addEventListener('click', () => {
@@ -2913,6 +4016,11 @@ function setupEventListeners() {
     });
 
     document.getElementById('checkoutBtn').addEventListener('click', async () => {
+        // enforce required phone + address before allowing payment
+        if (!isCheckoutValid()) {
+            showPopup('Vui lòng nhập SĐT và địa chỉ nhận hàng trước khi thanh toán.', { type: 'error' });
+            return;
+        }
         // If transfer selected, create unpaid order then show QR code
         if (currentPaymentMethod === 'TRANSFER') {
             const res = await createOrder(false);
@@ -2920,17 +4028,74 @@ function setupEventListeners() {
                 const amount = res.totalAmount ? parseFloat(res.totalAmount) : getTotalAmount();
                 const token = res.paymentToken || res.token || null;
                 showTransferQrModal(res.orderId, amount, token);
+                // Reset points after creating order
+                usePointsEnabled = false;
+                pointsToUse = 0;
+                updatePointsDisplayInfo();
             }
             return;
         }
 
-        // Other methods proceed as before
-        createOrder(true);
+        // Treat CASH as COD/unpaid for simplified checkout: create unpaid order, show success, and clear inputs
+        if (currentPaymentMethod === 'CASH') {
+            const res = await createOrder(false);
+            if (res) {
+                showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
+                // Reset points after checkout
+                usePointsEnabled = false;
+                pointsToUse = 0;
+                updatePointsDisplayInfo();
+                // clear only checkout input fields (keep selectedCustomer so points persist)
+                try {
+                    const cnameEl = document.getElementById('checkoutCustomerName');
+                    const cphoneEl = document.getElementById('checkoutCustomerPhone');
+                    const caddrEl = document.getElementById('checkoutCustomerAddress');
+                    if (cnameEl) cnameEl.value = 'Khách lẻ';
+                    if (cphoneEl) cphoneEl.value = '';
+                    if (caddrEl) caddrEl.value = '';
+                } catch (e) {
+                    console.warn('Failed to clear checkout inputs', e);
+                }
+            }
+            return;
+        }
+
+        // Fallback: create unpaid order and show success
+        const res = await createOrder(false);
+        if (res) {
+            showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
+            // Reset points after checkout
+            usePointsEnabled = false;
+            pointsToUse = 0;
+            updatePointsDisplayInfo();
+            try {
+                const cnameEl = document.getElementById('checkoutCustomerName');
+                const cphoneEl = document.getElementById('checkoutCustomerPhone');
+                const caddrEl = document.getElementById('checkoutCustomerAddress');
+                if (cnameEl) cnameEl.value = 'Khách lẻ';
+                if (cphoneEl) cphoneEl.value = '';
+                if (caddrEl) caddrEl.value = '';
+            } catch (e) {
+                console.warn('Failed to clear checkout inputs', e);
+            }
+        }
     });
 
 
     document.getElementById('logoutBtn').addEventListener('click', () => {
         if (confirm('X\u00f3a h\u00f3a \u0111\u01a1n n\u00e0y?')) {
+            const userId = getCurrentUserId();
+            if (userId) {
+                fetch(`${API_BASE}/orders/cart/${userId}`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                }).catch(() => {});
+            }
+            try {
+                clearSelectedCustomer();
+            } catch (e) {
+                console.warn('Failed to clear selected customer on logout', e);
+            }
             persistCartStateNow();
             sessionStorage.clear();
             window.location.href = '/pages/login.html';
@@ -3007,6 +4172,313 @@ function createInvoiceState(name) {
     };
 }
 
+// Order tracking: fetch order by numeric id or search summary by invoice number
+async function trackOrder() {
+    const qEl = document.getElementById('trackOrderInput');
+    const resultEl = document.getElementById('orderTrackingResult');
+    if (!qEl || !resultEl) return;
+    const q = (qEl.value || '').trim();
+    const userId = getCurrentUserId();
+    const headers = getAuthHeaders();
+
+    // If user is logged in, show orders belonging to that account directly
+    if (userId) {
+        resultEl.innerHTML = '<div class="muted">Đang tra cứu đơn của tài khoản...</div>';
+        try {
+            let orders = [];
+            const ordRes = await fetch(`${API_BASE}/orders/user/${userId}`, { headers });
+            if (ordRes.ok) {
+                orders = await ordRes.json();
+            } else {
+                console.warn('orders/user fallback failed', ordRes.status);
+            }
+            if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+                const summaryRes = await fetch(`${API_BASE}/orders/summary`, { headers });
+                if (summaryRes.ok) {
+                    const summary = await summaryRes.json();
+                    orders = Array.isArray(summary) ? summary.filter(o => Number(o.userId) === Number(userId)) : [];
+                }
+            }
+            if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+                resultEl.innerHTML = '<div class="muted">Tài khoản chưa có đơn hàng nào.</div>';
+                return;
+            }
+
+            // If user provided a query, try to match within their orders
+            if (q) {
+                const found = (orders || []).find(o => String(o.id) === q || (o.invoiceNumber && String(o.invoiceNumber).toLowerCase().includes(q.toLowerCase())));
+                if (found) {
+                    try {
+                        const det = await fetch(`${API_BASE}/orders/${found.id}`, { headers });
+                        if (det.ok) {
+                            const order = await det.json();
+                            renderOrderTrackingResult(order);
+                            return;
+                        }
+                    } catch (e) {}
+                    renderOrderSummaryResult(found);
+                    return;
+                }
+                resultEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng của tài khoản với từ khóa này.</div>';
+                return;
+            }
+
+            // No query: render a simple list inline
+            const html = (orders || []).map(o => {
+                const created = formatDateTime(o.createdAt || '-');
+                const invoice = o.invoiceNumber || ('#' + (o.id || '-'));
+                const status = escapeHtml(o.status || '-');
+                const total = formatPrice(o.totalAmount || o.total || 0);
+                return `
+                    <div style="padding:8px;border-bottom:1px solid #eef2f8;">
+                        <div style="font-weight:700">${escapeHtml(invoice)} · ${created}</div>
+                        <div style="color:#333;margin-top:4px">Trạng thái: <strong>${status}</strong></div>
+                        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+                        <div style="margin-top:6px">
+                            <button class="ghost-btn small view-order-inline" data-order-id="${o.id}">Xem</button>
+                            ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-inline" data-order-id="${o.id}">Hủy</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            resultEl.innerHTML = html;
+
+            // bind inline buttons
+            resultEl.querySelectorAll('.view-order-inline').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = b.getAttribute('data-order-id');
+                    if (!id) return;
+                    try {
+                        const res = await fetch(`${API_BASE}/orders/${id}`, { headers });
+                        if (!res.ok) {
+                            alert('Không thể tải chi tiết đơn.');
+                            return;
+                        }
+                        const order = await res.json();
+                        renderOrderTrackingResult(order);
+                    } catch (err) {
+                        console.warn('view inline order error', err);
+                        alert('Lỗi khi tải chi tiết đơn.');
+                    }
+                });
+            });
+
+            resultEl.querySelectorAll('.cancel-order-inline').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = b.getAttribute('data-order-id');
+                    if (!id) return;
+                    if (!confirm('Bạn có chắc muốn hủy đơn này?')) return;
+                    try {
+                        const res = await fetch(`${API_BASE}/orders/${id}/cancel`, { method: 'POST', headers });
+                        if (!res.ok) {
+                            alert('Không thể hủy đơn.');
+                            return;
+                        }
+                        alert('Đã hủy đơn.');
+                        // refresh
+                        await trackOrder();
+                    } catch (err) {
+                        console.warn('cancel inline error', err);
+                        alert('Lỗi khi hủy đơn.');
+                    }
+                });
+            });
+
+            return;
+        } catch (err) {
+            console.warn('trackOrder (user) error', err);
+            // fallback to global behavior below
+        }
+    }
+
+    // Global lookup (unauthenticated or fallback)
+    if (!q) {
+        resultEl.innerHTML = '<div class="muted">Nhập mã đơn hoặc số hóa đơn để tra cứu.</div>';
+        return;
+    }
+    resultEl.innerHTML = '<div class="muted">Đang tra cứu...</div>';
+    try {
+        // if numeric, try direct lookup
+        if (/^\d+$/.test(q)) {
+            const res = await fetch(`${API_BASE}/orders/${q}`, { headers });
+            if (res.ok) {
+                const data = await res.json();
+                renderOrderTrackingResult(data);
+                return;
+            }
+        }
+
+        // fallback: load summary and try match invoiceNumber
+        const sumRes = await fetch(`${API_BASE}/orders/summary`, { headers });
+        if (!sumRes.ok) {
+            resultEl.innerHTML = '<div class="muted">Không thể truy vấn danh sách đơn.</div>';
+            return;
+        }
+        const list = await sumRes.json();
+        const found = (list || []).find(o => (o.invoiceNumber && String(o.invoiceNumber).toLowerCase().includes(q.toLowerCase())) || String(o.id) === q);
+        if (found) {
+            // try to fetch details
+            try {
+                const det = await fetch(`${API_BASE}/orders/${found.id}`, { headers });
+                if (det.ok) {
+                    const order = await det.json();
+                    renderOrderTrackingResult(order);
+                    return;
+                }
+            } catch (e) {}
+            // render summary if detail unavailable
+            renderOrderSummaryResult(found);
+            return;
+        }
+
+        resultEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
+    } catch (err) {
+        console.warn('trackOrder error', err);
+        resultEl.innerHTML = `<div class="muted">Lỗi khi tra cứu đơn: ${escapeHtml(String(err.message || err))}</div>`;
+    }
+}
+
+function renderOrderTrackingResult(order) {
+    const el = document.getElementById('orderTrackingResult');
+    if (!el || !order) return;
+    const created = formatDateTime(order.createdAt || new Date());
+    const status = escapeHtml(order.status || '-');
+    const invoice = escapeHtml(order.invoiceNumber || (order.id ? `#${order.id}` : '-'));
+    const total = formatPrice(order.totalAmount || order.total || 0);
+    const customer = escapeHtml(order.customerName || order.customer || order.customerPhone || order.customer_phone || '-');
+    const phone = escapeHtml(order.customerPhone || order.customer_phone || '-');
+    let itemsHtml = '';
+    if (Array.isArray(order.items) && order.items.length > 0) {
+        itemsHtml = `<div style="margin-top:8px;font-weight:700">Sản phẩm</div>` + order.items.map(it => `
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8">
+                <div style="flex:1">${escapeHtml(it.name || it.productName || '-')}</div>
+                <div style="width:68px;text-align:right">x${it.quantity || it.qty || 0}</div>
+                <div style="width:90px;text-align:right">${formatPrice(it.price || it.unitPrice || 0)}</div>
+            </div>
+        `).join('');
+    }
+
+    // Estimated delivery range (if available)
+    let deliveryHtml = '';
+    if (order.estimatedDeliveryFrom || order.estimatedDeliveryTo) {
+        try {
+            const from = order.estimatedDeliveryFrom ? new Date(order.estimatedDeliveryFrom) : null;
+            const to = order.estimatedDeliveryTo ? new Date(order.estimatedDeliveryTo) : null;
+            const fmt = d => d.toLocaleDateString('vi-VN');
+            if (from && to) {
+                deliveryHtml = `<div>Ước tính giao hàng: <strong>${fmt(from)} → ${fmt(to)}</strong></div>`;
+            } else if (from) {
+                deliveryHtml = `<div>Ước tính giao hàng: <strong>${fmt(from)}</strong></div>`;
+            } else {
+                deliveryHtml = `<div>Ước tính giao hàng: <strong>${fmt(to)}</strong></div>`;
+            }
+        } catch (e) {
+            deliveryHtml = '';
+        }
+    }
+
+    const canReceive = !['CANCELLED','RECEIVED'].includes(String(order.status || '').toUpperCase());
+    el.innerHTML = `
+        <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
+        <div>Trạng thái: <strong>${status}</strong></div>
+        <div>Khách hàng: ${customer} · ${phone}</div>
+        <div>Thời gian: ${created}</div>
+        ${deliveryHtml}
+        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+        ${itemsHtml}
+        ${canReceive ? `<div style="margin-top:12px"><button id="receiveOrderDetailBtn" class="ghost-btn">Đã nhận được hàng</button></div>` : ''}
+    `;
+
+    const receiveBtn = el.querySelector('#receiveOrderDetailBtn');
+    if (receiveBtn) {
+        receiveBtn.addEventListener('click', async () => {
+            const confirmed = await confirmOrderReceived(order.id);
+            if (confirmed) {
+                await refreshSelectedCustomerPointsForOrder(order);
+                await loadOrdersForModal(getCurrentUserId());
+            }
+        });
+    }
+}
+
+function canShowReceiveButton(order) {
+    if (!order) return false;
+    const status = String(order.status || '').trim().toUpperCase();
+    if (status === 'CANCELLED' || status === 'RECEIVED') return false;
+    return !['CANCELLED','RECEIVED'].includes(status);
+}
+
+async function confirmOrderReceived(orderId) {
+    if (!orderId) return false;
+    if (!confirm('Xác nhận đã nhận hàng và cộng điểm vào tài khoản khách?')) return false;
+    const headers = getAuthHeaders();
+    const endpoints = [
+        `${API_BASE}/orders/${orderId}/received`,
+        `${API_BASE}/orders/${orderId}/confirm-received`,
+        `${API_BASE}/orders/received/${orderId}`,
+        `${API_BASE}/orders/confirm-received/${orderId}`
+    ];
+
+    for (const url of endpoints) {
+        try {
+            const res = await fetch(url, { method: 'POST', headers });
+            const contentType = res.headers.get('content-type') || '';
+            const text = await res.text();
+            let body = null;
+            if (contentType.includes('application/json')) {
+                try {
+                    body = JSON.parse(text || '{}');
+                } catch (err) {
+                    body = null;
+                }
+            }
+
+            if (res.ok) {
+                if (body && body.message) {
+                    const details = body.pointsAdded != null ? `\nĐã cộng: ${body.pointsAdded} điểm` : '';
+                    alert(`${body.message || 'Đã xác nhận nhận hàng'}${details}`);
+                    if (body && body.pointsAdded != null) {
+                        try { showPointsAdded(Number(body.pointsAdded)); } catch (e) {}
+                    }
+                } else {
+                    alert(text || 'Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
+                }
+                return true;
+            }
+
+            if (res.status !== 404) {
+                if (body && body.message) {
+                    alert(`Không thể xác nhận đơn hàng: ${body.message}`);
+                } else {
+                    alert(`Không thể xác nhận đơn hàng: ${text || res.statusText}`);
+                }
+                return false;
+            }
+        } catch (err) {
+            console.warn('confirmOrderReceived attempt failed for', url, err);
+        }
+    }
+
+    alert('Không thể xác nhận đơn hàng: endpoint chưa được hỗ trợ hoặc đơn hàng không tồn tại.');
+    return false;
+}
+
+function renderOrderSummaryResult(summary) {
+    const el = document.getElementById('orderTrackingResult');
+    if (!el || !summary) return;
+    const created = formatDateTime(summary.createdAt || new Date());
+    const invoice = escapeHtml(summary.invoiceNumber || (summary.id ? `#${summary.id}` : '-'));
+    const status = escapeHtml(summary.status || '-');
+    const total = formatPrice(summary.totalAmount || 0);
+    el.innerHTML = `
+        <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
+        <div>Trạng thái: <strong>${status}</strong></div>
+        <div>Thời gian: ${created}</div>
+        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+    `;
+}
+
 
 function getActiveInvoice() {
     return invoices.find(inv => inv.id === activeInvoiceId) || null;
@@ -3020,8 +4492,10 @@ function saveActiveInvoiceState() {
     const invoice = getActiveInvoice();
     if (!invoice) return;
     invoice.cart = cloneCart(cart);
+    // Persist minimal customer info only. Avoid saving point counts so
+    // saved drafts cannot overwrite server totals on restore.
     invoice.selectedCustomer = selectedCustomer
-        ? { ...selectedCustomer }
+        ? { id: selectedCustomer.id || 0, name: selectedCustomer.name || 'Khách lẻ', phone: selectedCustomer.phone || '-' }
         : { id: 0, name: 'Khách lẻ', phone: '-' };
     invoice.paymentMethod = currentPaymentMethod;
     invoice.cashReceived = document.getElementById('cashReceivedInput')?.value || '';
@@ -3062,13 +4536,25 @@ function applyInvoiceState(invoice) {
     methodInputs.forEach(input => {
         input.checked = input.value === currentPaymentMethod;
     });
-    toggleCashPanel(currentPaymentMethod === 'CASH');
-    updateChangeDue();
+    updatePaymentPanels();
 
     if (invoice.selectedCustomer && invoice.selectedCustomer.id > 0) {
-        applyCustomerSelection(invoice.selectedCustomer, { openDetail: false });
+        const sc = invoice.selectedCustomer;
+        // Apply the restored customer immediately so the UI can show the
+        // selected customer and use any cached point fallback values.
+        applyCustomerSelection(sc, { openDetail: false });
+
+        const scPoints = Number(sc.totalPoints ?? sc.total_points ?? NaN);
+        if (!Number.isFinite(scPoints) || scPoints <= 0) {
+            try { refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
+        }
     } else {
-        clearSelectedCustomer({ showList: false });
+        // Account-based loyalty: if a logged-in account customer is already
+        // selected, keep it instead of resetting to guest when a draft has no
+        // explicit customer attached.
+        if (!(selectedCustomer && Number(selectedCustomer.id) > 0 && getCurrentUserId())) {
+            clearSelectedCustomer({ showList: false });
+        }
     }
 
     renderCart();
@@ -3088,6 +4574,7 @@ function renderInvoiceTabs() {
         ${tabs}
         <button class="order-tab ghost" id="addInvoiceBtn" title="Th\u00eam gi\u1ecf h\u00e0ng">+</button>
         <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi\u1ecf h\u00e0ng</button>
+        <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo dõi đơn hàng">Theo dõi đơn hàng</button>
     `;
 }
 
@@ -3096,19 +4583,25 @@ function setupInvoiceTabs() {
     if (!container) return;
 
     container.addEventListener('click', (e) => {
-        const addBtn = e.target.closest('#addInvoiceBtn');
+        const target = e.target instanceof Element ? e.target : e.target.parentElement;
+        const trackBtnClicked = target?.closest('#trackOrdersHeaderBtn');
+        if (trackBtnClicked) {
+            openOrderTrackModal();
+            return;
+        }
+        const addBtn = target?.closest('#addInvoiceBtn');
         if (addBtn) {
             createAndSwitchInvoice();
             return;
         }
 
-        const savedBtn = e.target.closest('#savedInvoiceBtn');
+        const savedBtn = target?.closest('#savedInvoiceBtn');
         if (savedBtn) {
             toggleSavedBillsPanel();
             return;
         }
 
-        const closeBtn = e.target.closest('.tab-close');
+        const closeBtn = target?.closest('.tab-close');
         if (closeBtn) {
             e.stopPropagation();
             const invoiceId = closeBtn.getAttribute('data-close');
@@ -3118,7 +4611,7 @@ function setupInvoiceTabs() {
             return;
         }
 
-        const tab = e.target.closest('.order-tab[data-invoice-id]');
+        const tab = target?.closest('.order-tab[data-invoice-id]');
         if (tab) {
             const invoiceId = tab.getAttribute('data-invoice-id');
             if (invoiceId) {
@@ -3153,6 +4646,247 @@ function setupInvoiceTabs() {
                 removeSavedInvoice(draftId);
             }
         }
+    });
+}
+
+// Order tracking modal + actions
+function setupOrderTracking() {
+    const btn = document.getElementById('trackOrdersBtn');
+    const headerBtn = document.getElementById('trackOrdersHeaderBtn');
+    const modal = document.getElementById('orderTrackModal');
+    const closeBtn = document.getElementById('closeOrderTrackModal');
+    const closeFooter = document.getElementById('closeOrderTrackBtn');
+    const findBtn = document.getElementById('orderTrackFindBtn');
+    const phoneInput = document.getElementById('orderTrackPhoneInput');
+
+    [btn, headerBtn].forEach(b => {
+        if (b) b.addEventListener('click', async () => openOrderTrackModal());
+    });
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => closeOrderTrackModal());
+    }
+    if (closeFooter) {
+        closeFooter.addEventListener('click', () => closeOrderTrackModal());
+    }
+    if (findBtn) {
+        findBtn.addEventListener('click', async () => {
+            await loadOrdersForModal(getCurrentUserId());
+        });
+    }
+    if (phoneInput) {
+        phoneInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                findBtn.click();
+            }
+        });
+    }
+}
+
+async function openOrderTrackModal() {
+    const modal = document.getElementById('orderTrackModal');
+    const controls = document.getElementById('orderTrackControls');
+    if (!modal) return;
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+
+    const info = document.getElementById('orderTrackCustomerInfo');
+    const phoneInput = document.getElementById('orderTrackPhoneInput');
+
+    const showSearchControls = (show) => {
+        if (controls) {
+            controls.style.display = show ? 'flex' : 'none';
+        }
+    };
+
+    showSearchControls(false);
+
+    const userId = getCurrentUserId();
+    if (userId) {
+        if (info) info.textContent = 'Đang tải đơn hàng của tài khoản...';
+        if (phoneInput) phoneInput.value = '';
+        await loadOrdersForModal(userId);
+        return;
+    }
+
+    if (info) info.textContent = 'Bạn cần đăng nhập để xem đơn hàng của tài khoản.';
+    if (phoneInput) phoneInput.value = '';
+    const list = document.getElementById('orderTrackList');
+    if (list) list.innerHTML = '<div class="muted">Chưa đăng nhập. Vui lòng đăng nhập để xem đơn hàng của tài khoản.</div>';
+}
+
+function closeOrderTrackModal() {
+    const modal = document.getElementById('orderTrackModal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+async function loadOrdersForModal(userId) {
+    const listEl = document.getElementById('orderTrackList');
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="muted">Đang tải...</div>';
+
+    try {
+        if (!userId) {
+            listEl.innerHTML = '<div class="muted">Không tìm thấy tài khoản. Vui lòng đăng nhập.</div>';
+            return;
+        }
+
+        const headers = getAuthHeaders();
+        let orders = [];
+
+        const res = await fetch(`${API_BASE}/orders/user/${userId}`, { headers });
+        if (res.ok) {
+            orders = await res.json();
+        } else {
+            console.warn('orders/user fetch failed', res.status, await res.text());
+        }
+
+        if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+            const summaryRes = await fetch(`${API_BASE}/orders/summary`, { headers });
+            if (summaryRes.ok) {
+                const summary = await summaryRes.json();
+                orders = Array.isArray(summary) ? summary.filter(o => Number(o.userId) === Number(userId)) : [];
+            } else {
+                console.warn('orders/summary fallback failed', summaryRes.status, await summaryRes.text());
+            }
+        }
+
+        if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+            listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
+            return;
+        }
+
+        renderOrdersInModal(orders || []);
+    } catch (err) {
+        console.warn('loadOrdersForModal error', err);
+        listEl.innerHTML = '<div class="muted">Lỗi khi tải đơn hàng. Vui lòng thử lại.</div>';
+    }
+
+    function formatDiag(diagArr) {
+        if (!diagArr || diagArr.length === 0) return '';
+        const escaped = escapeHtml(diagArr.join('\n'));
+        return `<pre style="max-height:240px;overflow:auto;background:#fafafa;border:1px solid #eee;padding:8px;margin-top:8px;font-size:12px">${escaped}</pre>`;
+    }
+}
+
+function renderOrdersInModal(orders) {
+    const listEl = document.getElementById('orderTrackList');
+    if (!listEl) return;
+    if (!orders || orders.length === 0) {
+        listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
+        return;
+    }
+
+    const html = orders.map(o => {
+        const created = formatDateTime(o.createdAt || '-');
+        const invoice = o.invoiceNumber || ('#' + (o.id || '-'));
+        const status = escapeHtml(o.status || '-');
+        const total = formatPrice(o.totalAmount || o.total || 0);
+        let delivery = '';
+        try {
+            if (o.estimatedDeliveryFrom || o.estimatedDeliveryTo) {
+                const f = o.estimatedDeliveryFrom ? new Date(o.estimatedDeliveryFrom) : null;
+                const t = o.estimatedDeliveryTo ? new Date(o.estimatedDeliveryTo) : null;
+                const fmt = d => d.toLocaleDateString('vi-VN');
+                if (f && t) delivery = `${fmt(f)} → ${fmt(t)}`;
+                else if (f) delivery = fmt(f);
+                else if (t) delivery = fmt(t);
+            }
+        } catch (e) { delivery = ''; }
+
+        return `
+            <div class="order-track-row" style="padding:8px;border-bottom:1px solid #eef2f8;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+                    <div style="flex:1">
+                        <div style="font-weight:700">${escapeHtml(invoice)} · ${created}</div>
+                        <div style="color:#333;margin-top:4px">Trạng thái: <strong>${status}</strong></div>
+                        ${delivery ? `<div style="color:#333;margin-top:4px">Ước tính giao hàng: <strong>${escapeHtml(delivery)}</strong></div>` : ''}
+                        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+                        ${(!['CANCELLED','RECEIVED'].includes(String(o.status || '').toUpperCase())) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
+                        <button class="ghost-btn small view-order-btn" data-order-id="${o.id}">Xem</button>
+                        ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-btn" data-order-id="${o.id}">Hủy</button>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    listEl.innerHTML = html;
+
+    // bind buttons
+    listEl.querySelectorAll('.cancel-order-btn').forEach(b => {
+        b.addEventListener('click', async (e) => {
+            const id = b.getAttribute('data-order-id');
+            if (!id) return;
+            if (!confirm('Bạn có chắc muốn hủy đơn này?')) return;
+            try {
+                const headers = getAuthHeaders();
+                const res = await fetch(`${API_BASE}/orders/${id}/cancel`, { method: 'POST', headers });
+                if (!res.ok) {
+                    alert('Không thể hủy đơn.');
+                    return;
+                }
+                alert('Đã hủy đơn.');
+                await loadOrdersForModal(getCurrentUserId());
+            } catch (err) {
+                console.warn('cancel error', err);
+                alert('Lỗi khi hủy đơn.');
+            }
+        });
+    });
+
+    listEl.querySelectorAll('.receive-order-btn').forEach(b => {
+        b.addEventListener('click', async () => {
+            const id = b.getAttribute('data-order-id');
+            if (!id) return;
+            const order = orders.find(o => String(o.id) === String(id));
+            const confirmed = await confirmOrderReceived(id);
+            if (confirmed) {
+                await refreshSelectedCustomerPointsForOrder(order);
+                await loadOrdersForModal(getCurrentUserId());
+            }
+        });
+    });
+
+    listEl.querySelectorAll('.view-order-btn').forEach(b => {
+        b.addEventListener('click', async (e) => {
+            const id = b.getAttribute('data-order-id');
+            if (!id) return;
+            try {
+                const headers = getAuthHeaders();
+                const res = await fetch(`${API_BASE}/orders/${id}`, { headers });
+                if (!res.ok) {
+                    alert('Không thể tải chi tiết đơn.');
+                    return;
+                }
+                const order = await res.json();
+                // render small detail in modal (append)
+                const list = document.getElementById('orderTrackList');
+                const items = Array.isArray(order.items) ? order.items : [];
+                const itemsHtml = items
+                    ? items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName||it.name||'-')}</div><div>x${it.quantity||0}</div></div>`).join('')
+                    : '';
+                const rawTotal = items.reduce((sum, it) => sum + ((Number(it.price) || 0) * (Number(it.quantity) || 0)), 0);
+                const finalTotal = Number(order.totalAmount || order.total || 0);
+                const discountTotal = Math.max(0, rawTotal - finalTotal);
+                list.innerHTML = `
+                    <div style="font-weight:700;margin-bottom:6px">Đơn: ${escapeHtml(order.invoiceNumber||('#'+order.id))}</div>
+                    <div>Trạng thái: <strong>${escapeHtml(order.status||'-')}</strong></div>
+                    <div>Khách hàng: ${escapeHtml(order.customerName||order.customer||'-')} · ${escapeHtml(order.customerPhone||'-')}</div>
+                    <div>Thời gian: ${formatDateTime(order.createdAt||new Date())}</div>
+                    <div style="margin-top:6px">Tạm tính: <strong>${formatPrice(rawTotal)}</strong></div>
+                    <div>Giảm giá: <strong>${formatPrice(discountTotal)}</strong></div>
+                    <div style="margin-top:2px">Tổng thanh toán: <strong>${formatPrice(finalTotal)}</strong></div>
+                    <div style="margin-top:8px">${itemsHtml}</div>
+                `;
+            } catch (err) {
+                console.warn('view order error', err);
+            }
+        });
     });
 }
 
@@ -3328,14 +5062,66 @@ function removeSavedInvoice(draftId) {
 function applyCustomerSelection(customer, options = {}) {
     const { openDetail = false, highlightEvent = null } = options;
     const effectiveTier = getEffectiveTier(customer);
+    // Preserve existing in-memory points when the provided `customer` object
+    // doesn't include point fields (this can happen when restoring saved
+    // invoice/cart state which normalizes out point counts). If the incoming
+    // customer lacks `totalPoints`/`monthlyPoints` but it's the same customer
+    // currently selected, keep the previous values to avoid clobbering with 0.
+    const isSameCustomer = selectedCustomer && selectedCustomer.id === customer.id;
+    const existingTotal = isSameCustomer ? (Number.isFinite(Number(selectedCustomer.totalPoints)) ? Number(selectedCustomer.totalPoints) : selectedCustomer.totalPoints) : undefined;
+    const existingMonthly = isSameCustomer ? (Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : selectedCustomer.monthlyPoints) : undefined;
+
+    // Prefer explicit incoming values when present. If missing, try to use
+    // cached customer in-memory, then localStorage fallback, then existing
+    // selectedCustomer (only when same customer). This avoids clobbering the
+    // UI with 0 when the restored invoice didn't include point counts.
+    let incomingTotal = (customer.totalPoints ?? customer.total_points);
+    let incomingMonthly = (customer.monthlyPoints ?? customer.monthly_points);
+    let resolvedTotal = null;
+    let resolvedMonthly = null;
+
+    if (incomingTotal == null || incomingMonthly == null) {
+        // Try in-memory cache of `customers` list
+        try {
+            const cached = (customers || []).find(c => c && c.id === customer.id && (c.totalPoints != null || c.total_points != null));
+            if (cached) {
+                incomingTotal = incomingTotal == null ? (cached.totalPoints ?? cached.total_points) : incomingTotal;
+                incomingMonthly = incomingMonthly == null ? (cached.monthlyPoints ?? cached.monthly_points) : incomingMonthly;
+                console.debug('[applyCustomerSelection] using in-memory cached points for customer', customer.id);
+            }
+        } catch (e) {
+            console.warn('[applyCustomerSelection] failed to lookup cached/local points', e);
+        }
+    }
+
+    resolvedTotal = incomingTotal != null ? incomingTotal : (existingTotal != null ? existingTotal : 0);
+    resolvedMonthly = incomingMonthly != null ? incomingMonthly : (existingMonthly != null ? existingMonthly : 0);
+
     selectedCustomer = {
         id: customer.id,
         name: customer.name,
         phone: customer.phone,
-        totalPoints: customer.totalPoints ?? customer.total_points ?? 0,
-        monthlyPoints: customer.monthlyPoints ?? customer.monthly_points ?? 0,
-        tier: effectiveTier || customer.tier || ''
+        totalPoints: resolvedTotal,
+        monthlyPoints: resolvedMonthly,
+        tier: effectiveTier || customer.tier || (isSameCustomer ? selectedCustomer.tier : '')
     };
+
+    // Persist the selected customer state, but do not store points locally.
+    try {
+        if (selectedCustomer && selectedCustomer.id && Number(selectedCustomer.id) > 0) {
+            persistSelectedCustomerState();
+        }
+    } catch (e) {
+        console.warn('[applyCustomerSelection] failed to persist selectedCustomer state', e);
+    }
+
+    // If the passed customer is missing authoritative point fields, refresh
+    // the full customer details in the background so the UI can be updated
+    // with the server's values when available.
+    if (customer && customer.id && (customer.totalPoints == null && customer.total_points == null)) {
+        // fire-and-forget
+        try { refreshCustomerDetailFromApi(customer.id).catch(() => {}); } catch (e) {}
+    }
 
     document.querySelectorAll('.customer-item').forEach(item => {
         item.classList.remove('active');
@@ -3350,12 +5136,10 @@ function applyCustomerSelection(customer, options = {}) {
         searchInput.readOnly = true;
     }
 
-    customerSearchTerm = '';
-    const customerList = document.getElementById('customerList');
-    if (customerList) {
-        customerList.innerHTML = '';
-        customerList.style.display = 'none';
-    }
+        const selectedCustomerLabel = document.getElementById('selectedCustomer');
+        if (selectedCustomerLabel) {
+            selectedCustomerLabel.textContent = selectedCustomer.name || selectedCustomer.phone || 'Khách lẻ';
+        }
 
     const addBtn = document.getElementById('addCustomerBtn');
     if (addBtn) {
@@ -4113,19 +5897,35 @@ function getCategoryLabel(product) {
 function getCategoryOptions() {
     const categoryMap = new Map();
     (products || []).forEach((product) => {
-        const rawId = Number(product?.categoryId);
-        if (!Number.isFinite(rawId) || rawId <= 0) return;
-        if (!categoryMap.has(rawId)) {
-            categoryMap.set(rawId, {
-                id: rawId,
-                name: getCategoryLabel(product),
+        let rawName = (product?.categoryName || product?.category || '').toString().trim();
+        let rawId = Number(product?.categoryId);
+        let categoryIdToUse = rawId;
+
+        // If backend didn't provide a numeric categoryId, create a stable synthetic id based on name
+        if (!Number.isFinite(rawId) || rawId <= 0) {
+            const nameKey = stripDiacritics((rawName || FALLBACK_CATEGORY_LABEL).toLowerCase()).replace(/[^a-z0-9]+/g, '') || 'khac';
+            if (syntheticCategoryMap.has(nameKey)) {
+                categoryIdToUse = syntheticCategoryMap.get(nameKey);
+            } else {
+                categoryIdToUse = nextSyntheticCategoryId--;
+                syntheticCategoryMap.set(nameKey, categoryIdToUse);
+            }
+            // ensure product has a categoryId for consistent filtering
+            product.categoryId = categoryIdToUse;
+            if (!rawName) rawName = FALLBACK_CATEGORY_LABEL;
+        }
+
+        if (!categoryMap.has(categoryIdToUse)) {
+            categoryMap.set(categoryIdToUse, {
+                id: categoryIdToUse,
+                name: rawName || getCategoryLabel(product),
                 count: 0
             });
         }
-        categoryMap.get(rawId).count += 1;
+        categoryMap.get(categoryIdToUse).count += 1;
     });
 
-    return Array.from(categoryMap.values()).sort((a, b) => a.id - b.id);
+    return Array.from(categoryMap.values()).sort((a, b) => String(a.name).localeCompare(String(b.name), 'vi'));
 }
 
 function renderCategoryList() {
@@ -4226,6 +6026,7 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                 </div>
             `;
         }).join('');
+        setTimeout(() => resolveMissingImagesOnPage(), 50);
         return;
     }
 
@@ -4247,6 +6048,7 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                 </div>
             `;
         }).join('');
+        setTimeout(() => resolveMissingImagesOnPage(), 50);
         return;
     }
 
@@ -4263,6 +6065,7 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
             </div>
         `;
     }).join('');
+    setTimeout(() => resolveMissingImagesOnPage(), 50);
 }
 function setSuggestionMode(mode, categoryName = '') {
     const title = document.getElementById('suggestionTitle');
@@ -4730,10 +6533,21 @@ async function refreshCustomerDetailFromApi(customerId) {
         if (index >= 0) {
             customers[index] = customer;
         }
-        if (selectedCustomer?.id === customerId) {
-            applyCustomerSelection(customer, { openDetail: false });
+        // Do not persist point values locally. The server is the source of truth.
+        try {
+            if (customer && customer.id) {
+                persistSelectedCustomerState();
+            }
+        } catch (e) {
+            console.warn('[refreshCustomerDetailFromApi] failed to persist selected customer state', e);
         }
+        // Always apply the authoritative customer data we fetched so the UI
+        // reflects the server state (points, tier, etc.). This prevents
+        // situations where a minimal saved invoice/customer object would
+        // temporarily overwrite or zero the displayed points.
+        try { applyCustomerSelection(customer, { openDetail: false }); console.debug('[refreshCustomerDetailFromApi] applied customer', customerId); } catch (e) { console.warn('[refreshCustomerDetailFromApi] applyCustomerSelection failed', e); }
     } catch (err) {
+        console.warn('[refreshCustomerDetailFromApi] failed to fetch customer', customerId, err);
     }
 }
 
@@ -4742,8 +6556,7 @@ function getCustomerPointsUsed(customer) {
         customer?.pointsUsed ??
         customer?.usedPoints ??
         customer?.redeemedPoints ??
-        customer?.monthlyPoints ??
-        customer?.monthly_points;
+        0;
     return Number.isFinite(Number(used)) ? Number(used) : 0;
 }
 
@@ -5190,12 +7003,73 @@ function handleUpsellAddMore(suggestion) {
     }
 }
 
+function findPromotionById(promoId) {
+    if (promoId == null || !Array.isArray(allPromotions)) {
+        return null;
+    }
+    return allPromotions.find((promo) => Number(promo?.id) === Number(promoId)) || null;
+}
+
+function readBundleNumber(bundle, camelKey, snakeKey, fallback = 0) {
+    const value = bundle?.[camelKey] ?? bundle?.[snakeKey];
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+}
+
+function capGiftQuantityByQuota(gift) {
+    const requestedQty = Math.max(0, Number(gift?.quantity || 0));
+    if (requestedQty <= 0) {
+        return 0;
+    }
+
+    const promo = findPromotionById(gift?.promo_id);
+    if (!promo) {
+        return requestedQty;
+    }
+
+    const bundle = (promo.bundleItems || []).find((item) => {
+        const giftProductId = readBundleNumber(item, 'giftProductId', 'gift_product_id', null);
+        return Number(giftProductId) === Number(gift?.product_id);
+    });
+
+    if (!bundle) {
+        return requestedQty;
+    }
+
+    const mainProductId = readBundleNumber(bundle, 'mainProductId', 'main_product_id', null);
+    const mainQty = Math.max(1, readBundleNumber(bundle, 'mainQuantity', 'main_quantity', 1));
+    const giftQty = Math.max(1, readBundleNumber(bundle, 'giftQuantity', 'gift_quantity', 1));
+
+    const purchasedMainQty = cart
+        .filter((item) => !item.isFreeGift && Number(item.productId) === Number(mainProductId))
+        .reduce((sum, item) => sum + Math.max(0, Number(item.quantity || 0)), 0);
+
+    const eligibleSets = Math.floor(purchasedMainQty / mainQty);
+    const eligibleGiftQty = eligibleSets * giftQty;
+
+    const maxQty = Number(promo.maxQuantity);
+    const usedQty = Math.max(0, Number(promo.usedQuantity || 0));
+    let allowedGiftQty = eligibleGiftQty;
+
+    if (Number.isFinite(maxQty) && maxQty > 0) {
+        allowedGiftQty = Math.max(0, Math.min(eligibleGiftQty, maxQty - usedQty));
+    }
+
+    return Math.max(0, Math.min(requestedQty, allowedGiftQty));
+}
+
 /**
  * Tự động thêm quà tặng vào giỏ
  */
 async function autoAddGiftToCart(gift) {
     console.log('[autoAddGiftToCart] Adding gift:', gift);
     console.log('[autoAddGiftToCart] Products cache:', products?.length || 0, 'items');
+
+    const cappedGiftQty = capGiftQuantityByQuota(gift);
+    if (cappedGiftQty <= 0) {
+        console.log('[autoAddGiftToCart] Gift skipped due to quota/eligibility:', gift);
+        return;
+    }
     
     // Lookup tên sản phẩm từ cache hoặc API
     let productName = gift.product_name || null;
@@ -5247,9 +7121,9 @@ async function autoAddGiftToCart(gift) {
     
     if (existingGift) {
         // Cập nhật số lượng và tên nếu khác
-        if (existingGift.quantity !== gift.quantity) {
-            console.log('[autoAddGiftToCart] Updating gift quantity:', gift.quantity);
-            existingGift.quantity = gift.quantity;
+        if (existingGift.quantity !== cappedGiftQty) {
+            console.log('[autoAddGiftToCart] Updating gift quantity:', cappedGiftQty);
+            existingGift.quantity = cappedGiftQty;
         }
         if (existingGift.productName !== productName) {
             existingGift.productName = productName;
@@ -5263,7 +7137,7 @@ async function autoAddGiftToCart(gift) {
             productId: gift.product_id,
             productName: productName,
             productPrice: 0, // Miễn phí
-            quantity: gift.quantity,
+            quantity: cappedGiftQty,
             productCode: '',
             unit: '',
             stock: 999, // Set stock cao để không bị check "out of stock"
@@ -5278,7 +7152,7 @@ async function autoAddGiftToCart(gift) {
         
         // Hiển thị thông báo
         ComboPromotionUI.showNotification(
-            `✨ Đã thêm ${gift.quantity} ${productName} (Quà tặng)`,
+            `✨ Đã thêm ${cappedGiftQty} ${productName} (Quà tặng)`,
             'success'
         );
     }
@@ -5291,9 +7165,13 @@ async function removeIneligibleGifts(validGifts) {
     // Tạo Map các gift hợp lệ với số lượng
     const validGiftMap = new Map();
     (validGifts || []).forEach(g => {
+        const cappedQty = capGiftQuantityByQuota(g);
+        if (cappedQty <= 0) {
+            return;
+        }
         const key = `${g.product_id}-${g.promo_id}`;
         validGiftMap.set(key, {
-            quantity: g.quantity,
+            quantity: cappedQty,
             productName: g.product_name
         });
     });
