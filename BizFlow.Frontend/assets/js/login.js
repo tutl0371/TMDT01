@@ -106,7 +106,7 @@ window.addEventListener('DOMContentLoaded',()=>{
           if(res.status >= 500 || res.status === 0){
             showLoginError('Lỗi kết nối máy chủ .Vui lòng thử lại sau.');
           }else{
-            showLoginError('Tên đăng nhập hoặc mật khẩu không đúng');
+            showLoginError('Tên đăng nhập, email, SĐT hoặc mật khẩu không đúng');
           }
         }
       }catch(err){
