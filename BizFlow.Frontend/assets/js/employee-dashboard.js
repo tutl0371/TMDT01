@@ -664,6 +664,97 @@ function resolveApiBase() {
     return `${window.location.origin}/api`;
 }
 
+/**
+ * Wrapper quanh fetch() tự động refresh access token khi hết hạn (401).
+ * Sử dụng giống fetch() bình thường: authFetch(url, options)
+ * - Tự thêm header Authorization nếu có accessToken
+ * - Khi gặp 401, gọi /api/auth/refresh để lấy token mới rồi retry
+ * - Nếu refresh cũng thất bại, redirect về trang login
+ */
+let _isRefreshing = false;
+let _refreshQueue = [];
+
+async function authFetch(url, options = {}) {
+    const token = sessionStorage.getItem('accessToken');
+    if (token) {
+        options.headers = options.headers || {};
+        if (typeof options.headers.set === 'function') {
+            options.headers.set('Authorization', `Bearer ${token}`);
+        } else {
+            options.headers['Authorization'] = `Bearer ${token}`;
+        }
+    }
+
+    let response = await fetch(url, options);
+
+    // Nếu không phải 401 hoặc không có refresh token thì trả về luôn
+    if (response.status !== 401) {
+        return response;
+    }
+
+    const refreshToken = sessionStorage.getItem('refreshToken');
+    if (!refreshToken) {
+        sessionStorage.clear();
+        window.location.href = '/pages/login.html';
+        return response;
+    }
+
+    // Tránh gọi refresh đồng thời nhiều lần
+    if (_isRefreshing) {
+        return new Promise((resolve) => {
+            _refreshQueue.push(() => {
+                const newToken = sessionStorage.getItem('accessToken');
+                if (newToken) {
+                    options.headers = options.headers || {};
+                    options.headers['Authorization'] = `Bearer ${newToken}`;
+                }
+                resolve(fetch(url, options));
+            });
+        });
+    }
+
+    _isRefreshing = true;
+
+    try {
+        const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken })
+        });
+
+        if (refreshRes.ok) {
+            const data = await refreshRes.json();
+            sessionStorage.setItem('accessToken', data.accessToken);
+            if (data.refreshToken) {
+                sessionStorage.setItem('refreshToken', data.refreshToken);
+            }
+
+            // Retry request gốc với token mới
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = `Bearer ${data.accessToken}`;
+            response = await fetch(url, options);
+
+            // Giải phóng queue
+            _refreshQueue.forEach(cb => cb());
+            _refreshQueue = [];
+
+            return response;
+        } else {
+            // Refresh token cũng hết hạn → đăng xuất
+            sessionStorage.clear();
+            window.location.href = '/pages/login.html';
+            return response;
+        }
+    } catch (err) {
+        console.error('[authFetch] Refresh token failed:', err);
+        sessionStorage.clear();
+        window.location.href = '/pages/login.html';
+        return response;
+    } finally {
+        _isRefreshing = false;
+    }
+}
+
 function setupAppMenuModal() {
     const modal = document.getElementById('appMenuModal');
     const openBtn = document.getElementById('appMenuBtn');
