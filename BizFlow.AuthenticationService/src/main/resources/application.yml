@@ -50,9 +50,9 @@ server:
 
 app:
   jwt:
-    secret: my-secret-key-for-jwt-token-generation-and-verification
-    access-token-expiration: 3600000
-    refresh-token-expiration: 86400000
+    secret: ${JWT_SECRET:my-secret-key-for-jwt-token-generation-and-verification}
+    access-token-expiration: ${JWT_ACCESS_EXPIRATION:3600000}
+    refresh-token-expiration: ${JWT_REFRESH_EXPIRATION:86400000}
 
 logging:
   level:
