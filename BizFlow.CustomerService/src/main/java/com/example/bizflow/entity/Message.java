@@ -35,6 +35,9 @@ public class Message {
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    @Column(name = "is_read", nullable = false)
+    private Boolean isRead = false;
+
     public Long getId() {
         return id;
     }
@@ -89,5 +92,13 @@ public class Message {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Boolean getIsRead() {
+        return isRead;
+    }
+
+    public void setIsRead(Boolean isRead) {
+        this.isRead = isRead;
     }
 }

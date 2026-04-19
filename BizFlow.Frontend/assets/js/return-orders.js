@@ -14,8 +14,16 @@ function resolveApiBase() {
         return 'http://localhost:8000/api';
     }
 
-    if (['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port !== '8080') {
-        return '/api';
+    // When developing locally: if served from port 3000 (frontend dev server)
+    // call the gateway directly. Otherwise keep using '/api' so a dev proxy
+    // (if configured) continues to work.
+    if (['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+        if (window.location.port === '3000') {
+            return 'http://localhost:8000/api';
+        }
+        if (window.location.port !== '8080') {
+            return '/api';
+        }
     }
 
     return `${window.location.origin}/api`;

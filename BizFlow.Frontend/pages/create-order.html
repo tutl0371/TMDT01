@@ -459,18 +459,35 @@
             document.getElementById('existingCustomerSection').style.display = type === 'existing' ? 'block' : 'none';
         }
 
-        document.getElementById('existingCustomer')?.addEventListener('change', function() {
-            if (this.value) {
+        document.getElementById('existingCustomer')?.addEventListener('change', async function() {
+            const val = this.value;
+            if (val) {
                 document.getElementById('customerInfo').style.display = 'block';
-                const customers = {
-                    '1': { name: 'Nguyễn Văn A', phone: '0123456789', points: 150 },
-                    '2': { name: 'Trần Thị B', phone: '0987654321', points: 320 },
-                    '3': { name: 'Phạm Văn C', phone: '0555555555', points: 80 }
-                };
-                const customer = customers[this.value];
-                document.getElementById('infoName').textContent = customer.name;
-                document.getElementById('infoPhone').textContent = customer.phone;
-                document.getElementById('infoPoints').textContent = customer.points;
+                try {
+                    const resp = await fetch('/api/customers/' + val);
+                    if (resp.ok) {
+                        const customer = await resp.json();
+                        document.getElementById('infoName').textContent = customer.name || '';
+                        document.getElementById('infoPhone').textContent = customer.phone || '';
+                        // fetch points from API
+                        const pResp = await fetch('/api/customers/' + val + '/points');
+                        if (pResp.ok) {
+                            const pts = await pResp.json();
+                            document.getElementById('infoPoints').textContent = (pts.totalPoints ?? customer.totalPoints ?? 0);
+                        } else {
+                            document.getElementById('infoPoints').textContent = customer.totalPoints ?? 0;
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    // ignore and fallback
+                }
+                // fallback
+                document.getElementById('infoName').textContent = 'Khách hàng';
+                document.getElementById('infoPhone').textContent = '';
+                document.getElementById('infoPoints').textContent = 0;
+            } else {
+                document.getElementById('customerInfo').style.display = 'none';
             }
         });
 

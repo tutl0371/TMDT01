@@ -19,6 +19,7 @@
                 <button class="order-tab active" data-invoice-id="default">Gi&#7887; h&#224;ng 1 <span class="tab-close">&times;</span></button>
                 <button class="order-tab ghost" id="addInvoiceBtn" title="Th&#234;m gi&#7887; h&#224;ng">+</button>
                 <button class="order-tab ghost" id="savedInvoiceBtn"><span class="saved-cart-icon" aria-hidden="true">&#128722;</span>Gi&#7887; h&#224;ng</button>
+                <button class="order-tab ghost" id="trackOrdersHeaderBtn" title="Theo dõi đơn hàng">Theo dõi đơn hàng</button>
             </div>
         </div>
         <div class="header-actions">
@@ -121,7 +122,7 @@
                         <span>ĐVT</span>
                         <span>Đơn giá</span>
                         <span>Thành tiền</span>
-                        <span></span>
+                        	<span></span>
                     </div>
                     <div class="cart-items" id="cartItems"></div>
                 </div>
@@ -186,30 +187,11 @@
 
         <aside class="side-panel">
             <div class="customer-panel">
-                <div class="customer-header">
+                    <div class="customer-header">
                     <div class="customer-title">
-                        <span class="store-pill">Tại cửa hàng</span>
+                        <!-- store pill removed per UX request -->
                     </div>
-                    <div class="customer-actions">
-                        <button class="icon-btn small" title="Giao hàng" aria-label="Giao hàng">
-                            <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
-                                <path d="M3 16h11v-7H7l-4 4v3Z" />
-                                <path d="M14 10h3l4 4v2h-7Z" />
-                                <circle cx="7" cy="18" r="2" />
-                                <circle cx="17" cy="18" r="2" />
-                            </svg>
-                        </button>
-                        <button class="icon-btn small" title="Quà tặng" aria-label="Quà tặng">
-                            <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
-                                <path d="M4 10h16v10H4z" />
-                                <path d="M2 8h20v2H2z" />
-                                <path d="M12 8v12" />
-                                <path d="M8 8c-1.5 0-2.5-1-2.5-2s1-2 2.5-1 2 3 2 3-0.5 0-2 0Z" />
-                                <path d="M16 8c1.5 0 2.5-1 2.5-2s-1-2-2.5-1-2 3-2 3 0.5 0 2 0Z" />
-                            </svg>
-                        </button>
-                        <button class="icon-btn small" title="Khác" aria-label="Khác">&#8942;</button>
-                    </div>
+                    <div class="customer-actions"></div>
                 </div>
                 <div class="customer-search-box">
                     <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
@@ -233,99 +215,70 @@
                     <div class="customer-empty"></div>
                 </div>
             </div>
-            <div class="payment-panel">
-                <div class="invoice-toggle">
-                    <label class="switch">
-                        <input type="checkbox" id="printInvoiceToggle" checked>
-                        <span class="slider"></span>
-                    </label>
-                    <span>In h&#243;a &#273;&#417;n</span>
-                    <label class="checkbox">
-                        <input type="checkbox">
-                        <span>&#272;&#7863;t h&#224;ng</span>
-                    </label>
+            <div class="payment-panel customer-facing">
+                <div class="customer-payment-header">
+                    <div class="amount-block">
+                        <div class="label">Số tiền cần thanh toán</div>
+                        <div class="amount" id="amountDue">0đ</div>
+                        <div class="muted small">Tạm tính: <span id="subtotal">0đ</span> · Giảm: <span id="memberDiscountAmount">0đ</span></div>
+                    </div>
+                
                 </div>
 
-                <div class="cart-summary">
-                    <div class="summary-row">
-                        <span>T&#7841;m t&#237;nh</span>
-                        <span id="subtotal">0d</span>
+                <div style="padding:8px 12px; border-top:1px solid #eee;">
+                    <div class="checkout-customer-fields" style="display:flex;flex-direction:column;gap:8px;">
+                        <input id="checkoutCustomerName" type="text" placeholder="Tên khách hàng" value="Khách lẻ" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
+                        <input id="checkoutCustomerPhone" type="tel" placeholder="SĐT khách hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
+                        <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
                     </div>
-                    <div class="summary-row total">
-                        <span>T&#7893;ng c&#7897;ng</span>
-                        <span id="totalAmount">0d</span>
-                    </div>
-                </div>
-
-                <div class="payment-breakdown">
-                    <div class="summary-row">
-                        <span>Khuy&#7871;n m&#227;i</span>
-                        <span id="promoAmount">0d</span>
-                    </div>
-                    <div class="summary-row">
-                        <span>&#272;i&#7875;m t&#237;ch l&#361;y</span>
-                        <span id="memberPoints">0</span>
-                    </div>
-                    <div class="summary-row">
-                        <span>Gi&#7843;m gi&#225; th&#224;nh vi&#234;n</span>
-                        <span id="memberDiscountAmount">0d</span>
-                    </div>
-                    <div class="summary-row">
-                        <label class="checkbox">
-                            <input type="checkbox" id="usePointsToggle" checked>
-                            <span>D&#249;ng &#273;i&#7875;m</span>
-                        </label>
-                        <span id="memberPointsUsed">0</span>
-                    </div>
-                    <div class="summary-row total">
-                        <span>C&#242;n ph&#7843;i thu</span>
-                        <span id="amountDue">0d</span>
+                    <div class="customer-points-info" style="padding-top:8px;">
+                        <div style="font-size:13px;color:#333;margin-top:6px;display:flex;align-items:center;justify-content:space-between;">
+                            <span><span>Điểm hiện có: </span><strong id="checkoutPointsCurrent">0</strong>&nbsp;điểm</span>
+                            <button id="usePointsBtn" type="button" class="primary-btn" style="padding:4px 8px;font-size:11px;margin-left:8px;" title="Sử dụng điểm tích lũy">Sử dụng điểm</button>
+                        </div>
+                        <div style="font-size:13px;color:#333;margin-top:4px;">
+                            <span>Sẽ cộng thêm: </span><strong id="checkoutPointsEarn">0</strong>&nbsp;điểm
+                        </div>
+                        <div id="pointsUsedInfo" style="font-size:13px;color:#d9534f;margin-top:4px;display:none;">
+                            <div style="margin-bottom:6px;">
+                                <span>Đã sử dụng: </span><strong id="checkoutPointsUsed">0</strong>&nbsp;điểm
+                            </div>
+                            <div style="color:#d9534f;font-weight:bold;">
+                                <span>Giảm từ điểm: </span><strong id="checkoutPointsDiscount">0đ</strong>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <div class="payment-methods">
-                    <p class="section-title">Ph&#432;&#417;ng th&#7913;c thanh to&#225;n</p>
-                    <div class="payment-options">
-                        <label class="payment-option">
-                            <input type="radio" name="paymentMethod" value="CASH" checked>
-                            <span>Ti&#7873;n m&#7863;t</span>
-                        </label>
-                        <label class="payment-option">
-                            <input type="radio" name="paymentMethod" value="TRANSFER">
-                            <span>Chuy&#7875;n kho&#7843;n</span>
-                        </label>
-                        <label class="payment-option">
-                            <input type="radio" name="paymentMethod" value="CARD">
-                            <span>Thanh to&#225;n th&#7867;</span>
-                        </label>
+                <div class="payment-methods customer-methods" aria-label="Phương thức thanh toán">
+                    <input type="radio" name="paymentMethod" id="pm_cash" value="CASH" checked style="display:none">
+                    <input type="radio" name="paymentMethod" id="pm_transfer" value="TRANSFER" style="display:none">
+
+                    <div class="method-buttons">
+                        <button class="method-btn" data-method="CASH">Tiền mặt</button>
+                        <button class="method-btn" data-method="TRANSFER">Chuyển khoản</button>
                     </div>
                 </div>
 
-                <div class="cash-panel" id="cashPanel">
-                    <div class="summary-row">
-                        <span>Ti&#7873;n kh&#225;ch &#273;&#432;a</span>
-                        <input id="cashReceivedInput" type="number" min="0" placeholder="0">
+                <div class="customer-payment-body">
+                    <div class="panel transfer-panel" id="transferPanel" style="display:none">
+                        <div class="transfer-qr-box" aria-hidden="false">
+                            <div class="qr-placeholder">QR / Mã chuyển khoản sẽ hiển thị tại đây</div>
+                        </div>
+                        <div class="transfer-note muted small">Quý khách thực hiện chuyển khoản theo mã trên và nhấn 'Đã chuyển xong'</div>
                     </div>
-                    <div class="summary-row total">
-                        <span>Tr&#7843; l&#7841;i</span>
-                        <span id="changeAmount">0d</span>
-                    </div>
+
+                    <!-- Card payment removed for simplified checkout -->
                 </div>
 
-                <div class="payment-note">
-                    <label for="paymentNote">Ghi ch&#250; thanh to&#225;n</label>
-                    <textarea id="paymentNote" rows="3" placeholder="Nh&#7853;p ghi ch&#250;..."></textarea>
+                <div class="payment-note customer-note">
+                    <label for="paymentNote">Ghi chú (tuỳ chọn)</label>
+                    <textarea id="paymentNote" rows="2" placeholder="Ghi chú cho đơn..."></textarea>
                 </div>
 
-                <div class="quick-cash">
-                    <button class="chip" data-cash="500000">500.000</button>
-                    <button class="chip" data-cash="200000">200.000</button>
-                    <button class="chip" data-cash="100000">100.000</button>
-                </div>
-
-                <div class="cart-actions">
-                    <button id="saveBillBtn" class="ghost-btn">Th&#234;m v&#224;o gi&#7887; h&#224;ng (F10)</button>
-                    <button id="checkoutBtn" class="primary-btn">Thanh to&#225;n (F9)</button>
+                <div class="cart-actions customer-actions">
+                    <button id="saveBillBtn" class="ghost-btn small">Lưu</button>
+                    <button id="checkoutBtn" class="primary-btn large">Thanh toán</button>
                 </div>
             </div>
         </aside>
@@ -910,9 +863,107 @@
         </div>
     </div>
 
+    <div class="modal" id="orderTrackModal" aria-hidden="true">
+        <div class="modal-content order-track-modal">
+            <div class="modal-header">
+                <h3>Theo dõi đơn hàng</h3>
+                <button id="closeOrderTrackModal" class="icon-btn small" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div class="order-track-body">
+                <div id="orderTrackCustomerInfo" class="muted">Đang tải đơn hàng...</div>
+                <div id="orderTrackControls" style="display:none;gap:8px;align-items:center;margin-top:12px;">
+                    <label style="flex:1;display:flex;gap:8px;align-items:center;">
+                        <span>SĐT / mã đơn</span>
+                        <input id="orderTrackPhoneInput" type="text" placeholder="Nhập số điện thoại hoặc mã đơn" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:6px;" />
+                    </label>
+                    <button id="orderTrackFindBtn" class="primary-btn" type="button">Tìm</button>
+                </div>
+                <div id="orderTrackList" class="order-track-list" style="margin-top:12px;max-height:320px;overflow:auto;"></div>
+                <div id="orderTrackingResult" class="order-track-result" style="margin-top:12px;"></div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="ghost-btn" id="closeOrderTrackBtn">Đóng</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Use Points Modal -->
+    <div class="modal" id="usePointsModal" aria-hidden="true">
+        <div class="modal-content" style="width:400px;max-width:90vw;">
+            <div class="modal-header">
+                <h3>Sử dụng điểm tích lũy</h3>
+                <button id="closeUsePointsModal" class="icon-btn small" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div style="padding:20px;display:flex;flex-direction:column;gap:16px;">
+                <div>
+                    <div style="font-size:13px;color:#666;margin-bottom:4px;">Điểm hiện có</div>
+                    <div style="font-size:20px;font-weight:bold;color:#333;" id="usePointsCurrentPoints">0</div>
+                </div>
+                <div>
+                    <label style="display:block;font-size:13px;color:#666;margin-bottom:6px;">
+                        Số điểm muốn sử dụng
+                        <span style="color:#d9534f;">*</span>
+                    </label>
+                    <input id="usePointsInput" type="number" min="0" step="100" placeholder="Nhập số điểm (bội số của 100)" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;" />
+                    <div style="font-size:12px;color:#999;margin-top:4px;">
+                        Giảm giá: <strong id="usePointsDiscountPreview">0đ</strong>
+                    </div>
+                </div>
+                <div style="background:#f5f5f5;padding:12px;border-radius:6px;font-size:12px;color:#666;">
+                    <strong>Lưu ý:</strong> Cứ 100 điểm được giảm <span id="usePointsRateInfo">10,000đ</span> (tùy theo hạng thẻ)
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid #eee;">
+                    <button id="cancelUsePointsBtn" class="ghost-btn" type="button">Hủy</button>
+                    <button id="confirmUsePointsBtn" class="primary-btn" type="button">Sử dụng</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="../assets/js/combo-promotion-ai.js?v=1.0.0" onerror="console.error('Failed to load combo-promotion-ai.js')"></script>
-    <script src="../assets/js/employee-dashboard.js?v=stock-3"></script>
+    <script>
+        // Ensure frontend calls the correct backend API when running on localhost
+        // Minimal change: set global API_BASE used by employee-dashboard.js
+        (function(){
+            if (!window.API_BASE && !window.API_BASE_URL) {
+                // Use API gateway as default so order POSTs route correctly
+                // and other service routes are resolved via gateway routing.
+                window.API_BASE = 'http://localhost:8000/api';
+            }
+        })();
+    </script>
+    <script src="../assets/js/employee-dashboard.js?v=stock-8"></script>
     <script src="../assets/js/app-shell.js"></script>
+    <script>
+        // Lightweight fallback: if products grid still empty after main script,
+        // try fetching local inventory directly and render simple cards so UI isn't blank.
+        (function(){
+            setTimeout(async () => {
+                try {
+                    const grid = document.getElementById('productsGrid');
+                    if (!grid) return;
+                    const emptyText = grid.textContent || '';
+                    if (grid.children.length > 0 && !/Không có sản phẩm|Đang tải/.test(emptyText)) return;
+
+                    const res = await fetch('http://localhost:8084/api/inventory/shelves');
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    const arr = Array.isArray(data) ? data : (Array.isArray(data?.value) ? data.value : []);
+                    if (!arr || arr.length === 0) return;
+                    const items = arr.filter(s => Number(s.quantity) > 0).slice(0, 60);
+                    grid.innerHTML = items.map(p => `
+                        <div class="product-card" onclick="addToCart(${p.productId}, '${(p.productName||'').replace(/'/g,"\\'")}', ${p.price||0})">
+                            <div class="product-image">${'<svg viewBox="0 0 24 24"><path d="M6 8h12l-1.2 11H7.2L6 8Z"/></svg>'}</div>
+                            <div class="product-name">${(p.productName||'Sản phẩm')}</div>
+                            <div class="product-price">${(p.price||0).toLocaleString('vi-VN')}đ</div>
+                        </div>
+                    `).join('');
+                } catch (e) {
+                    console.warn('Fallback render failed', e);
+                }
+            }, 1200);
+        })();
+    </script>
 </body>
 </html>
