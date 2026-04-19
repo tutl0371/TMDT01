@@ -1557,6 +1557,7 @@ async function createOrder(isPaid) {
 
     const userId = parseInt(sessionStorage.getItem('userId'), 10) || null;
     const customerId = selectedCustomer && selectedCustomer.id > 0 ? selectedCustomer.id : null;
+    const appliedPointsSummary = getAppliedMemberDiscountSummary(getTotalAmount());
     const payload = {
         userId,
         customerId,
@@ -1566,7 +1567,7 @@ async function createOrder(isPaid) {
         // Optional shipping info (filled when user chooses COD)
         shipping: null,
         usePoints: shouldUseMemberPoints(),
-        pointsToUse: usePointsEnabled && pointsToUse > 0 ? pointsToUse : 0,
+        pointsToUse: appliedPointsSummary.pointsUsed,
         orderType: exchangeDraft ? 'EXCHANGE' : null,
         originalOrderId: exchangeDraft?.originalOrderId || null,
         items: cart.map(item => ({
@@ -2010,9 +2011,12 @@ function updatePointsDiscountPreview() {
     const pointsInput = parseInt(usePointsInput.value) || 0;
     const tier = getEffectiveTier(selectedCustomer);
     const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
-    
-    const steps = Math.floor(pointsInput / 100);
-    const discount = steps * rate;
+
+    const stepsByPoints = Math.floor(pointsInput / 100);
+    const cartTotal = Math.max(0, Number(getTotalAmount()) || 0);
+    const stepsByTotal = rate > 0 ? Math.floor(cartTotal / rate) : 0;
+    const appliedSteps = Math.max(0, Math.min(stepsByPoints, stepsByTotal));
+    const discount = appliedSteps * rate;
     
     const discountEl = document.getElementById('usePointsDiscountPreview');
     if (discountEl) {
@@ -2024,19 +2028,14 @@ function updatePointsDisplayInfo() {
     const pointsUsedInfo = document.getElementById('pointsUsedInfo');
     const checkoutPointsUsed = document.getElementById('checkoutPointsUsed');
     const checkoutPointsDiscount = document.getElementById('checkoutPointsDiscount');
-    
-    if (usePointsEnabled && pointsToUse > 0) {
+
+    const appliedSummary = getAppliedMemberDiscountSummary(getTotalAmount());
+    if (usePointsEnabled && pointsToUse > 0 && appliedSummary.pointsUsed > 0) {
         if (pointsUsedInfo) {
-            // Calculate discount for display
-            const tier = getEffectiveTier(selectedCustomer);
-            const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
-            const steps = Math.floor(pointsToUse / 100);
-            const discountAmount = steps * rate;
-            
             pointsUsedInfo.style.display = 'block';
-            checkoutPointsUsed.textContent = formatCompactNumber(pointsToUse);
+            checkoutPointsUsed.textContent = formatCompactNumber(appliedSummary.pointsUsed);
             if (checkoutPointsDiscount) {
-                checkoutPointsDiscount.textContent = formatPrice(discountAmount);
+                checkoutPointsDiscount.textContent = formatPrice(appliedSummary.discount);
             }
         }
     } else {
@@ -3336,7 +3335,7 @@ function clearSelectedCustomer(options = {}) {
 
 function updateTotal() {
     try {
-        const memberSummary = getMemberDiscountForTotal(getTotalAmount());
+        const memberSummary = getAppliedMemberDiscountSummary(getTotalAmount());
         const toggle = document.getElementById('usePointsToggle');
         const canUsePoints = memberSummary.points >= 100 && Boolean(TIER_DISCOUNT_BY_100[getEffectiveTier(selectedCustomer)]);
         if (toggle) {
@@ -3359,9 +3358,8 @@ function updateTotal() {
         }, 0);
         const discountedSubtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
         const promoValue = Math.max(0, baseSubtotal - discountedSubtotal);
-        const usePoints = shouldUseMemberPoints();
-        const memberDiscount = usePoints ? memberSummary.discount : 0;
-        const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
+        const memberDiscount = memberSummary.discount;
+        const pointsUsed = memberSummary.pointsUsed;
         const total = Math.max(0, discountedSubtotal - memberDiscount);
         
         setText('subtotal', formatPrice(baseSubtotal));
@@ -3619,6 +3617,18 @@ function getMemberDiscountForTotal(total) {
     const pointsUsed = stepsUsed * 100;
     const discount = stepsUsed * rate;
     return { points, pointsUsed, discount };
+}
+
+function getAppliedMemberDiscountSummary(total = getTotalAmount()) {
+    const requestedSummary = getMemberDiscountForTotal(total);
+    if (!shouldUseMemberPoints()) {
+        return {
+            points: requestedSummary.points,
+            pointsUsed: 0,
+            discount: 0
+        };
+    }
+    return requestedSummary;
 }
 
 function shouldUseMemberPoints() {
@@ -4036,15 +4046,22 @@ function setupEventListeners() {
             return;
         }
 
-        // Treat CASH as COD/unpaid for simplified checkout: create unpaid order, show success, and clear inputs
+        // CASH checkout is paid at counter: create paid order.
         if (currentPaymentMethod === 'CASH') {
-            const res = await createOrder(false);
+            const res = await createOrder(true);
             if (res) {
                 showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
                 // Reset points after checkout
                 usePointsEnabled = false;
                 pointsToUse = 0;
                 updatePointsDisplayInfo();
+                try {
+                    if (selectedCustomer && Number.isFinite(Number(selectedCustomer.id)) && Number(selectedCustomer.id) > 0) {
+                        await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+                    }
+                } catch (e) {
+                    console.warn('Failed to refresh customer after CASH checkout', e);
+                }
                 // clear only checkout input fields (keep selectedCustomer so points persist)
                 try {
                     const cnameEl = document.getElementById('checkoutCustomerName');
