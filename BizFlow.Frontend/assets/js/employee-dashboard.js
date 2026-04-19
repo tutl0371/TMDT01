@@ -3781,6 +3781,22 @@ async function getAndPopulateCurrentLocation() {
     );
 }
 
+function isHoChiMinhAddress(address) {
+    if (!address || typeof address !== 'object') {
+        return false;
+    }
+    const text = [
+        address.city,
+        address.state,
+        address.county,
+        address.city_district,
+        address.district,
+        address.region,
+        address.state_district
+    ].filter(Boolean).join(' ').toLowerCase();
+    return text.includes('hồ chí minh') || text.includes('ho chi minh') || text.includes('thành phố hồ chí minh');
+}
+
 function formatAddressFromNominatim(address) {
     const parts = [];
     if (address.house_number) parts.push(address.house_number);
@@ -3838,21 +3854,38 @@ async function fetchAddressSuggestionsByText(query) {
     }
 
     try {
-        const encoded = encodeURIComponent(query);
+        const rawQuery = query.trim();
+        const queryWithCity = /hcm|hồ chí minh|ho chi minh/i.test(rawQuery)
+            ? rawQuery
+            : `${rawQuery}, Hồ Chí Minh`;
+        const encoded = encodeURIComponent(queryWithCity);
         const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&addressdetails=1&limit=6&accept-language=vi`
+            `https://nominatim.openstreetmap.org/search?q=${encoded}&countrycodes=vn&format=json&addressdetails=1&limit=8&dedupe=1&accept-language=vi`
         );
         if (!response.ok) {
             return [];
         }
         const data = await response.json();
-        return Array.isArray(data) ? data.map(item => {
-            if (item.address) {
-                const formatted = formatAddressFromNominatim(item.address);
-                return formatted || item.display_name || '';
+        if (!Array.isArray(data)) {
+            return [];
+        }
+
+        const candidates = [];
+        const seen = new Set();
+        data.forEach(item => {
+            if (!item.address) {
+                return;
             }
-            return item.display_name || '';
-        }).filter(Boolean) : [];
+            if (!isHoChiMinhAddress(item.address)) {
+                return;
+            }
+            const formatted = formatAddressFromNominatim(item.address) || item.display_name || '';
+            if (formatted && !seen.has(formatted)) {
+                seen.add(formatted);
+                candidates.push(formatted);
+            }
+        });
+        return candidates;
     } catch (error) {
         console.warn('Address suggestion search failed:', error);
         return [];
@@ -3864,7 +3897,7 @@ async function fetchAddressCandidates(latitude, longitude) {
         const delta = 0.002;
         const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
         const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&viewbox=${viewbox}&bounded=1&accept-language=vi`
+            `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=vn&limit=5&viewbox=${viewbox}&bounded=1&accept-language=vi`
         );
         if (!response.ok) {
             return [];
@@ -3873,10 +3906,16 @@ async function fetchAddressCandidates(latitude, longitude) {
         return Array.isArray(data) ? data.map(item => {
             if (item.address) {
                 const formatted = formatAddressFromNominatim(item.address);
-                return formatted || item.display_name || '';
+                return {
+                    formatted: formatted || item.display_name || '',
+                    address: item.address
+                };
             }
-            return item.display_name || '';
-        }).filter(Boolean) : [];
+            return {
+                formatted: item.display_name || '',
+                address: null
+            };
+        }).filter(item => item.formatted && (!item.address || isHoChiMinhAddress(item.address))).map(item => item.formatted) : [];
     } catch (error) {
         console.warn('Failed to fetch address candidates:', error);
         return [];
