@@ -89,6 +89,10 @@ let nextSyntheticCategoryId = -1;
 const POINTS_EARN_RATE_VND = 1000;
 const EARN_POLICY_POINTS = 100;
 
+// Points redemption variables
+let usePointsEnabled = false;
+let pointsToUse = 0;
+
 const FALLBACK_PRODUCTS = [
     {
         id: 1,
@@ -1561,7 +1565,8 @@ async function createOrder(isPaid) {
         paymentMethod: currentPaymentMethod,
         // Optional shipping info (filled when user chooses COD)
         shipping: null,
-        usePoints: isPaid ? shouldUseMemberPoints() : false,
+        usePoints: shouldUseMemberPoints(),
+        pointsToUse: usePointsEnabled && pointsToUse > 0 ? pointsToUse : 0,
         orderType: exchangeDraft ? 'EXCHANGE' : null,
         originalOrderId: exchangeDraft?.originalOrderId || null,
         items: cart.map(item => ({
@@ -1633,7 +1638,7 @@ async function createOrder(isPaid) {
         }
 
         const data = await res.json();
-        const receiptData = buildReceiptData(data, { usePoints: isPaid && shouldUseMemberPoints() });
+        const receiptData = buildReceiptData(data, { usePoints: shouldUseMemberPoints() });
         const invoiceCode = receiptData.invoiceNumber || '-';
         if (isPaid) {
             await openInvoiceModal(receiptData);
@@ -1823,6 +1828,12 @@ async function payOrder(orderId) {
         }
         alert('Đã thanh toán chuyển khoản được xác nhận.');
         hideTransferQrModal();
+        
+        // Reset points after payment
+        usePointsEnabled = false;
+        pointsToUse = 0;
+        updatePointsDisplayInfo();
+        
         // After confirming transfer payment, clear items but keep selected customer
         clearCart(false);
         saveActiveInvoiceState();
@@ -1900,7 +1911,140 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // shipping fields toggle behavior
     // shipping toggle removed; checkout uses direct customer input fields now
+    
+    // Setup points modal
+    setupUsePointsModal();
 });
+
+function setupUsePointsModal() {
+    const usePointsBtn = document.getElementById('usePointsBtn');
+    const usePointsModal = document.getElementById('usePointsModal');
+    const closeBtn = document.getElementById('closeUsePointsModal');
+    const cancelBtn = document.getElementById('cancelUsePointsBtn');
+    const confirmBtn = document.getElementById('confirmUsePointsBtn');
+    const usePointsInput = document.getElementById('usePointsInput');
+    
+    if (!usePointsBtn || !usePointsModal) return;
+    
+    // Open modal when button clicked
+    usePointsBtn.addEventListener('click', () => {
+        const currentPoints = getCustomerPoints(selectedCustomer) || 0;
+        const tier = getEffectiveTier(selectedCustomer);
+        const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
+        
+        if (currentPoints < 100) {
+            alert('Khách hàng cần có ít nhất 100 điểm để sử dụng!');
+            return;
+        }
+        
+        document.getElementById('usePointsCurrentPoints').textContent = formatCompactNumber(currentPoints);
+        document.getElementById('usePointsRateInfo').textContent = formatPrice(rate);
+        
+        // Reset input
+        usePointsInput.value = '';
+        usePointsInput.focus();
+        
+        usePointsModal.classList.add('show');
+        usePointsModal.setAttribute('aria-hidden', 'false');
+    });
+    
+    // Close modal
+    const closeModal = () => {
+        usePointsModal.classList.remove('show');
+        usePointsModal.setAttribute('aria-hidden', 'true');
+        usePointsEnabled = false;
+        pointsToUse = 0;
+    };
+    
+    closeBtn?.addEventListener('click', closeModal);
+    cancelBtn?.addEventListener('click', closeModal);
+    
+    // Update discount preview on input change
+    usePointsInput?.addEventListener('input', () => {
+        updatePointsDiscountPreview();
+    });
+    
+    // Handle confirm
+    confirmBtn?.addEventListener('click', () => {
+        const pointsInput = parseInt(usePointsInput.value) || 0;
+        const currentPoints = getCustomerPoints(selectedCustomer) || 0;
+        
+        if (pointsInput <= 0) {
+            alert('Vui lòng nhập số điểm lớn hơn 0');
+            return;
+        }
+        
+        if (pointsInput > currentPoints) {
+            alert('Số điểm sử dụng không được vượt quá điểm hiện có');
+            return;
+        }
+        
+        if (pointsInput % 100 !== 0) {
+            alert('Số điểm phải là bội số của 100');
+            return;
+        }
+        
+        // Save points to use
+        usePointsEnabled = true;
+        pointsToUse = pointsInput;
+        
+        // Close modal without resetting flags
+        usePointsModal.classList.remove('show');
+        usePointsModal.setAttribute('aria-hidden', 'true');
+        
+        // Update checkout display
+        updatePointsDisplayInfo();
+        updateTotal();
+    });
+    
+    // Close modal when clicking outside
+    usePointsModal.addEventListener('click', (e) => {
+        if (e.target === usePointsModal) {
+            closeModal();
+        }
+    });
+}
+
+function updatePointsDiscountPreview() {
+    const usePointsInput = document.getElementById('usePointsInput');
+    const pointsInput = parseInt(usePointsInput.value) || 0;
+    const tier = getEffectiveTier(selectedCustomer);
+    const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
+    
+    const steps = Math.floor(pointsInput / 100);
+    const discount = steps * rate;
+    
+    const discountEl = document.getElementById('usePointsDiscountPreview');
+    if (discountEl) {
+        discountEl.textContent = formatPrice(discount);
+    }
+}
+
+function updatePointsDisplayInfo() {
+    const pointsUsedInfo = document.getElementById('pointsUsedInfo');
+    const checkoutPointsUsed = document.getElementById('checkoutPointsUsed');
+    const checkoutPointsDiscount = document.getElementById('checkoutPointsDiscount');
+    
+    if (usePointsEnabled && pointsToUse > 0) {
+        if (pointsUsedInfo) {
+            // Calculate discount for display
+            const tier = getEffectiveTier(selectedCustomer);
+            const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
+            const steps = Math.floor(pointsToUse / 100);
+            const discountAmount = steps * rate;
+            
+            pointsUsedInfo.style.display = 'block';
+            checkoutPointsUsed.textContent = formatCompactNumber(pointsToUse);
+            if (checkoutPointsDiscount) {
+                checkoutPointsDiscount.textContent = formatPrice(discountAmount);
+            }
+        }
+    } else {
+        if (pointsUsedInfo) {
+            pointsUsedInfo.style.display = 'none';
+        }
+    }
+}
 
 // Reload promotions khi quay lại trang để cập nhật trạng thái active/inactive
 document.addEventListener('visibilitychange', () => {
@@ -3150,6 +3294,12 @@ function clearSelectedCustomer(options = {}) {
         localStorage.removeItem(getSelectedCustomerStorageKey());
         localStorage.removeItem('selected_customer_state');
     } catch (e) {}
+    
+    // Reset points usage
+    usePointsEnabled = false;
+    pointsToUse = 0;
+    updatePointsDisplayInfo();
+    
     const selectedView = document.getElementById('selectedCustomer');
     if (selectedView) {
         selectedView.textContent = 'Khách lẻ';
@@ -3213,7 +3363,7 @@ function updateTotal() {
         const memberDiscount = usePoints ? memberSummary.discount : 0;
         const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
         const total = Math.max(0, discountedSubtotal - memberDiscount);
-
+        
         setText('subtotal', formatPrice(baseSubtotal));
         setText('promoAmount', formatPrice(promoValue));
         setText('totalAmount', formatPrice(total));
@@ -3450,9 +3600,15 @@ function getCustomerPoints(customer) {
 }
 
 function getMemberDiscountForTotal(total) {
-    const points = getCustomerPoints(selectedCustomer);
+    let points = getCustomerPoints(selectedCustomer);
     const tier = getEffectiveTier(selectedCustomer);
     const rate = TIER_DISCOUNT_BY_100[tier] || 0;
+    
+    // If user specified points to use, use that instead of max available
+    if (usePointsEnabled && pointsToUse > 0) {
+        points = Math.min(pointsToUse, points || 0);
+    }
+    
     if (!points || points < 100 || rate <= 0) {
         return { points, pointsUsed: 0, discount: 0 };
     }
@@ -3466,8 +3622,8 @@ function getMemberDiscountForTotal(total) {
 }
 
 function shouldUseMemberPoints() {
-    // Loyalty points disabled in simplified customer-facing checkout
-    return false;
+    // Use points if employee enabled it and points were specified
+    return usePointsEnabled && pointsToUse > 0;
 }
 
 function showPopup(message, options = {}) {
@@ -3872,6 +4028,10 @@ function setupEventListeners() {
                 const amount = res.totalAmount ? parseFloat(res.totalAmount) : getTotalAmount();
                 const token = res.paymentToken || res.token || null;
                 showTransferQrModal(res.orderId, amount, token);
+                // Reset points after creating order
+                usePointsEnabled = false;
+                pointsToUse = 0;
+                updatePointsDisplayInfo();
             }
             return;
         }
@@ -3881,6 +4041,10 @@ function setupEventListeners() {
             const res = await createOrder(false);
             if (res) {
                 showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
+                // Reset points after checkout
+                usePointsEnabled = false;
+                pointsToUse = 0;
+                updatePointsDisplayInfo();
                 // clear only checkout input fields (keep selectedCustomer so points persist)
                 try {
                     const cnameEl = document.getElementById('checkoutCustomerName');
@@ -3900,6 +4064,10 @@ function setupEventListeners() {
         const res = await createOrder(false);
         if (res) {
             showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
+            // Reset points after checkout
+            usePointsEnabled = false;
+            pointsToUse = 0;
+            updatePointsDisplayInfo();
             try {
                 const cnameEl = document.getElementById('checkoutCustomerName');
                 const cphoneEl = document.getElementById('checkoutCustomerPhone');
@@ -4698,14 +4866,21 @@ function renderOrdersInModal(orders) {
                 const order = await res.json();
                 // render small detail in modal (append)
                 const list = document.getElementById('orderTrackList');
-                const itemsHtml = Array.isArray(order.items)
-                    ? order.items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName||it.name||'-')}</div><div>x${it.quantity||0}</div></div>`).join('')
+                const items = Array.isArray(order.items) ? order.items : [];
+                const itemsHtml = items
+                    ? items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName||it.name||'-')}</div><div>x${it.quantity||0}</div></div>`).join('')
                     : '';
+                const rawTotal = items.reduce((sum, it) => sum + ((Number(it.price) || 0) * (Number(it.quantity) || 0)), 0);
+                const finalTotal = Number(order.totalAmount || order.total || 0);
+                const discountTotal = Math.max(0, rawTotal - finalTotal);
                 list.innerHTML = `
                     <div style="font-weight:700;margin-bottom:6px">Đơn: ${escapeHtml(order.invoiceNumber||('#'+order.id))}</div>
                     <div>Trạng thái: <strong>${escapeHtml(order.status||'-')}</strong></div>
                     <div>Khách hàng: ${escapeHtml(order.customerName||order.customer||'-')} · ${escapeHtml(order.customerPhone||'-')}</div>
                     <div>Thời gian: ${formatDateTime(order.createdAt||new Date())}</div>
+                    <div style="margin-top:6px">Tạm tính: <strong>${formatPrice(rawTotal)}</strong></div>
+                    <div>Giảm giá: <strong>${formatPrice(discountTotal)}</strong></div>
+                    <div style="margin-top:2px">Tổng thanh toán: <strong>${formatPrice(finalTotal)}</strong></div>
                     <div style="margin-top:8px">${itemsHtml}</div>
                 `;
             } catch (err) {

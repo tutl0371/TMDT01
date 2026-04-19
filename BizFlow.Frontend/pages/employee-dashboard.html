@@ -232,11 +232,20 @@
                         <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
                     </div>
                     <div class="customer-points-info" style="padding-top:8px;">
-                        <div style="font-size:13px;color:#333;margin-top:6px;">
-                            <span>Điểm hiện có: </span><strong id="checkoutPointsCurrent">0</strong>&nbsp;điểm
+                        <div style="font-size:13px;color:#333;margin-top:6px;display:flex;align-items:center;justify-content:space-between;">
+                            <span><span>Điểm hiện có: </span><strong id="checkoutPointsCurrent">0</strong>&nbsp;điểm</span>
+                            <button id="usePointsBtn" type="button" class="primary-btn" style="padding:4px 8px;font-size:11px;margin-left:8px;" title="Sử dụng điểm tích lũy">Sử dụng điểm</button>
                         </div>
                         <div style="font-size:13px;color:#333;margin-top:4px;">
                             <span>Sẽ cộng thêm: </span><strong id="checkoutPointsEarn">0</strong>&nbsp;điểm
+                        </div>
+                        <div id="pointsUsedInfo" style="font-size:13px;color:#d9534f;margin-top:4px;display:none;">
+                            <div style="margin-bottom:6px;">
+                                <span>Đã sử dụng: </span><strong id="checkoutPointsUsed">0</strong>&nbsp;điểm
+                            </div>
+                            <div style="color:#d9534f;font-weight:bold;">
+                                <span>Giảm từ điểm: </span><strong id="checkoutPointsDiscount">0đ</strong>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -874,6 +883,39 @@
             </div>
             <div class="modal-actions">
                 <button type="button" class="ghost-btn" id="closeOrderTrackBtn">Đóng</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Use Points Modal -->
+    <div class="modal" id="usePointsModal" aria-hidden="true">
+        <div class="modal-content" style="width:400px;max-width:90vw;">
+            <div class="modal-header">
+                <h3>Sử dụng điểm tích lũy</h3>
+                <button id="closeUsePointsModal" class="icon-btn small" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div style="padding:20px;display:flex;flex-direction:column;gap:16px;">
+                <div>
+                    <div style="font-size:13px;color:#666;margin-bottom:4px;">Điểm hiện có</div>
+                    <div style="font-size:20px;font-weight:bold;color:#333;" id="usePointsCurrentPoints">0</div>
+                </div>
+                <div>
+                    <label style="display:block;font-size:13px;color:#666;margin-bottom:6px;">
+                        Số điểm muốn sử dụng
+                        <span style="color:#d9534f;">*</span>
+                    </label>
+                    <input id="usePointsInput" type="number" min="0" step="100" placeholder="Nhập số điểm (bội số của 100)" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;" />
+                    <div style="font-size:12px;color:#999;margin-top:4px;">
+                        Giảm giá: <strong id="usePointsDiscountPreview">0đ</strong>
+                    </div>
+                </div>
+                <div style="background:#f5f5f5;padding:12px;border-radius:6px;font-size:12px;color:#666;">
+                    <strong>Lưu ý:</strong> Cứ 100 điểm được giảm <span id="usePointsRateInfo">10,000đ</span> (tùy theo hạng thẻ)
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid #eee;">
+                    <button id="cancelUsePointsBtn" class="ghost-btn" type="button">Hủy</button>
+                    <button id="confirmUsePointsBtn" class="primary-btn" type="button">Sử dụng</button>
+                </div>
             </div>
         </div>
     </div>

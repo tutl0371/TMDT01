@@ -371,8 +371,8 @@ public class OrderController {
         }
 
         int pointsUsed = 0;
-        if (paid && customer != null && Boolean.TRUE.equals(request.getUsePoints())) {
-            DiscountResult result = resolveMemberDiscount(customer, total);
+        if (customer != null && Boolean.TRUE.equals(request.getUsePoints())) {
+            DiscountResult result = resolveMemberDiscount(customer, total, request.getPointsToUse());
             BigDecimal memberDiscount = result.discount;
             pointsUsed = result.pointsUsed;
             total = total.subtract(memberDiscount).max(BigDecimal.ZERO);
@@ -403,20 +403,15 @@ public class OrderController {
             payment.setStatus("PAID");
             payment.setPaidAt(LocalDateTime.now());
             paymentRepository.save(payment);
+        }
 
-                if (customer != null) {
-                    if (pointsUsed > 0) {
-                        String ref = "ORDER_REDEEM_" + savedOrder.getId();
-                        customerClient.redeemPoints(customer.getId(), pointsUsed, ref);
-                    }
-                    // Award points immediately for paid orders so the current
-                    // authenticated account sees updated points right away.
-                    customerClient.addPoints(
-                            customer.getId(),
-                            total,
-                            "ORDER_" + savedOrder.getId()
-                    );
-                }
+        // Process points at order creation: only redeem used points.
+        // Earning points is handled later when order is confirmed as RECEIVED.
+        if (customer != null) {
+            if (pointsUsed > 0) {
+                String ref = "ORDER_REDEEM_" + savedOrder.getId();
+                customerClient.redeemPoints(customer.getId(), pointsUsed, ref);
+            }
         }
 
         try {
@@ -753,18 +748,24 @@ public class OrderController {
 
     
 
-    private DiscountResult resolveMemberDiscount(CustomerClient.CustomerSnapshot customer, BigDecimal total) {
+    private DiscountResult resolveMemberDiscount(CustomerClient.CustomerSnapshot customer, BigDecimal total, Integer requestedPointsToUse) {
         if (customer == null || total == null || total.compareTo(BigDecimal.ZERO) <= 0) {
             return new DiscountResult(BigDecimal.ZERO, 0);
         }
-        int points = customer.getTotalPoints() != null ? customer.getTotalPoints() : 0;
-        if (points < 100) {
+        int availablePoints = customer.getTotalPoints() != null ? customer.getTotalPoints() : 0;
+        if (availablePoints < 100) {
             return new DiscountResult(BigDecimal.ZERO, 0);
+        }
+
+        int points = availablePoints;
+        if (requestedPointsToUse != null && requestedPointsToUse > 0) {
+            // Use only the requested points amount, but never exceed available points.
+            points = Math.min(availablePoints, requestedPointsToUse);
         }
 
         CustomerTier tier = customer.getTier();
         if (tier == null) {
-            tier = resolveTierByPoints(points);
+            tier = resolveTierByPoints(availablePoints);
         }
         if (tier == null) {
             return new DiscountResult(BigDecimal.ZERO, 0);

@@ -18,6 +18,7 @@ public class CreateOrderRequest {
     private String returnReason;
     private String returnNote;
     private Boolean usePoints;
+    private Integer pointsToUse;
     private List<OrderItemRequest> items;
 
     public CreateOrderRequest() {
@@ -109,6 +110,14 @@ public class CreateOrderRequest {
 
     public void setUsePoints(Boolean usePoints) {
         this.usePoints = usePoints;
+    }
+
+    public Integer getPointsToUse() {
+        return pointsToUse;
+    }
+
+    public void setPointsToUse(Integer pointsToUse) {
+        this.pointsToUse = pointsToUse;
     }
 
     public List<OrderItemRequest> getItems() {
