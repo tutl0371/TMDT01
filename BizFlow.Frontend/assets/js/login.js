@@ -93,6 +93,7 @@ window.addEventListener('DOMContentLoaded',()=>{
         if(res.ok){
           const data=await res.json();
           sessionStorage.setItem('accessToken',data.accessToken);
+          sessionStorage.setItem('refreshToken',data.refreshToken);
           sessionStorage.setItem('username',data.username);
           sessionStorage.setItem('role',data.role);
           sessionStorage.setItem('userId',data.userId);

@@ -2,6 +2,7 @@ package com.example.bizflow.controller;
 import com.example.bizflow.dto.LoginRequest;
 import com.example.bizflow.dto.LoginResponse;
 import com.example.bizflow.dto.CreateUserRequest;
+import com.example.bizflow.dto.RefreshTokenRequest;
 import com.example.bizflow.entity.User;
 import com.example.bizflow.service.AuthService;
 import com.example.bizflow.service.UserService;
@@ -55,6 +56,26 @@ public class AuthController {
         response.put("status", "UP");
         response.put("message", "Auth service is running");
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * API làm mới access token bằng refresh token.
+     * Client gửi refreshToken, nhận lại accessToken mới mà không cần đăng nhập lại.
+     */
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refreshToken(@RequestBody RefreshTokenRequest request) {
+        try {
+            if (request.getRefreshToken() == null || request.getRefreshToken().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Refresh token là bắt buộc"));
+            }
+
+            LoginResponse response = authService.refreshAccessToken(request.getRefreshToken());
+            return ResponseEntity.ok(response);
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "Đã xảy ra lỗi, vui lòng thử lại sau"));
+        }
     }
 
     /**
