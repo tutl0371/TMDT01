@@ -229,7 +229,13 @@
                     <div class="checkout-customer-fields" style="display:flex;flex-direction:column;gap:8px;">
                         <input id="checkoutCustomerName" type="text" placeholder="Tên khách hàng" value="Khách lẻ" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
                         <input id="checkoutCustomerPhone" type="tel" placeholder="SĐT khách hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
-                        <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
+                        <div style="position:relative;display:flex;gap:6px;align-items:flex-start;">
+                            <div style="flex:1;position:relative;">
+                                <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
+                                <div id="addressSuggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:20;margin-top:6px;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 8px 22px rgba(0,0,0,0.12);max-height:220px;overflow:auto;font-size:13px;"></div>
+                            </div>
+                            <button id="getLocationBtn" type="button" class="primary-btn" style="padding:6px 10px;font-size:12px;white-space:nowrap;height:fit-content;margin-top:6px;" title="Lấy vị trí hiện tại từ GPS">📍 Vị trí</button>
+                        </div>
                     </div>
                     <div class="customer-points-info" style="padding-top:8px;">
                         <div style="font-size:13px;color:#333;margin-top:6px;display:flex;align-items:center;justify-content:space-between;">
@@ -933,7 +939,7 @@
             }
         })();
     </script>
-    <script src="../assets/js/employee-dashboard.js?v=stock-8"></script>
+    <script src="../assets/js/employee-dashboard.js?v=stock-9"></script>
     <script src="../assets/js/app-shell.js"></script>
     <script>
         // Lightweight fallback: if products grid still empty after main script,
