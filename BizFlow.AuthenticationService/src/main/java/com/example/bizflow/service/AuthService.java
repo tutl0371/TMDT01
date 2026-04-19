@@ -31,9 +31,10 @@ public class AuthService {
      * @throws RuntimeException nếu username không tồn tại hoặc password sai
      */
     public LoginResponse authenticate(LoginRequest request) {
-        // Hỗ trợ đăng nhập bằng username hoặc email
+        // Hỗ trợ đăng nhập bằng username, email hoặc số điện thoại
         User user = userRepository.findByUsername(request.getUsername())
                 .or(() -> userRepository.findByEmail(request.getUsername()))
+                .or(() -> userRepository.findByPhoneNumber(request.getUsername()))
                 .orElseThrow(() -> new RuntimeException("Tên đăng nhập hoặc mật khẩu không chính xác"));
 
         // Kiểm tra tài khoản có bị vô hiệu hóa
