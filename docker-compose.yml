@@ -422,6 +422,7 @@ services:
       REDIS_HOST: redis
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
+      JWT_SECRET: ${JWT_SECRET:-my-secret-key-for-jwt-token-generation-and-verification}
       JAVA_OPTS: -Xms128m -Xmx256m
     depends_on:
       mysql:
