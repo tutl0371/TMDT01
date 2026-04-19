@@ -56,35 +56,32 @@ public class AuthController {
         response.put("message", "Auth service is running");
         return ResponseEntity.ok(response);
     }
-    
+
     /**
-     * API tạo hash BCrypt (CHỈ DÙNG ĐỂ DEBUG - XÓA KHI DEPLOY PRODUCTION)
-     */
-    @GetMapping("/debug/hash/{password}")
-    public ResponseEntity<Map<String, String>> generateHash(@PathVariable String password) {
-        com.example.bizflow.util.PasswordEncoder encoder = new com.example.bizflow.util.PasswordEncoder();
-        Map<String, String> response = new HashMap<>();
-        response.put("password", password);
-        response.put("hash", encoder.encode(password));
-        return ResponseEntity.ok(response);
-    }
-    /**
-     * API đăng ký người dùng. Mặc định role = EMPLOYEE nếu không cung cấp.
+     * API đăng ký người dùng (public). Luôn tạo tài khoản với role EMPLOYEE.
+     * Bắt buộc: username, password (>=6 ký tự), email, phoneNumber.
      */
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody CreateUserRequest request) {
         try {
-            if (request.getPassword() == null || request.getPassword().length() < 6) {
-                return ResponseEntity.badRequest().body(Map.of("error", "Mật khẩu tối thiểu 6 ký tự"));
-            }
-
             if (request.getUsername() == null || request.getUsername().trim().isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of("error", "Username là bắt buộc"));
             }
 
-            if (request.getRole() == null || request.getRole().trim().isEmpty()) {
-                request.setRole("EMPLOYEE");
+            if (request.getPassword() == null || request.getPassword().length() < 6) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Mật khẩu tối thiểu 6 ký tự"));
             }
+
+            if (request.getEmail() == null || request.getEmail().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Email là bắt buộc"));
+            }
+
+            if (request.getPhoneNumber() == null || request.getPhoneNumber().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Số điện thoại là bắt buộc"));
+            }
+
+            // Luôn ép role = EMPLOYEE cho endpoint đăng ký public
+            request.setRole("EMPLOYEE");
 
             User user = userService.createUser(request);
             return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("id", user.getId(), "username", user.getUsername()));

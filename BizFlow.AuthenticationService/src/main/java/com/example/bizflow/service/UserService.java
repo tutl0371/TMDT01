@@ -29,19 +29,27 @@ public class UserService {
         String phone = request.getPhoneNumber() == null ? null : request.getPhoneNumber().trim();
 
         if (username == null || username.isEmpty()) {
-            throw new RuntimeException("Username is required");
+            throw new RuntimeException("Tên đăng nhập là bắt buộc");
+        }
+
+        if (email == null || email.isEmpty()) {
+            throw new RuntimeException("Email là bắt buộc");
+        }
+
+        if (phone == null || phone.isEmpty()) {
+            throw new RuntimeException("Số điện thoại là bắt buộc");
         }
 
         if (userRepository.findByUsername(username).isPresent()) {
-            throw new RuntimeException("Username already exists");
+            throw new RuntimeException("Tên đăng nhập đã tồn tại");
         }
 
-        if (email != null && userRepository.existsByEmail(email)) {
-            throw new RuntimeException("Email already in use");
+        if (userRepository.existsByEmail(email)) {
+            throw new RuntimeException("Email đã được sử dụng");
         }
 
-        if (phone != null && userRepository.existsByPhoneNumber(phone)) {
-            throw new RuntimeException("Phone number already in use");
+        if (userRepository.existsByPhoneNumber(phone)) {
+            throw new RuntimeException("Số điện thoại đã được sử dụng");
         }
 
         User user = new User();
