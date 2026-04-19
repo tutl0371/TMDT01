@@ -3688,6 +3688,109 @@ function formatPriceCompact(price) {
     }).format(price);
 }
 
+// Geolocation function to get current location and populate address field
+async function getAndPopulateCurrentLocation() {
+    const addressField = document.getElementById('checkoutCustomerAddress');
+    const getLocationBtn = document.getElementById('getLocationBtn');
+    
+    if (!addressField) {
+        showPopup('Không tìm thấy trường địa chỉ', { type: 'error' });
+        return;
+    }
+
+    if (!navigator.geolocation) {
+        showPopup('Trình duyệt này không hỗ trợ định vị. Vui lòng nhập địa chỉ thủ công.', { type: 'error' });
+        return;
+    }
+
+    if (getLocationBtn) {
+        getLocationBtn.disabled = true;
+        getLocationBtn.textContent = '⏳ Đang xác định...';
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        async (position) => {
+            try {
+                const { latitude, longitude, accuracy } = position.coords;
+                const timestamp = new Date().toLocaleString('vi-VN');
+                
+                // Try to get address from coordinates using reverse geocoding (Nominatim)
+                let addressText = `Vị trí: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                
+                try {
+                    const response = await fetch(
+                        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=vi`,
+                        {
+                            headers: {
+                                'User-Agent': 'BizFlow-POS/1.0'
+                            }
+                        }
+                    );
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.address) {
+                            const addr = data.address;
+                            // Build Vietnamese-style address: road, ward, district, city
+                            const addressParts = [];
+                            if (addr.road) addressParts.push(addr.road);
+                            if (addr.residential) addressParts.push(addr.residential);
+                            if (addr.suburb) addressParts.push(addr.suburb);
+                            if (addr.city_district || addr.district) addressParts.push(addr.city_district || addr.district);
+                            if (addr.city || addr.province) addressParts.push(addr.city || addr.province);
+                            
+                            if (addressParts.length > 0) {
+                                addressText = addressParts.join(', ');
+                            }
+                        }
+                    }
+                } catch (geocodeError) {
+                    console.warn('Reverse geocoding failed, using coordinates only:', geocodeError);
+                    // Continue with coordinate-only text
+                }
+                
+                addressField.value = addressText;
+                showPopup(`✓ Đã lấy vị trí thành công (${timestamp})\n\nĐộ chính xác: ±${accuracy.toFixed(0)}m`, {
+                    title: 'Thành công',
+                    type: 'success'
+                });
+            } catch (error) {
+                console.error('Error processing geolocation:', error);
+                showPopup('Lỗi xử lý vị trí. Vui lòng thử lại.', { type: 'error' });
+            } finally {
+                if (getLocationBtn) {
+                    getLocationBtn.disabled = false;
+                    getLocationBtn.textContent = '📍 Vị trí';
+                }
+            }
+        },
+        (error) => {
+            let errorMsg = 'Không thể lấy vị trí hiện tại';
+            
+            if (error.code === error.PERMISSION_DENIED) {
+                errorMsg = 'Quyền truy cập vị trí bị từ chối. Vui lòng cho phép truy cập vị trí trong cài đặt trình duyệt.';
+            } else if (error.code === error.POSITION_UNAVAILABLE) {
+                errorMsg = 'Dữ liệu vị trí không khả dụng. Vui lòng kiểm tra cài đặt GPS.';
+            } else if (error.code === error.TIMEOUT) {
+                errorMsg = 'Hết thời gian chờ. Vui lòng thử lại.';
+            }
+            
+            console.error('Geolocation error:', error);
+            showPopup(errorMsg, { type: 'error' });
+            
+            if (getLocationBtn) {
+                getLocationBtn.disabled = false;
+                getLocationBtn.textContent = '📍 Vị trí';
+            }
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        }
+    );
+}
+
 function printInvoiceReceipt() {
     const receipt = document.getElementById('invoiceReceipt');
     if (!receipt) {
@@ -4096,6 +4199,12 @@ function setupEventListeners() {
                 console.warn('Failed to clear checkout inputs', e);
             }
         }
+    });
+
+    // Geolocation button event listener
+    document.getElementById('getLocationBtn')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        getAndPopulateCurrentLocation();
     });
 
 

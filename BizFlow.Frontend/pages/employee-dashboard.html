@@ -229,7 +229,10 @@
                     <div class="checkout-customer-fields" style="display:flex;flex-direction:column;gap:8px;">
                         <input id="checkoutCustomerName" type="text" placeholder="Tên khách hàng" value="Khách lẻ" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
                         <input id="checkoutCustomerPhone" type="tel" placeholder="SĐT khách hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
-                        <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
+                        <div style="display:flex;gap:6px;align-items:flex-start;">
+                            <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="flex:1;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
+                            <button id="getLocationBtn" type="button" class="primary-btn" style="padding:6px 10px;font-size:12px;white-space:nowrap;height:fit-content;margin-top:6px;" title="Lấy vị trí hiện tại từ GPS">📍 Vị trí</button>
+                        </div>
                     </div>
                     <div class="customer-points-info" style="padding-top:8px;">
                         <div style="font-size:13px;color:#333;margin-top:6px;display:flex;align-items:center;justify-content:space-between;">
