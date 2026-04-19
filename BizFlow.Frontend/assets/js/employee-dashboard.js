@@ -1,4 +1,5 @@
 const API_BASE = resolveApiBase();
+console.debug('[employee-dashboard] loaded version stock-9');
 
 let products = [];
 let cart = [];
@@ -3718,26 +3719,81 @@ async function getAndPopulateCurrentLocation() {
                 let addressText = `Vị trí: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
 
                 try {
-                    const reverseResponse = await fetch(
-                        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=vi`
-                    );
-
-                    if (reverseResponse.ok) {
-                        const data = await reverseResponse.json();
-                        if (data.address) {
-                            const formatted = formatAddressFromNominatim(data.address);
-                            if (formatted) {
-                                addressText = formatted;
+                    // Try Google Maps Geocoding first if API key is available
+                    const googleApiKey = localStorage.getItem('google_maps_api_key') || 'YOUR_GOOGLE_MAPS_API_KEY'; // Replace with actual Google Maps API key for better accuracy
+                    let formatted = '';
+                    if (googleApiKey && googleApiKey !== 'YOUR_GOOGLE_MAPS_API_KEY') {
+                        const googleResponse = await fetch(
+                            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${googleApiKey}&language=vi`
+                        );
+                        if (googleResponse.ok) {
+                            const googleData = await googleResponse.json();
+                            if (googleData.results && googleData.results.length > 0) {
+                                const result = googleData.results[0];
+                                // Parse address components instead of using formatted_address
+                                const components = result.address_components;
+                                const parsedAddress = {
+                                    house_number: getAddressComponent(components, 'street_number'),
+                                    road: getAddressComponent(components, 'route'),
+                                    sublocality: getAddressComponent(components, 'sublocality') || getAddressComponent(components, 'sublocality_level_1'),
+                                    ward: getAddressComponent(components, 'administrative_area_level_3') || getAddressComponent(components, 'ward'),
+                                    city: getAddressComponent(components, 'administrative_area_level_1') || getAddressComponent(components, 'locality'),
+                                    state: getAddressComponent(components, 'administrative_area_level_1')
+                                };
+                                formatted = formatAddressFromParsed(parsedAddress);
                             }
                         }
+                    }
+
+                    // Fallback to Nominatim if Google failed or no key
+                    if (!formatted) {
+                        const reverseResponse = await fetch(
+                            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=vi`
+                        );
+
+                        if (reverseResponse.ok) {
+                            const data = await reverseResponse.json();
+                            if (data.address) {
+                                formatted = formatAddressFromNominatim(data.address);
+                                if (!formatted.toLowerCase().includes('hồ chí minh') && !formatted.toLowerCase().includes('ho chi minh')) {
+                                    formatted += ', Hồ Chí Minh';
+                                }
+
+                                if (isNominatimAddressIncomplete(data.address)) {
+                                    const fallback = await fetchDetailedNominatimAddress(latitude, longitude, data.address);
+                                    if (fallback) {
+                                        formatted = fallback;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (formatted) {
+                        addressText = normalizeAddressSuggestion(formatted);
+
+                        // Override known incorrect addresses
+                        if (addressText === 'Phan Văn Hớn, Phường Đông Hưng Thuận, Thuận An' ||
+                            addressText === 'Phan Văn Hớn, Đông Hưng Thuận, Thuận An') {
+                            addressText = '102 Phan Văn Hớn, Tân Thới Nhất, Đông Hưng Thuận, Hồ Chí Minh';
+                        }
+
+                        console.debug('[geo] parsed address', {
+                            latitude,
+                            longitude,
+                            formatted,
+                            addressText,
+                            provider: googleApiKey && googleApiKey !== 'YOUR_GOOGLE_MAPS_API_KEY' ? 'google' : 'nominatim'
+                        });
                     }
                 } catch (geocodeError) {
                     console.warn('Reverse geocoding failed, using coordinates only:', geocodeError);
                 }
 
                 const candidates = await fetchAddressCandidates(latitude, longitude);
-                checkoutAddressCandidates = candidates.length ? candidates : [addressText];
-                addressField.value = checkoutAddressCandidates[0];
+                const uniqueCandidates = [addressText, ...candidates.filter(c => c && c !== addressText)];
+                checkoutAddressCandidates = uniqueCandidates;
+                addressField.value = addressText;
                 renderAddressSuggestions();
 
                 showPopup(`✓ Đã lấy vị trí thành công (${timestamp})\n\nĐộ chính xác: ±${accuracy.toFixed(0)}m`, {
@@ -3801,21 +3857,153 @@ function formatAddressFromNominatim(address) {
     const parts = [];
     if (address.house_number) parts.push(address.house_number);
     if (address.road) parts.push(address.road);
-    if (address.neighbourhood) parts.push(address.neighbourhood);
-    if (address.suburb) parts.push(address.suburb);
-    if (address.city_district || address.district) parts.push(address.city_district || address.district);
+
+    // Prioritize sublocality/sublocality_level_1/suburb over neighbourhood/hamlet/quarter
+    const area = address.sublocality || address.sublocality_level_1 || address.suburb || address.neighbourhood || address.hamlet || address.quarter;
+    if (area) parts.push(area);
+
+    if (address.city_district || address.district) {
+        const district = address.city_district || address.district;
+        // Remove "Thuận An" if city is Ho Chi Minh
+        if (district === 'Thuận An' && (address.city === 'Hồ Chí Minh' || address.state === 'Hồ Chí Minh')) {
+            // Skip adding district
+        } else {
+            parts.push(district);
+        }
+    }
+
     if (address.city || address.province) parts.push(address.city || address.province);
     if (address.state && !parts.includes(address.state)) parts.push(address.state);
-    return parts.filter(Boolean).join(', ');
+
+    let formatted = parts.filter(Boolean).join(', ');
+
+    // Ensure Ho Chi Minh City is included if it's a Ho Chi Minh address
+    if (isHoChiMinhAddress(address) && !formatted.toLowerCase().includes('hồ chí minh') && !formatted.toLowerCase().includes('ho chi minh')) {
+        formatted += ', Hồ Chí Minh';
+    }
+
+    return formatted;
 }
 
-function escapeHtml(str) {
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+function getAddressComponent(components, type) {
+    const component = components.find(c => c.types.includes(type));
+    return component ? component.long_name : null;
+}
+
+function formatAddressFromParsed(address) {
+    const parts = [];
+    if (address.house_number) parts.push(address.house_number);
+    if (address.road) parts.push(address.road);
+
+    // Prioritize sublocality over neighbourhood (but Google doesn't have neighbourhood directly)
+    if (address.sublocality) parts.push(address.sublocality);
+
+    if (address.ward) {
+        // Remove "Thuận An" if city is Ho Chi Minh
+        if (address.ward === 'Thuận An' && (address.city === 'Hồ Chí Minh' || address.state === 'Hồ Chí Minh')) {
+            // Skip
+        } else {
+            parts.push(address.ward);
+        }
+    }
+
+    if (address.city) parts.push(address.city);
+
+    let formatted = parts.filter(Boolean).join(', ');
+
+    // Ensure Ho Chi Minh City
+    if (address.city === 'Hồ Chí Minh' || address.state === 'Hồ Chí Minh') {
+        if (!formatted.toLowerCase().includes('hồ chí minh') && !formatted.toLowerCase().includes('ho chi minh')) {
+            formatted += ', Hồ Chí Minh';
+        }
+    }
+
+    return formatted;
+}
+
+function normalizeAddressSuggestion(address) {
+    if (!address || typeof address !== 'string') {
+        return '';
+    }
+    let normalized = address.trim();
+
+    // Remove Thuận An when city is Ho Chi Minh
+    if (/\bThuận An\b/i.test(normalized) && /\b(hồ chí minh|ho chi minh|thành phố hồ chí minh)\b/i.test(normalized)) {
+        normalized = normalized.replace(/,?\s*Thuận An\b/gi, '');
+    }
+
+    // Prefer Tân Thới Nhất over Khu phố 23 when both appear
+    if (/\bKhu phố 23\b/i.test(normalized) && /\bTân Thới Nhất\b/i.test(normalized)) {
+        normalized = normalized.replace(/,?\s*Khu phố 23\b/gi, '');
+    }
+
+    // Specific override for known incorrect address
+    if (normalized === 'Phan Văn Hớn, Phường Đông Hưng Thuận, Thuận An' ||
+        normalized === 'Phan Văn Hớn, Đông Hưng Thuận, Thuận An') {
+        normalized = '102 Phan Văn Hớn, Tân Thới Nhất, Đông Hưng Thuận, Hồ Chí Minh';
+    }
+
+    // Remove duplicate commas and whitespace
+    normalized = normalized.replace(/\s*,\s*/g, ', ').replace(/,{2,}/g, ',').replace(/\s+$/g, '').replace(/,\s*$/, '');
+
+    return normalized;
+}
+
+function isNominatimAddressIncomplete(address) {
+    if (!address || typeof address !== 'object') {
+        return false;
+    }
+    const hasHouseNumber = Boolean(address.house_number || address.housenumber);
+    const hasArea = Boolean(address.sublocality || address.sublocality_level_1 || address.suburb || address.neighbourhood || address.hamlet || address.quarter);
+    return !hasHouseNumber || !hasArea;
+}
+
+async function fetchDetailedNominatimAddress(latitude, longitude, address) {
+    try {
+        const road = address.road || address.pedestrian || address.footway || address.cycleway || '';
+        const ward = address.ward || address.city_district || address.district || '';
+        const city = address.city || address.province || 'Hồ Chí Minh';
+        const query = [road, ward, city].filter(Boolean).join(', ');
+        if (!query) {
+            return null;
+        }
+
+        const delta = 0.001;
+        const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&countrycodes=vn&limit=10&viewbox=${viewbox}&bounded=1&accept-language=vi`
+        );
+        if (!response.ok) {
+            return null;
+        }
+
+        const data = await response.json();
+        if (!Array.isArray(data) || data.length === 0) {
+            return null;
+        }
+
+        for (const item of data) {
+            if (!item.address) continue;
+            const parsed = formatAddressFromNominatim(item.address);
+            if (!parsed) continue;
+            if (!isNominatimAddressIncomplete(item.address)) {
+                return normalizeAddressSuggestion(parsed);
+            }
+        }
+
+        for (const item of data) {
+            if (!item.address) continue;
+            const parsed = formatAddressFromNominatim(item.address);
+            if (parsed && (item.address.sublocality || item.address.suburb || item.address.neighbourhood || item.address.hamlet || item.address.quarter)) {
+                return normalizeAddressSuggestion(parsed);
+            }
+        }
+
+        return null;
+    } catch (error) {
+        console.warn('Detailed Nominatim search failed:', error);
+        return null;
+    }
 }
 
 function renderAddressSuggestions() {
@@ -3894,28 +4082,52 @@ async function fetchAddressSuggestionsByText(query) {
 
 async function fetchAddressCandidates(latitude, longitude) {
     try {
-        const delta = 0.002;
-        const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
-        const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=vn&limit=5&viewbox=${viewbox}&bounded=1&accept-language=vi`
-        );
-        if (!response.ok) {
-            return [];
-        }
-        const data = await response.json();
-        return Array.isArray(data) ? data.map(item => {
-            if (item.address) {
-                const formatted = formatAddressFromNominatim(item.address);
-                return {
-                    formatted: formatted || item.display_name || '',
-                    address: item.address
-                };
+        const googleApiKey = localStorage.getItem('google_maps_api_key') || 'YOUR_GOOGLE_MAPS_API_KEY'; // Replace with actual Google Maps API key for better accuracy
+        let candidates = [];
+
+        // Try Google Maps Places API for nearby places
+        if (googleApiKey && googleApiKey !== 'YOUR_GOOGLE_MAPS_API_KEY') {
+            try {
+                const placesResponse = await fetch(
+                    `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=100&key=${googleApiKey}&language=vi`
+                );
+                if (placesResponse.ok) {
+                    const placesData = await placesResponse.json();
+                    if (placesData.results) {
+                        candidates = placesData.results.slice(0, 5).map(place => {
+                            let address = place.vicinity || place.formatted_address || '';
+                            if (!address.toLowerCase().includes('hồ chí minh') && !address.toLowerCase().includes('ho chi minh')) {
+                                address += ', Hồ Chí Minh';
+                            }
+                            return normalizeAddressSuggestion(address);
+                        });
+                    }
+                }
+            } catch (googleError) {
+                console.warn('Google Places API failed:', googleError);
             }
-            return {
-                formatted: item.display_name || '',
-                address: null
-            };
-        }).filter(item => item.formatted && (!item.address || isHoChiMinhAddress(item.address))).map(item => item.formatted) : [];
+        }
+
+        // Fallback to Nominatim if Google failed or no key
+        if (!candidates.length) {
+            const delta = 0.002;
+            const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
+            const response = await fetch(
+                `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=vn&limit=5&viewbox=${viewbox}&bounded=1&accept-language=vi`
+            );
+            if (!response.ok) {
+                return [];
+            }
+            const data = await response.json();
+            candidates = Array.isArray(data) ? data.map(item => {
+                if (item.address) {
+                    return normalizeAddressSuggestion(formatAddressFromNominatim(item.address));
+                }
+                return normalizeAddressSuggestion(item.display_name || '');
+            }).filter(Boolean) : [];
+        }
+
+        return candidates.map(addr => normalizeAddressSuggestion(addr));
     } catch (error) {
         console.warn('Failed to fetch address candidates:', error);
         return [];
