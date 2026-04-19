@@ -92,6 +92,8 @@ const EARN_POLICY_POINTS = 100;
 // Points redemption variables
 let usePointsEnabled = false;
 let pointsToUse = 0;
+let checkoutAddressCandidates = [];
+let addressSuggestionQueryTimer = null;
 
 const FALLBACK_PRODUCTS = [
     {
@@ -3692,7 +3694,7 @@ function formatPriceCompact(price) {
 async function getAndPopulateCurrentLocation() {
     const addressField = document.getElementById('checkoutCustomerAddress');
     const getLocationBtn = document.getElementById('getLocationBtn');
-    
+
     if (!addressField) {
         showPopup('Không tìm thấy trường địa chỉ', { type: 'error' });
         return;
@@ -3713,43 +3715,31 @@ async function getAndPopulateCurrentLocation() {
             try {
                 const { latitude, longitude, accuracy } = position.coords;
                 const timestamp = new Date().toLocaleString('vi-VN');
-                
-                // Try to get address from coordinates using reverse geocoding (Nominatim)
                 let addressText = `Vị trí: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                
+
                 try {
-                    const response = await fetch(
-                        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=vi`,
-                        {
-                            headers: {
-                                'User-Agent': 'BizFlow-POS/1.0'
-                            }
-                        }
+                    const reverseResponse = await fetch(
+                        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=vi`
                     );
-                    
-                    if (response.ok) {
-                        const data = await response.json();
+
+                    if (reverseResponse.ok) {
+                        const data = await reverseResponse.json();
                         if (data.address) {
-                            const addr = data.address;
-                            // Build Vietnamese-style address: road, ward, district, city
-                            const addressParts = [];
-                            if (addr.road) addressParts.push(addr.road);
-                            if (addr.residential) addressParts.push(addr.residential);
-                            if (addr.suburb) addressParts.push(addr.suburb);
-                            if (addr.city_district || addr.district) addressParts.push(addr.city_district || addr.district);
-                            if (addr.city || addr.province) addressParts.push(addr.city || addr.province);
-                            
-                            if (addressParts.length > 0) {
-                                addressText = addressParts.join(', ');
+                            const formatted = formatAddressFromNominatim(data.address);
+                            if (formatted) {
+                                addressText = formatted;
                             }
                         }
                     }
                 } catch (geocodeError) {
                     console.warn('Reverse geocoding failed, using coordinates only:', geocodeError);
-                    // Continue with coordinate-only text
                 }
-                
-                addressField.value = addressText;
+
+                const candidates = await fetchAddressCandidates(latitude, longitude);
+                checkoutAddressCandidates = candidates.length ? candidates : [addressText];
+                addressField.value = checkoutAddressCandidates[0];
+                renderAddressSuggestions();
+
                 showPopup(`✓ Đã lấy vị trí thành công (${timestamp})\n\nĐộ chính xác: ±${accuracy.toFixed(0)}m`, {
                     title: 'Thành công',
                     type: 'success'
@@ -3766,7 +3756,7 @@ async function getAndPopulateCurrentLocation() {
         },
         (error) => {
             let errorMsg = 'Không thể lấy vị trí hiện tại';
-            
+
             if (error.code === error.PERMISSION_DENIED) {
                 errorMsg = 'Quyền truy cập vị trí bị từ chối. Vui lòng cho phép truy cập vị trí trong cài đặt trình duyệt.';
             } else if (error.code === error.POSITION_UNAVAILABLE) {
@@ -3774,10 +3764,10 @@ async function getAndPopulateCurrentLocation() {
             } else if (error.code === error.TIMEOUT) {
                 errorMsg = 'Hết thời gian chờ. Vui lòng thử lại.';
             }
-            
+
             console.error('Geolocation error:', error);
             showPopup(errorMsg, { type: 'error' });
-            
+
             if (getLocationBtn) {
                 getLocationBtn.disabled = false;
                 getLocationBtn.textContent = '📍 Vị trí';
@@ -3789,6 +3779,108 @@ async function getAndPopulateCurrentLocation() {
             maximumAge: 0
         }
     );
+}
+
+function formatAddressFromNominatim(address) {
+    const parts = [];
+    if (address.house_number) parts.push(address.house_number);
+    if (address.road) parts.push(address.road);
+    if (address.neighbourhood) parts.push(address.neighbourhood);
+    if (address.suburb) parts.push(address.suburb);
+    if (address.city_district || address.district) parts.push(address.city_district || address.district);
+    if (address.city || address.province) parts.push(address.city || address.province);
+    if (address.state && !parts.includes(address.state)) parts.push(address.state);
+    return parts.filter(Boolean).join(', ');
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderAddressSuggestions() {
+    const suggestionsEl = document.getElementById('addressSuggestions');
+    if (!suggestionsEl) return;
+    if (!checkoutAddressCandidates || !checkoutAddressCandidates.length) {
+        suggestionsEl.style.display = 'none';
+        suggestionsEl.innerHTML = '';
+        return;
+    }
+
+    suggestionsEl.innerHTML = checkoutAddressCandidates.map((candidate, index) =>
+        `<button type="button" class="address-suggestion-item" data-suggestion-index="${index}" style="width:100%;text-align:left;padding:10px 12px;border:none;background:none;color:#333;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:13px;">${escapeHtml(candidate)}</button>`
+    ).join('');
+    suggestionsEl.style.display = 'block';
+}
+
+function hideAddressSuggestions() {
+    const suggestionsEl = document.getElementById('addressSuggestions');
+    if (!suggestionsEl) return;
+    suggestionsEl.style.display = 'none';
+}
+
+function selectAddressSuggestion(index) {
+    const candidate = checkoutAddressCandidates[index];
+    const addressField = document.getElementById('checkoutCustomerAddress');
+    if (candidate && addressField) {
+        addressField.value = candidate;
+        hideAddressSuggestions();
+    }
+}
+
+async function fetchAddressSuggestionsByText(query) {
+    if (!query || query.length < 3) {
+        return [];
+    }
+
+    try {
+        const encoded = encodeURIComponent(query);
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&addressdetails=1&limit=6&accept-language=vi`
+        );
+        if (!response.ok) {
+            return [];
+        }
+        const data = await response.json();
+        return Array.isArray(data) ? data.map(item => {
+            if (item.address) {
+                const formatted = formatAddressFromNominatim(item.address);
+                return formatted || item.display_name || '';
+            }
+            return item.display_name || '';
+        }).filter(Boolean) : [];
+    } catch (error) {
+        console.warn('Address suggestion search failed:', error);
+        return [];
+    }
+}
+
+async function fetchAddressCandidates(latitude, longitude) {
+    try {
+        const delta = 0.002;
+        const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&viewbox=${viewbox}&bounded=1&accept-language=vi`
+        );
+        if (!response.ok) {
+            return [];
+        }
+        const data = await response.json();
+        return Array.isArray(data) ? data.map(item => {
+            if (item.address) {
+                const formatted = formatAddressFromNominatim(item.address);
+                return formatted || item.display_name || '';
+            }
+            return item.display_name || '';
+        }).filter(Boolean) : [];
+    } catch (error) {
+        console.warn('Failed to fetch address candidates:', error);
+        return [];
+    }
 }
 
 function printInvoiceReceipt() {
@@ -4003,6 +4095,53 @@ function setupEventListeners() {
 
     document.getElementById('usePointsToggle')?.addEventListener('change', () => {
         updateTotal();
+    });
+
+    const checkoutAddressEl = document.getElementById('checkoutCustomerAddress');
+    const addressSuggestionsEl = document.getElementById('addressSuggestions');
+
+    checkoutAddressEl?.addEventListener('focus', () => {
+        if (checkoutAddressCandidates && checkoutAddressCandidates.length) {
+            renderAddressSuggestions();
+        }
+    });
+    checkoutAddressEl?.addEventListener('input', (e) => {
+        const query = e.target.value.trim();
+        if (!query || query.length < 3) {
+            checkoutAddressCandidates = [];
+            hideAddressSuggestions();
+            return;
+        }
+
+        if (addressSuggestionQueryTimer) {
+            clearTimeout(addressSuggestionQueryTimer);
+        }
+        addressSuggestionQueryTimer = setTimeout(async () => {
+            const candidates = await fetchAddressSuggestionsByText(query);
+            checkoutAddressCandidates = candidates;
+            if (checkoutAddressCandidates.length) {
+                renderAddressSuggestions();
+            } else {
+                hideAddressSuggestions();
+            }
+        }, 300);
+    });
+
+    addressSuggestionsEl?.addEventListener('click', (e) => {
+        const button = e.target.closest('.address-suggestion-item');
+        if (!button) return;
+        const index = Number(button.dataset.suggestionIndex);
+        if (Number.isFinite(index)) {
+            selectAddressSuggestion(index);
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!checkoutAddressEl || !addressSuggestionsEl) return;
+        if (e.target === checkoutAddressEl || addressSuggestionsEl.contains(e.target)) {
+            return;
+        }
+        hideAddressSuggestions();
     });
 
     document.querySelectorAll('input[name="paymentMethod"]').forEach(input => {
