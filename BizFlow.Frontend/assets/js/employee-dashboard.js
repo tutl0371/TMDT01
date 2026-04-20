@@ -198,7 +198,13 @@ function isCheckoutValid() {
         const addrEl = document.getElementById('checkoutCustomerAddress');
         const phone = phoneEl ? (phoneEl.value || '').trim() : '';
         const addr = addrEl ? (addrEl.value || '').trim() : '';
-        return phone.length > 0 && addr.length > 0;
+        
+        // Check phone is exactly 10 digits
+        const phoneRegex = /^\d{10}$/;
+        const isPhoneValid = phoneRegex.test(phone);
+        const isAddrValid = addr.length > 0;
+        
+        return isPhoneValid && isAddrValid;
     } catch (e) {
         return false;
     }
@@ -4522,10 +4528,33 @@ function setupEventListeners() {
 
     document.getElementById('checkoutBtn').addEventListener('click', async () => {
         // enforce required phone + address before allowing payment
-        if (!isCheckoutValid()) {
-            showPopup('Vui lòng nhập SĐT và địa chỉ nhận hàng trước khi thanh toán.', { type: 'error' });
+        const phoneEl = document.getElementById('checkoutCustomerPhone');
+        const addrEl = document.getElementById('checkoutCustomerAddress');
+        const phoneErrorEl = document.getElementById('checkoutPhoneError');
+        const addrErrorEl = document.getElementById('checkoutAddressError');
+        
+        const phone = phoneEl ? (phoneEl.value || '').trim() : '';
+        const addr = addrEl ? (addrEl.value || '').trim() : '';
+        
+        // Validate phone: must be exactly 10 digits
+        const phoneRegex = /^\d{10}$/;
+        const isPhoneValid = phoneRegex.test(phone);
+        const isAddrValid = addr.length > 0;
+        
+        // Show/hide error messages
+        if (phoneErrorEl) {
+            phoneErrorEl.style.display = isPhoneValid ? 'none' : 'block';
+        }
+        if (addrErrorEl) {
+            addrErrorEl.style.display = isAddrValid ? 'none' : 'block';
+        }
+        
+        // If validation fails, show popup and stop
+        if (!isPhoneValid || !isAddrValid) {
+            showPopup('Vui lòng nhập SĐT (10 số) và địa chỉ nhận hàng trước khi thanh toán.', { type: 'error' });
             return;
         }
+        
         // If transfer selected, create unpaid order then show QR code
         if (currentPaymentMethod === 'TRANSFER') {
             const res = await createOrder(false);
@@ -4565,6 +4594,9 @@ function setupEventListeners() {
                     if (cnameEl) cnameEl.value = 'Khách lẻ';
                     if (cphoneEl) cphoneEl.value = '';
                     if (caddrEl) caddrEl.value = '';
+                    // Hide error messages after successful checkout
+                    if (phoneErrorEl) phoneErrorEl.style.display = 'none';
+                    if (addrErrorEl) addrErrorEl.style.display = 'none';
                 } catch (e) {
                     console.warn('Failed to clear checkout inputs', e);
                 }
@@ -4587,6 +4619,9 @@ function setupEventListeners() {
                 if (cnameEl) cnameEl.value = 'Khách lẻ';
                 if (cphoneEl) cphoneEl.value = '';
                 if (caddrEl) caddrEl.value = '';
+                // Hide error messages after successful checkout
+                if (phoneErrorEl) phoneErrorEl.style.display = 'none';
+                if (addrErrorEl) addrErrorEl.style.display = 'none';
             } catch (e) {
                 console.warn('Failed to clear checkout inputs', e);
             }
