@@ -31,9 +31,10 @@ public class AuthService {
      * @throws RuntimeException nếu username không tồn tại hoặc password sai
      */
     public LoginResponse authenticate(LoginRequest request) {
-        // Hỗ trợ đăng nhập bằng username hoặc email
+        // Hỗ trợ đăng nhập bằng username, email hoặc số điện thoại
         User user = userRepository.findByUsername(request.getUsername())
                 .or(() -> userRepository.findByEmail(request.getUsername()))
+                .or(() -> userRepository.findByPhoneNumber(request.getUsername()))
                 .orElseThrow(() -> new RuntimeException("Tên đăng nhập hoặc mật khẩu không chính xác"));
 
         // Kiểm tra tài khoản có bị vô hiệu hóa
@@ -78,5 +79,40 @@ public class AuthService {
      */
     public String getUsernameFromToken(String token) {
         return jwtUtil.getUsernameFromToken(token);
+    }
+
+    /**
+     * Làm mới access token bằng refresh token.
+     * Kiểm tra refresh token hợp lệ, user còn active, rồi cấp access token mới.
+     *
+     * @param refreshToken refresh token từ client
+     * @return LoginResponse chứa access token mới + refresh token cũ
+     * @throws RuntimeException nếu refresh token không hợp lệ hoặc user bị vô hiệu hóa
+     */
+    public LoginResponse refreshAccessToken(String refreshToken) {
+        // Validate refresh token
+        if (!jwtUtil.validateToken(refreshToken)) {
+            throw new RuntimeException("Refresh token không hợp lệ hoặc đã hết hạn");
+        }
+
+        // Lấy username từ refresh token
+        String username = jwtUtil.getUsernameFromToken(refreshToken);
+        if (username == null) {
+            throw new RuntimeException("Refresh token không hợp lệ");
+        }
+
+        // Tìm user trong DB
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("Tài khoản không tồn tại"));
+
+        // Kiểm tra tài khoản còn active
+        if (!user.getEnabled()) {
+            throw new RuntimeException("Tài khoản của bạn đã bị vô hiệu hóa");
+        }
+
+        // Tạo access token mới (giữ nguyên refresh token cũ)
+        String newAccessToken = jwtUtil.generateAccessToken(user);
+
+        return new LoginResponse(newAccessToken, refreshToken, user.getRole().name(), user.getId(), user.getUsername());
     }
 }

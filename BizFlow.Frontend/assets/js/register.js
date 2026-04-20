@@ -108,8 +108,8 @@ window.addEventListener('DOMContentLoaded', () => {
     const fullName = (data.fullName || '').trim();
     const phoneNumber = (data.phoneNumber || '').trim();
 
-    if (!username || !email || !fullName || !password) {
-      showRegisterMessage('registerError', 'Vui lòng nhập đầy đủ thông tin bắt buộc.', true);
+    if (!username || !email || !fullName || !phoneNumber || !password) {
+      showRegisterMessage('registerError', 'Vui lòng nhập đầy đủ thông tin bắt buộc (bao gồm số điện thoại).', true);
       return;
     }
 
@@ -129,7 +129,7 @@ window.addEventListener('DOMContentLoaded', () => {
         password,
         email,
         fullName,
-        phoneNumber: phoneNumber || null,
+        phoneNumber,
         role: 'EMPLOYEE'
       });
 

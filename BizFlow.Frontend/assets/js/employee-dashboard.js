@@ -40,8 +40,8 @@ let employees = [];
 let exchangeDraft = null;
 let promotionIndex = null;
 let activeInventoryProductId = null;
-let allPromotions = []; // Luu t?t c? khuy?n m×i cho AI combo
-let isAnalyzingCombo = false; // Flag d? tr×nh v×ng l?p v× h?n
+let allPromotions = [];
+let isAnalyzingCombo = false;
 let activeCustomerDetailId = null;
 let editingCustomerId = null;
 let supportOwnerId = null;
@@ -168,11 +168,11 @@ function ensureInteractive() {
         selectors.forEach(sel => {
             try {
                 document.querySelectorAll(sel).forEach(el => el.remove());
-            } catch (e) {}
+            } catch (e) { }
         });
-        try { document.body.style.pointerEvents = 'auto'; } catch (e) {}
+        try { document.body.style.pointerEvents = 'auto'; } catch (e) { }
         const main = document.querySelector('body') || document.getElementById('app') || document.getElementById('root');
-        if (main) try { main.style.pointerEvents = 'auto'; } catch (e) {}
+        if (main) try { main.style.pointerEvents = 'auto'; } catch (e) { }
         console.debug('[ensureInteractive] removed blocking overlays');
     } catch (e) {
         console.warn('[ensureInteractive] error', e);
@@ -185,7 +185,7 @@ function ensureInteractive() {
             }, { capture: true });
             window.__debugClickAttached = true;
         }
-    } catch (e) {}
+    } catch (e) { }
 }
 
 // Checkout validation helpers (global) — used by multiple event handlers and renderers
@@ -208,7 +208,7 @@ function updateCheckoutButtonState() {
         const btn = document.getElementById('checkoutBtn');
         if (!btn) return;
         btn.disabled = !isCheckoutValid() || !Array.isArray(cart) || cart.length === 0;
-    } catch (e) {}
+    } catch (e) { }
 }
 
 window.addEventListener('DOMContentLoaded', async () => {
@@ -296,7 +296,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     try {
         document.getElementById('productsGrid').innerHTML =
             '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Đang tải...</div>';
-    } catch (e) {}
+    } catch (e) { }
 
     // Load product image map and products in background; do not block UI setup
     (async () => {
@@ -389,7 +389,7 @@ function applyExchangeDraft() {
             addBtn.style.display = 'none';
         }
         // Refresh authoritative customer details (points, tier) from server
-        try { refreshCustomerDetailFromApi(exchangeDraft.customerId).catch(() => {}); } catch (e) {}
+        try { refreshCustomerDetailFromApi(exchangeDraft.customerId).catch(() => { }); } catch (e) { }
         const clearBtn = document.getElementById('clearCustomerBtn');
         if (clearBtn) {
             clearBtn.style.display = 'inline-flex';
@@ -597,7 +597,7 @@ async function loadCartStateFromServer() {
             for (const inv of invoices) {
                 const sc = inv?.selectedCustomer;
                 if (sc && sc.id && Number(sc.id) > 0) {
-                    try { await refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
+                    try { await refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) { }
                 }
             }
         } catch (e) {
@@ -664,6 +664,97 @@ function resolveApiBase() {
     }
 
     return `${window.location.origin}/api`;
+}
+
+/**
+ * Wrapper quanh fetch() tự động refresh access token khi hết hạn (401).
+ * Sử dụng giống fetch() bình thường: authFetch(url, options)
+ * - Tự thêm header Authorization nếu có accessToken
+ * - Khi gặp 401, gọi /api/auth/refresh để lấy token mới rồi retry
+ * - Nếu refresh cũng thất bại, redirect về trang login
+ */
+let _isRefreshing = false;
+let _refreshQueue = [];
+
+async function authFetch(url, options = {}) {
+    const token = sessionStorage.getItem('accessToken');
+    if (token) {
+        options.headers = options.headers || {};
+        if (typeof options.headers.set === 'function') {
+            options.headers.set('Authorization', `Bearer ${token}`);
+        } else {
+            options.headers['Authorization'] = `Bearer ${token}`;
+        }
+    }
+
+    let response = await fetch(url, options);
+
+    // Nếu không phải 401 hoặc không có refresh token thì trả về luôn
+    if (response.status !== 401) {
+        return response;
+    }
+
+    const refreshToken = sessionStorage.getItem('refreshToken');
+    if (!refreshToken) {
+        sessionStorage.clear();
+        window.location.href = '/pages/login.html';
+        return response;
+    }
+
+    // Tránh gọi refresh đồng thời nhiều lần
+    if (_isRefreshing) {
+        return new Promise((resolve) => {
+            _refreshQueue.push(() => {
+                const newToken = sessionStorage.getItem('accessToken');
+                if (newToken) {
+                    options.headers = options.headers || {};
+                    options.headers['Authorization'] = `Bearer ${newToken}`;
+                }
+                resolve(fetch(url, options));
+            });
+        });
+    }
+
+    _isRefreshing = true;
+
+    try {
+        const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken })
+        });
+
+        if (refreshRes.ok) {
+            const data = await refreshRes.json();
+            sessionStorage.setItem('accessToken', data.accessToken);
+            if (data.refreshToken) {
+                sessionStorage.setItem('refreshToken', data.refreshToken);
+            }
+
+            // Retry request gốc với token mới
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = `Bearer ${data.accessToken}`;
+            response = await fetch(url, options);
+
+            // Giải phóng queue
+            _refreshQueue.forEach(cb => cb());
+            _refreshQueue = [];
+
+            return response;
+        } else {
+            // Refresh token cũng hết hạn → đăng xuất
+            sessionStorage.clear();
+            window.location.href = '/pages/login.html';
+            return response;
+        }
+    } catch (err) {
+        console.error('[authFetch] Refresh token failed:', err);
+        sessionStorage.clear();
+        window.location.href = '/pages/login.html';
+        return response;
+    } finally {
+        _isRefreshing = false;
+    }
 }
 
 function setupAppMenuModal() {
@@ -960,7 +1051,7 @@ async function loadProducts() {
         // Cache-busting: thêm timestamp để luôn lấy data mới nhất
         const timestamp = Date.now();
         const response = await fetch(`${API_BASE}/inventory/shelves?_t=${timestamp}`, {
-            headers: { 
+            headers: {
                 'Authorization': `Bearer ${sessionStorage.getItem('accessToken')}`,
                 'Cache-Control': 'no-cache, no-store, must-revalidate',
                 'Pragma': 'no-cache'
@@ -998,10 +1089,10 @@ async function loadProducts() {
                 unit: shelf.unit || 'cái',
                 status: 'active'
             }));
-        
+
         console.log('[loadProducts] Loaded from shelves (quantity > 0):', products.length);
         console.log('[loadProducts] Products:', products.map(p => `${p.code} (${p.name}) - qty: ${p.stock}`));
-        
+
         if (products.length === 0) {
             console.warn('[loadProducts] No products on shelves with quantity > 0');
             // Try alternative endpoint (through gateway) in case API_BASE is not reachable
@@ -1034,7 +1125,7 @@ async function loadProducts() {
                 products = FALLBACK_PRODUCTS.slice();
             }
         }
-        
+
         await loadPromotionIndex();
         renderCategoryList();
         filterProducts();
@@ -1200,7 +1291,7 @@ function buildProductImageMarkup(product) {
     const safeName = escapeHtml(product?.name || 'Sản phẩm');
     // Add simple onerror fallback that switches to a safe SVG data-URI placeholder
     const encoded = encodeURI(imageSrc);
-    return `<div class="product-image-bg" data-product-name="${safeName}" data-product-id="${product?.id||''}" style="background-image:url('${encoded}');"></div>`;
+    return `<div class="product-image-bg" data-product-name="${safeName}" data-product-id="${product?.id || ''}" style="background-image:url('${encoded}');"></div>`;
 }
 
 async function loadCustomers() {
@@ -1313,7 +1404,7 @@ async function resolveMissingImagesOnPage(maxPerRun = 40) {
                         productImageMap.set(key, found);
                         productImageEntries.push({ key, path: found });
                     }
-                } catch (e) {}
+                } catch (e) { }
             }
             count++;
         }
@@ -1404,35 +1495,35 @@ async function addToCart(productId, productName, productPrice) {
     const product = products.find(p => p.id === productId) || {};
     const stock = getStockValue(product);
     const basePrice = Number(product.price) || productPrice || 0;
-    
+
     console.log('[addToCart] Input:', { productId, productName, productPrice, qty, basePrice, product });
-    
+
     // Check if product has promotion
     let effectivePrice = basePrice;
     let promoId = null;
     let exceedsPromoQuota = false;
-    
+
     if (promotionIndex && product.id != null) {
         const promoInfo = promotionIndex.get(product.id);
         console.log('[addToCart] promoInfo:', promoInfo);
-        
+
         if (promoInfo?.promo) {
             promoId = promoInfo.promo.id;
-            
+
             // Check if adding this quantity would exceed promotion quota
             const maxQty = Number(promoInfo.promo.maxQuantity);
             const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
-            
+
             if (Number.isFinite(maxQty) && maxQty > 0) {
                 const cartQtyForThisProduct = (cart.find(item => item.productId === productId && !item.isFreeGift)?.quantity || 0);
                 const totalQtyWillBe = cartQtyForThisProduct + qty;
                 const remaining = Math.max(0, maxQty - usedQty - cartQtyForThisProduct);
-                
+
                 if (totalQtyWillBe > (maxQty - usedQty)) {
                     // Promotion quota exceeded - ask for confirmation
                     const promoName = promoInfo.promo.name || promoInfo.promo.code || 'Khuyến mãi';
                     const confirmMessage = `Khuyến mãi "${promoName}" chỉ còn ${remaining} sản phẩm. Bạn muốn thêm ${qty} sản phẩm không?\n\nSố lượng vượt mức sẽ được tính giá gốc.`;
-                    
+
                     if (!confirm(confirmMessage)) {
                         console.log('[addToCart] User cancelled - promotion quota exceeded');
                         return;
@@ -1441,7 +1532,7 @@ async function addToCart(productId, productName, productPrice) {
                     console.log('[addToCart] User confirmed - proceeding with mixed pricing');
                 }
             }
-            
+
             // For BUNDLE, must calculate with actual quantity
             if (normalizeDiscountType(promoInfo.promo.discountType) === 'BUNDLE') {
                 const cartQtyForThisProduct = (cart.find(item => item.productId === productId && !item.isFreeGift)?.quantity || 0);
@@ -1455,7 +1546,7 @@ async function addToCart(productId, productName, productPrice) {
             }
         }
     }
-    
+
     const resolvedPrice = Number.isFinite(effectivePrice) ? effectivePrice : (productPrice || 0);
     console.log('[addToCart] Final resolvedPrice:', resolvedPrice);
 
@@ -1467,7 +1558,7 @@ async function addToCart(productId, productName, productPrice) {
             const newQty = oldQty + qty;
             existingItem.quantity = newQty;
             existingItem.stock = stock;
-            
+
             // Recalculate price for promos with quota
             if (promotionIndex && product.id != null) {
                 const promoInfo = promotionIndex.get(product.id);
@@ -1479,12 +1570,12 @@ async function addToCart(productId, productName, productPrice) {
                     } else {
                         newItemPrice = getPromoPrice(basePrice, promoInfo.promo, 1, oldQty);
                     }
-                    
+
                     // Calculate average price: (old_total + new_items_total) / new_qty
                     const oldTotalPrice = oldQty * oldPrice;
                     const newTotalPrice = oldTotalPrice + (qty * newItemPrice);
                     existingItem.productPrice = newTotalPrice / newQty;
-                    
+
                     console.log('[addToCart] Updating existing item price - oldQty:', oldQty, 'oldPrice:', oldPrice, 'newItemPrice:', newItemPrice, 'averagePrice:', existingItem.productPrice);
                     existingItem.promoId = promoInfo?.promo?.id || null;
                 } else {
@@ -1524,7 +1615,7 @@ async function addToCart(productId, productName, productPrice) {
 
     renderCart();
     updateTotal();
-    
+
     // Ph×n t×ch combo sau khi th×m s?n ph?m
     await analyzeCartForCombo();
 
@@ -1834,12 +1925,12 @@ async function payOrder(orderId) {
         }
         alert('Đã thanh toán chuyển khoản được xác nhận.');
         hideTransferQrModal();
-        
+
         // Reset points after payment
         usePointsEnabled = false;
         pointsToUse = 0;
         updatePointsDisplayInfo();
-        
+
         // After confirming transfer payment, clear items but keep selected customer
         clearCart(false);
         saveActiveInvoiceState();
@@ -1917,7 +2008,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // shipping fields toggle behavior
     // shipping toggle removed; checkout uses direct customer input fields now
-    
+
     // Setup points modal
     setupUsePointsModal();
 });
@@ -1929,31 +2020,31 @@ function setupUsePointsModal() {
     const cancelBtn = document.getElementById('cancelUsePointsBtn');
     const confirmBtn = document.getElementById('confirmUsePointsBtn');
     const usePointsInput = document.getElementById('usePointsInput');
-    
+
     if (!usePointsBtn || !usePointsModal) return;
-    
+
     // Open modal when button clicked
     usePointsBtn.addEventListener('click', () => {
         const currentPoints = getCustomerPoints(selectedCustomer) || 0;
         const tier = getEffectiveTier(selectedCustomer);
         const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
-        
+
         if (currentPoints < 100) {
             alert('Khách hàng cần có ít nhất 100 điểm để sử dụng!');
             return;
         }
-        
+
         document.getElementById('usePointsCurrentPoints').textContent = formatCompactNumber(currentPoints);
         document.getElementById('usePointsRateInfo').textContent = formatPrice(rate);
-        
+
         // Reset input
         usePointsInput.value = '';
         usePointsInput.focus();
-        
+
         usePointsModal.classList.add('show');
         usePointsModal.setAttribute('aria-hidden', 'false');
     });
-    
+
     // Close modal
     const closeModal = () => {
         usePointsModal.classList.remove('show');
@@ -1961,48 +2052,48 @@ function setupUsePointsModal() {
         usePointsEnabled = false;
         pointsToUse = 0;
     };
-    
+
     closeBtn?.addEventListener('click', closeModal);
     cancelBtn?.addEventListener('click', closeModal);
-    
+
     // Update discount preview on input change
     usePointsInput?.addEventListener('input', () => {
         updatePointsDiscountPreview();
     });
-    
+
     // Handle confirm
     confirmBtn?.addEventListener('click', () => {
         const pointsInput = parseInt(usePointsInput.value) || 0;
         const currentPoints = getCustomerPoints(selectedCustomer) || 0;
-        
+
         if (pointsInput <= 0) {
             alert('Vui lòng nhập số điểm lớn hơn 0');
             return;
         }
-        
+
         if (pointsInput > currentPoints) {
             alert('Số điểm sử dụng không được vượt quá điểm hiện có');
             return;
         }
-        
+
         if (pointsInput % 100 !== 0) {
             alert('Số điểm phải là bội số của 100');
             return;
         }
-        
+
         // Save points to use
         usePointsEnabled = true;
         pointsToUse = pointsInput;
-        
+
         // Close modal without resetting flags
         usePointsModal.classList.remove('show');
         usePointsModal.setAttribute('aria-hidden', 'true');
-        
+
         // Update checkout display
         updatePointsDisplayInfo();
         updateTotal();
     });
-    
+
     // Close modal when clicking outside
     usePointsModal.addEventListener('click', (e) => {
         if (e.target === usePointsModal) {
@@ -2179,17 +2270,17 @@ function buildReceiptData(orderResponse, options = {}) {
             if (promoInfo?.promo) {
                 const maxQty = Number(promoInfo.promo.maxQuantity);
                 const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
-                
+
                 if (Number.isFinite(maxQty) && maxQty > 0) {
                     const remaining = Math.max(0, maxQty - usedQty);
                     const promoQty = Math.min(item.quantity, remaining);
                     const regularQty = item.quantity - promoQty;
-                    
+
                     // Get base price from product
                     const product = products.find(p => p.id === item.productId);
                     const basePrice = product ? Number(product.price) : item.productPrice;
                     const promoPrice = getPromoPrice(basePrice, promoInfo.promo, 1, 0);
-                    
+
                     console.log('[buildReceiptData] Split item:', {
                         name: item.productName,
                         totalQty: item.quantity,
@@ -2199,7 +2290,7 @@ function buildReceiptData(orderResponse, options = {}) {
                         promoPrice,
                         promoCode: promoInfo.promo.code
                     });
-                    
+
                     // Add promo portion
                     if (promoQty > 0) {
                         receiptItems.push({
@@ -2211,7 +2302,7 @@ function buildReceiptData(orderResponse, options = {}) {
                             isPromo: true
                         });
                     }
-                    
+
                     // Add regular portion (if any)
                     if (regularQty > 0) {
                         receiptItems.push({
@@ -2223,12 +2314,12 @@ function buildReceiptData(orderResponse, options = {}) {
                             isPromo: false
                         });
                     }
-                    
+
                     continue;
                 }
             }
         }
-        
+
         // No quota split needed - add as is
         receiptItems.push({
             productId: item.productId,
@@ -2369,10 +2460,10 @@ async function loadSupportMessages() {
     if (!res.ok) return;
 
     const data = await res.json();
-    
+
     // Mark all messages as read FIRST
     await markSupportMessagesAsRead();
-    
+
     // Then render and update badge
     renderSupportMessages(data || []);
     updateSupportUnreadBadge(0);
@@ -2434,13 +2525,13 @@ function clearSupportPolling() {
 function updateSupportUnreadBadge(count) {
     const btn = document.getElementById('contactSupportBtn');
     if (!btn) return;
-    
+
     supportUnreadCount = count;
-    
+
     // Remove old badge if exists
     const oldBadge = btn.querySelector('.unread-badge');
     if (oldBadge) oldBadge.remove();
-    
+
     // Add new badge if count > 0
     if (count > 0) {
         const badge = document.createElement('span');
@@ -2472,7 +2563,7 @@ function showToastNotification(message, type = 'info') {
         console.warn('Toast container not found');
         return;
     }
-    
+
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
@@ -2486,9 +2577,9 @@ function showToastNotification(message, type = 'info') {
         animation: slideIn 0.3s ease-out;
         font-size: 14px;
     `;
-    
+
     container.appendChild(toast);
-    
+
     setTimeout(() => {
         toast.style.opacity = '0';
         toast.style.transition = 'opacity 0.3s';
@@ -2528,7 +2619,7 @@ async function openSupportModal() {
     supportPollTimer = setInterval(() => {
         loadSupportMessages();
     }, 5000);
-    
+
     // Start global polling for unread messages (even when modal is closed)
     startGlobalUnreadPolling();
 }
@@ -2539,7 +2630,7 @@ function closeSupportModal() {
     modal.classList.remove('show');
     modal.setAttribute('aria-hidden', 'true');
     clearSupportPolling();
-    
+
     // Mark as read one more time before closing to be sure
     markSupportMessagesAsRead().then(() => {
         // Reset badge after marking
@@ -2576,9 +2667,9 @@ function setupContactSupport() {
         resolveOwnerContact().then(() => {
             const ownerId = getValidSupportOwnerId();
             if (ownerId) {
-                markSupportMessagesAsRead().catch(() => {});
+                markSupportMessagesAsRead().catch(() => { });
             }
-        }).catch(() => {});
+        }).catch(() => { });
     }
 }
 
@@ -2586,51 +2677,51 @@ function startGlobalUnreadPolling() {
     // Only start polling if user is logged in
     const currentUserId = Number(sessionStorage.getItem('userId'));
     const token = sessionStorage.getItem('accessToken') || '';
-    
+
     if (!Number.isFinite(currentUserId) || !token) {
         return; // User not logged in yet
     }
-    
+
     if (globalUnreadPollTimer) clearInterval(globalUnreadPollTimer);
-    
+
     globalUnreadPollTimer = setInterval(async () => {
         const userId = Number(sessionStorage.getItem('userId'));
         const authToken = sessionStorage.getItem('accessToken') || '';
         let ownerId = getValidSupportOwnerId();
-        
+
         if (!ownerId) {
-            await resolveOwnerContact().catch(() => {});
+            await resolveOwnerContact().catch(() => { });
             ownerId = getValidSupportOwnerId();
         }
-        
+
         if (Number.isFinite(userId) && ownerId && authToken) {
             try {
                 const res = await fetch(`${API_BASE}/messages/${userId}/${ownerId}`, {
                     headers: { 'Authorization': `Bearer ${authToken}` }
                 });
-                
+
                 if (res.status === 401) {
                     // User logged out, stop polling
                     clearInterval(globalUnreadPollTimer);
                     globalUnreadPollTimer = null;
                     return;
                 }
-                
+
                 if (res.ok) {
                     const data = await res.json();
                     const unreadCount = (data || []).filter(m => m.isRead !== true && Number(m.senderId) === ownerId).length;
-                    
+
                     // Only update badge when modal is CLOSED
                     const modalEl = document.getElementById('contactSupportModal');
                     if (modalEl && !modalEl.classList.contains('show')) {
                         // Show badge với số tin nhắn chưa đọc
                         updateSupportUnreadBadge(unreadCount);
-                        
+
                         // Show notification for new messages
                         if (unreadCount > 0 && unreadCount > lastMessageCount) {
                             showToastNotification('Chăm sóc khách hàng đã gửi tin nhắn', 'info');
                         }
-                        
+
                         lastMessageCount = unreadCount;
                     }
                 }
@@ -2644,11 +2735,11 @@ function startGlobalUnreadPolling() {
 function mapPaymentMethod(method) {
     switch (method) {
         case 'CASH':
-            return 'Tiền mặt';
+            return 'Thanh toán khi nhận hàng';
         case 'TRANSFER':
-            return 'Chuyển khoản';
+            return 'Thanh toán trực tuyến';
         case 'CARD':
-            return 'Thẻ';
+            return 'Thẻ ngân hàng';
         default:
             return method || '-';
     }
@@ -2687,19 +2778,19 @@ async function loadPromotionIndex(forceRefresh = false) {
                 })));
 
         const [promoList, productList] = await Promise.all([promoPromise, productPromise]);
-        
+
         console.log('[loadPromotionIndex] Loaded promotions:', promoList.length);
-        
+
         const activePromos = (promoList || []).filter(isPromotionActive);
-        
+
         // Luu t?t c? promotions cho AI combo
         allPromotions = activePromos;
         console.log('[loadPromotionIndex] Saved allPromotions for AI:', allPromotions.length);
-        
+
         promotionIndex = buildPromotionIndex(activePromos, productList || []);
-        
+
         console.log('[loadPromotionIndex] Built index size:', promotionIndex.size);
-        
+
         return promotionIndex;
     } catch (err) {
         console.error('[loadPromotionIndex] Error:', err);
@@ -2717,18 +2808,18 @@ function buildPromotionIndex(promos, productList) {
     const activePromos = (promos || []).filter(promo => {
         const max = Number(promo?.maxQuantity);
         const used = Math.max(0, Number(promo?.usedQuantity || 0));
-        
+
         // If no max quantity, always active
         if (!Number.isFinite(max) || max <= 0) {
             return true;
         }
-        
+
         // If used >= max, promote is exhausted
         if (used >= max) {
             console.log(`[buildPromotionIndex] Filtering out exhausted promotion: ${promo.code} (${used}/${max})`);
             return false;
         }
-        
+
         return true;
     });
 
@@ -2783,14 +2874,14 @@ function buildPromotionIndex(promos, productList) {
 
 function selectBestPromotion(product, promos) {
     const basePrice = Number(product?.price);
-    
+
     // Prioritize BUNDLE promotions since they depend on quantity
     const bundlePromo = (promos || []).find(p => normalizeDiscountType(p.discountType) === 'BUNDLE');
     if (bundlePromo) {
         console.log('[selectBestPromotion] Found BUNDLE promo, prioritizing it');
         return { promo: bundlePromo, price: basePrice }; // Return base price, will recalc with quantity later
     }
-    
+
     // For other promo types, select best price
     const candidates = (promos || []).map((promo) => {
         const price = getPromoPrice(basePrice, promo);
@@ -2807,25 +2898,25 @@ function selectBestPromotion(product, promos) {
 }
 
 function getPromoPrice(basePrice, promo, quantity = 1, currentCartQty = 0) {
-    console.log('[getPromoPrice] FULL INPUT:', JSON.stringify({ 
-        basePrice, 
-        promoType: promo?.discountType, 
+    console.log('[getPromoPrice] FULL INPUT:', JSON.stringify({
+        basePrice,
+        promoType: promo?.discountType,
         promoCode: promo?.code,
         promoName: promo?.name,
         maxQuantity: promo?.maxQuantity,
         usedQuantity: promo?.usedQuantity,
         currentCartQty: currentCartQty,
         bundleItems: promo?.bundleItems,
-        quantity 
+        quantity
     }, null, 2));
-    
+
     if (!Number.isFinite(basePrice) || !promo) {
         console.log('[getPromoPrice] Invalid input - basePrice:', basePrice, 'promo:', promo);
         return NaN;
     }
-    
+
     const qty = Math.max(1, Number(quantity) || 1);
-    
+
     // Check quota first
     const maxQty = Number(promo.maxQuantity);
     const backendUsedQty = Math.max(0, Number(promo.usedQuantity || 0));
@@ -2833,23 +2924,23 @@ function getPromoPrice(basePrice, promo, quantity = 1, currentCartQty = 0) {
     const usedQty = backendUsedQty + Math.max(0, Number(currentCartQty || 0));
     let appliedQty = qty;  // Quantity that gets promotion
     let regularQty = 0;    // Quantity that gets base price
-    
+
     if (Number.isFinite(maxQty) && maxQty > 0) {
         const remaining = Math.max(0, maxQty - usedQty);
         appliedQty = Math.min(qty, remaining);
         regularQty = qty - appliedQty;
         console.log('[getPromoPrice] Quota check - max:', maxQty, 'backendUsed:', backendUsedQty, 'cartQty:', currentCartQty, 'totalUsed:', usedQty, 'remaining:', remaining, 'appliedQty:', appliedQty, 'regularQty:', regularQty);
     }
-    
+
     // If no promotion can be applied
     if (appliedQty === 0) {
         console.log('[getPromoPrice] No quota remaining, returning basePrice:', basePrice);
         return basePrice;
     }
-    
+
     const value = Number(promo.discountValue);
     let discountedUnitPrice = basePrice;  // Price per unit with discount
-    
+
     switch (normalizeDiscountType(promo.discountType)) {
         case 'PERCENT':
             if (!Number.isFinite(value)) return NaN;
@@ -2862,7 +2953,7 @@ function getPromoPrice(basePrice, promo, quantity = 1, currentCartQty = 0) {
         case 'BUNDLE':
             // Bundle logic: "Mua X tặng Y"
             console.log('[getPromoPrice BUNDLE] bundleItems:', promo.bundleItems);
-            
+
             if (!promo.bundleItems || promo.bundleItems.length === 0) {
                 console.log('[getPromoPrice BUNDLE] No bundleItems, returning basePrice:', basePrice);
                 return basePrice;
@@ -2872,24 +2963,24 @@ function getPromoPrice(basePrice, promo, quantity = 1, currentCartQty = 0) {
             const mainQty = Number(bundle.mainQuantity) || 3;  // Mua 3
             const giftQty = Number(bundle.giftQuantity) || 1;  // Tặng 1
             const setSize = mainQty + giftQty;  // 1 set = 4 chai
-            
+
             console.log('[getPromoPrice BUNDLE] bundle config:', { mainQty, giftQty, setSize, appliedQty, regularQty });
-            
+
             // Only calculate bundle for appliedQty
             const completeSets = Math.floor(appliedQty / setSize);
             const remainingAfterSets = appliedQty % setSize;
-            
+
             const bundlePrice = (completeSets * mainQty * basePrice) + (remainingAfterSets * basePrice) + (regularQty * basePrice);
             const finalUnitPrice = bundlePrice / qty;
-            
-            console.log('[getPromoPrice BUNDLE] calculation:', { 
-                completeSets, 
+
+            console.log('[getPromoPrice BUNDLE] calculation:', {
+                completeSets,
                 remainingAfterSets,
                 regularQty,
-                bundlePrice, 
-                finalUnitPrice 
+                bundlePrice,
+                finalUnitPrice
             });
-            
+
             return Math.max(0, finalUnitPrice);
         case 'FREE_GIFT':
             discountedUnitPrice = basePrice;
@@ -2897,13 +2988,13 @@ function getPromoPrice(basePrice, promo, quantity = 1, currentCartQty = 0) {
         default:
             return NaN;
     }
-    
+
     // Mixed price calculation: appliedQty with discount + regularQty at base price
     const totalPrice = (appliedQty * discountedUnitPrice) + (regularQty * basePrice);
     const finalUnitPrice = totalPrice / qty;
-    
+
     console.log('[getPromoPrice] Final calculation - appliedQty:', appliedQty, 'regularQty:', regularQty, 'discountedUnit:', discountedUnitPrice, 'totalPrice:', totalPrice, 'finalUnit:', finalUnitPrice);
-    
+
     return Math.max(0, finalUnitPrice);
 }
 
@@ -2996,7 +3087,7 @@ function renderCart() {
         }
         toggleEmptyState(true);
         // Ensure checkout button state reflects empty cart
-        try { updateCheckoutButtonState(); } catch (e) {}
+        try { updateCheckoutButtonState(); } catch (e) { }
         return;
     }
 
@@ -3024,7 +3115,7 @@ function renderCart() {
             </div>
         `;
         }
-        
+
         // Kiểm tra nếu là quà tặng
         if (item.isFreeGift) {
             // Tự động lookup tên nếu là Unknown
@@ -3039,7 +3130,7 @@ function renderCart() {
                     displayName = `Sản phẩm #${item.productId}`;
                 }
             }
-            
+
             return `
             <div class="cart-row gift-item">
                 <span>${idx + 1}</span>
@@ -3072,14 +3163,14 @@ function renderCart() {
     `;
     }).join('');
     // Update checkout button state whenever cart is re-rendered
-    try { updateCheckoutButtonState(); } catch (e) {}
+    try { updateCheckoutButtonState(); } catch (e) { }
 }
 
 function updateQty(idx, change) {
     if (cart[idx] && !cart[idx].isReturnItem) {
         const oldQty = cart[idx].quantity;
         const newQty = Math.max(1, oldQty + change);
-        
+
         // Check promotion quota if quantity is increasing
         if (newQty > oldQty && cart[idx].promoId) {
             const promoInfo = promotionIndex.get(cart[idx].productId);
@@ -3087,15 +3178,15 @@ function updateQty(idx, change) {
                 const maxQty = Number(promoInfo.promo.maxQuantity);
                 const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
                 const effectiveUsedQty = usedQty + oldQty;  // Account for items in cart
-                
+
                 if (Number.isFinite(maxQty) && maxQty > 0) {
                     const remaining = Math.max(0, maxQty - effectiveUsedQty);
-                    
+
                     if ((newQty - oldQty) > remaining) {
                         // Promotion quota exceeded - ask for confirmation
                         const promoName = promoInfo.promo.name || promoInfo.promo.code || 'Khuyến mãi';
                         const confirmMessage = `Khuyến mãi "${promoName}" chỉ còn ${remaining} sản phẩm. Bạn muốn tăng lên ${newQty} sản phẩm không?\n\nSố lượng vượt mức sẽ được tính giá gốc.`;
-                        
+
                         if (!confirm(confirmMessage)) {
                             console.log('[updateQty] User cancelled - promotion quota exceeded');
                             return;
@@ -3105,7 +3196,7 @@ function updateQty(idx, change) {
                 }
             }
         }
-        
+
         // Recalculate price if this item has any promotion (especially with quota)
         const item = cart[idx];
         if (item.promoId) {
@@ -3115,20 +3206,20 @@ function updateQty(idx, change) {
                 const product = products.find(p => p.id === item.productId);
                 const basePrice = product ? Number(product.price) : item.productPrice;
                 const quantityChange = newQty - oldQty;
-                
+
                 console.log('[updateQty] Recalculating price:', { productId: item.productId, basePrice, oldQty, newQty, quantityChange, promoCode: promoInfo.promo.code });
-                
+
                 // Calculate price for the quantity being added in this change
                 const newItemAvgPrice = getPromoPrice(basePrice, promoInfo.promo, quantityChange, oldQty);
                 // Update total price: old items at old price + new items at new price
                 const oldTotalPrice = oldQty * item.productPrice;
                 const newTotalPrice = oldTotalPrice + (quantityChange * newItemAvgPrice);
                 item.productPrice = newTotalPrice / newQty;
-                
+
                 console.log('[updateQty] Price updated - oldAvg:', oldTotalPrice / oldQty, 'newItemAvg:', newItemAvgPrice, 'finalAvg:', item.productPrice);
             }
         }
-        
+
         cart[idx].quantity = newQty;
         renderCart();
         updateTotal();
@@ -3141,7 +3232,7 @@ function setQty(idx, value) {
     if (cart[idx] && !cart[idx].isReturnItem) {
         const oldQty = cart[idx].quantity;
         const newQty = Math.max(1, qty);
-        
+
         // Check promotion quota if quantity is increasing
         if (newQty > oldQty && cart[idx].promoId) {
             const promoInfo = promotionIndex.get(cart[idx].productId);
@@ -3149,15 +3240,15 @@ function setQty(idx, value) {
                 const maxQty = Number(promoInfo.promo.maxQuantity);
                 const usedQty = Math.max(0, Number(promoInfo.promo.usedQuantity || 0));
                 const effectiveUsedQty = usedQty + oldQty;  // Account for items in cart
-                
+
                 if (Number.isFinite(maxQty) && maxQty > 0) {
                     const remaining = Math.max(0, maxQty - effectiveUsedQty);
-                    
+
                     if ((newQty - oldQty) > remaining) {
                         // Promotion quota exceeded - ask for confirmation
                         const promoName = promoInfo.promo.name || promoInfo.promo.code || 'Khuyến mãi';
                         const confirmMessage = `Khuyến mãi "${promoName}" chỉ còn ${remaining} sản phẩm. Bạn muốn thay đổi lên ${newQty} sản phẩm không?\n\nSố lượng vượt mức sẽ được tính giá gốc.`;
-                        
+
                         if (!confirm(confirmMessage)) {
                             console.log('[setQty] User cancelled - promotion quota exceeded');
                             return;
@@ -3167,7 +3258,7 @@ function setQty(idx, value) {
                 }
             }
         }
-        
+
         // Recalculate price if this item has any promotion (especially with quota)
         const item = cart[idx];
         if (item.promoId) {
@@ -3177,24 +3268,24 @@ function setQty(idx, value) {
                 const product = products.find(p => p.id === item.productId);
                 const basePrice = product ? Number(product.price) : item.productPrice;
                 const quantityChange = newQty - oldQty;
-                
+
                 if (quantityChange !== 0) {
                     console.log('[setQty] Recalculating price:', { productId: item.productId, basePrice, oldQty, newQty, quantityChange, promoCode: promoInfo.promo.code });
-                    
+
                     // Calculate price for the quantity being added/removed in this change
                     const newItemAvgPrice = getPromoPrice(basePrice, promoInfo.promo, Math.abs(quantityChange), oldQty);
                     // Update total price: old items at old price + new items at new price
                     const oldTotalPrice = oldQty * item.productPrice;
                     const newTotalPrice = oldTotalPrice + (quantityChange * newItemAvgPrice);
                     item.productPrice = newTotalPrice / newQty;
-                    
+
                     console.log('[setQty] Price updated - oldAvg:', oldTotalPrice / oldQty, 'changeAvg:', newItemAvgPrice, 'finalAvg:', item.productPrice);
                 }
             }
         }
-        
+
         cart[idx].quantity = newQty;
-        
+
         // Nếu giảm số lượng, kiểm tra và xóa quà tặng không hợp lệ ngay
         if (newQty < oldQty) {
             console.log('[setQty] Quantity decreased, checking gifts...');
@@ -3204,10 +3295,10 @@ function setQty(idx, value) {
                 analyzeCartForCombo();
             }, 50);
         }
-        
+
         renderCart();
         updateTotal();
-        
+
         // Phân tích lại combo sau khi thay đổi số lượng
         setTimeout(() => analyzeCartForCombo(), 100);
         queuePersistCartState();
@@ -3216,18 +3307,18 @@ function setQty(idx, value) {
 
 function removeFromCart(idx) {
     if (cart[idx]?.isReturnItem) return;
-    
+
     const removedItem = cart[idx];
     const removedProductId = removedItem.productId;
-    
+
     // Xóa sản phẩm
     cart.splice(idx, 1);
-    
+
     // Kiểm tra xem còn sản phẩm này trong giỏ không
-    const hasRemainingProduct = cart.some(item => 
+    const hasRemainingProduct = cart.some(item =>
         item.productId === removedProductId && !item.isFreeGift
     );
-    
+
     // Nếu không còn sản phẩm này, xóa luôn quà tặng liên quan
     if (!hasRemainingProduct) {
         // Tìm và xóa các quà tặng có thể liên quan đến sản phẩm này
@@ -3239,14 +3330,14 @@ function removeFromCart(idx) {
                 giftsToRemove.push(i);
             }
         });
-        
+
         // Xóa các quà từ cuối lên để không bị lỗi index
         giftsToRemove.sort((a, b) => b - a).forEach(i => {
             const giftName = cart[i].productName;
             cart.splice(i, 1);
             console.log('[removeFromCart] ❌ Removed gift:', giftName);
         });
-        
+
         if (giftsToRemove.length > 0) {
             ComboPromotionUI.showNotification(
                 `⚠️ Đã xóa ${giftsToRemove.length} quà tặng (không đủ điều kiện)`,
@@ -3254,10 +3345,10 @@ function removeFromCart(idx) {
             );
         }
     }
-    
+
     renderCart();
     updateTotal();
-    
+
     // Phân tích lại combo sau khi xóa sản phẩm
     setTimeout(() => analyzeCartForCombo(), 100);
     queuePersistCartState();
@@ -3297,13 +3388,13 @@ function clearSelectedCustomer(options = {}) {
     try {
         localStorage.removeItem(getSelectedCustomerStorageKey());
         localStorage.removeItem('selected_customer_state');
-    } catch (e) {}
-    
+    } catch (e) { }
+
     // Reset points usage
     usePointsEnabled = false;
     pointsToUse = 0;
     updatePointsDisplayInfo();
-    
+
     const selectedView = document.getElementById('selectedCustomer');
     if (selectedView) {
         selectedView.textContent = 'Khách lẻ';
@@ -3366,7 +3457,7 @@ function updateTotal() {
         const memberDiscount = memberSummary.discount;
         const pointsUsed = memberSummary.pointsUsed;
         const total = Math.max(0, discountedSubtotal - memberDiscount);
-        
+
         setText('subtotal', formatPrice(baseSubtotal));
         setText('promoAmount', formatPrice(promoValue));
         setText('totalAmount', formatPrice(total));
@@ -3381,7 +3472,7 @@ function updateTotal() {
             const pointsToAdd = Math.max(0, Math.floor(total / POINTS_EARN_RATE_VND));
             if (pointsCurrentEl) pointsCurrentEl.textContent = formatCompactNumber(getCustomerPoints(selectedCustomer));
             if (pointsEarnEl) pointsEarnEl.textContent = formatCompactNumber(pointsToAdd);
-        } catch (e) {}
+        } catch (e) { }
         updateChangeDue(total);
         setDefaultTierByTotal(total);
     } catch (err) {
@@ -3405,7 +3496,7 @@ function showPointsAdded(pointsAdded) {
             if (!selectedCustomer) selectedCustomer = { id: 0, name: 'Khách lẻ', phone: '-', totalPoints: 0, monthlyPoints: 0, tier: '' };
             selectedCustomer.totalPoints = Number.isFinite(Number(newTotal)) ? Number(newTotal) : newTotal;
             selectedCustomer.monthlyPoints = (Number.isFinite(Number(selectedCustomer.monthlyPoints)) ? Number(selectedCustomer.monthlyPoints) : 0) + pointsAdded;
-        } catch (e) {}
+        } catch (e) { }
 
         // update displayed current points immediately
         pointsCurrentEl.textContent = formatCompactNumber(newTotal);
@@ -3424,7 +3515,7 @@ function showPointsAdded(pointsAdded) {
 
         // fade out and remove after a short delay
         setTimeout(() => badge.classList.add('points-added-fade'), 2100);
-        setTimeout(() => { try { badge.remove(); } catch (e) {} }, 2600);
+        setTimeout(() => { try { badge.remove(); } catch (e) { } }, 2600);
     } catch (e) {
         console.warn('showPointsAdded failed', e);
     }
@@ -3439,7 +3530,7 @@ async function refreshSelectedCustomerPointsForOrder(order) {
     if (!order) return;
     if (selectedCustomer?.id && Number(selectedCustomer.id) > 0) {
         await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
-        try { await persistCartStateNow(); } catch (e) {}
+        try { await persistCartStateNow(); } catch (e) { }
         return;
     }
     const normalizedOrderPhone = normalizePhoneForOrder(order.customerPhone || order.customer_phone || '');
@@ -3447,19 +3538,19 @@ async function refreshSelectedCustomerPointsForOrder(order) {
 
     if (order.customerId) {
         await refreshCustomerDetailFromApi(order.customerId);
-        try { await persistCartStateNow(); } catch (e) {}
+        try { await persistCartStateNow(); } catch (e) { }
         return;
     }
 
     if (selectedCustomer?.id && normalizedSelectedPhone && normalizedOrderPhone && normalizedSelectedPhone === normalizedOrderPhone) {
         await refreshCustomerDetailFromApi(selectedCustomer.id);
-        try { await persistCartStateNow(); } catch (e) {}
+        try { await persistCartStateNow(); } catch (e) { }
         return;
     }
 
     if (normalizedOrderPhone) {
         await refreshSelectedCustomerByPhone(normalizedOrderPhone);
-        try { await persistCartStateNow(); } catch (e) {}
+        try { await persistCartStateNow(); } catch (e) { }
         return;
     }
 }
@@ -3606,12 +3697,12 @@ function getMemberDiscountForTotal(total) {
     let points = getCustomerPoints(selectedCustomer);
     const tier = getEffectiveTier(selectedCustomer);
     const rate = TIER_DISCOUNT_BY_100[tier] || 0;
-    
+
     // If user specified points to use, use that instead of max available
     if (usePointsEnabled && pointsToUse > 0) {
         points = Math.min(pointsToUse, points || 0);
     }
-    
+
     if (!points || points < 100 || rate <= 0) {
         return { points, pointsUsed: 0, discount: 0 };
     }
@@ -4607,7 +4698,7 @@ function setupEventListeners() {
                 fetch(`${API_BASE}/orders/cart/${userId}`, {
                     method: 'DELETE',
                     headers: getAuthHeaders()
-                }).catch(() => {});
+                }).catch(() => { });
             }
             try {
                 clearSelectedCustomer();
@@ -4733,7 +4824,7 @@ async function trackOrder() {
                             renderOrderTrackingResult(order);
                             return;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                     renderOrderSummaryResult(found);
                     return;
                 }
@@ -4844,7 +4935,7 @@ async function trackOrder() {
                     renderOrderTrackingResult(order);
                     return;
                 }
-            } catch (e) {}
+            } catch (e) { }
             // render summary if detail unavailable
             renderOrderSummaryResult(found);
             return;
@@ -4896,7 +4987,7 @@ function renderOrderTrackingResult(order) {
         }
     }
 
-    const canReceive = !['CANCELLED','RECEIVED'].includes(String(order.status || '').toUpperCase());
+    const canReceive = !['CANCELLED', 'RECEIVED'].includes(String(order.status || '').toUpperCase());
     el.innerHTML = `
         <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
         <div>Trạng thái: <strong>${status}</strong></div>
@@ -4924,7 +5015,7 @@ function canShowReceiveButton(order) {
     if (!order) return false;
     const status = String(order.status || '').trim().toUpperCase();
     if (status === 'CANCELLED' || status === 'RECEIVED') return false;
-    return !['CANCELLED','RECEIVED'].includes(status);
+    return !['CANCELLED', 'RECEIVED'].includes(status);
 }
 
 async function confirmOrderReceived(orderId) {
@@ -4958,7 +5049,7 @@ async function confirmOrderReceived(orderId) {
                     const message = `${body.message || 'Đã xác nhận nhận hàng'}${details}`;
                     alert(message);
                     if (body && body.pointsAdded != null) {
-                        try { showPointsAdded(Number(body.pointsAdded)); } catch (e) {}
+                        try { showPointsAdded(Number(body.pointsAdded)); } catch (e) { }
                     }
                 } else {
                     alert(text || 'Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
@@ -5496,7 +5587,7 @@ function applyInvoiceState(invoice) {
 
         const scPoints = Number(sc.totalPoints ?? sc.total_points ?? NaN);
         if (!Number.isFinite(scPoints) || scPoints <= 0) {
-            try { refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) {}
+            try { refreshCustomerDetailFromApi(Number(sc.id)); } catch (e) { }
         }
     } else {
         // Account-based loyalty: if a logged-in account customer is already
@@ -5756,7 +5847,7 @@ function renderOrdersInModal(orders) {
                         <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
-                        ${(!['CANCELLED','RECEIVED'].includes(String(o.status || '').toUpperCase())) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
+                        ${(!['CANCELLED', 'RECEIVED'].includes(String(o.status || '').toUpperCase())) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
                         <button class="ghost-btn small view-order-btn" data-order-id="${o.id}">Xem</button>
                         ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-btn" data-order-id="${o.id}">Hủy</button>` : ''}
                     </div>
@@ -5818,16 +5909,16 @@ function renderOrdersInModal(orders) {
                 const list = document.getElementById('orderTrackList');
                 const items = Array.isArray(order.items) ? order.items : [];
                 const itemsHtml = items
-                    ? items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName||it.name||'-')}</div><div>x${it.quantity||0}</div></div>`).join('')
+                    ? items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName || it.name || '-')}</div><div>x${it.quantity || 0}</div></div>`).join('')
                     : '';
                 const rawTotal = items.reduce((sum, it) => sum + ((Number(it.price) || 0) * (Number(it.quantity) || 0)), 0);
                 const finalTotal = Number(order.totalAmount || order.total || 0);
                 const discountTotal = Math.max(0, rawTotal - finalTotal);
                 list.innerHTML = `
-                    <div style="font-weight:700;margin-bottom:6px">Đơn: ${escapeHtml(order.invoiceNumber||('#'+order.id))}</div>
-                    <div>Trạng thái: <strong>${escapeHtml(order.status||'-')}</strong></div>
-                    <div>Khách hàng: ${escapeHtml(order.customerName||order.customer||'-')} · ${escapeHtml(order.customerPhone||'-')}</div>
-                    <div>Thời gian: ${formatDateTime(order.createdAt||new Date())}</div>
+                    <div style="font-weight:700;margin-bottom:6px">Đơn: ${escapeHtml(order.invoiceNumber || ('#' + order.id))}</div>
+                    <div>Trạng thái: <strong>${escapeHtml(order.status || '-')}</strong></div>
+                    <div>Khách hàng: ${escapeHtml(order.customerName || order.customer || '-')} · ${escapeHtml(order.customerPhone || '-')}</div>
+                    <div>Thời gian: ${formatDateTime(order.createdAt || new Date())}</div>
                     <div style="margin-top:6px">Tạm tính: <strong>${formatPrice(rawTotal)}</strong></div>
                     <div>Giảm giá: <strong>${formatPrice(discountTotal)}</strong></div>
                     <div style="margin-top:2px">Tổng thanh toán: <strong>${formatPrice(finalTotal)}</strong></div>
@@ -6070,7 +6161,7 @@ function applyCustomerSelection(customer, options = {}) {
     // with the server's values when available.
     if (customer && customer.id && (customer.totalPoints == null && customer.total_points == null)) {
         // fire-and-forget
-        try { refreshCustomerDetailFromApi(customer.id).catch(() => {}); } catch (e) {}
+        try { refreshCustomerDetailFromApi(customer.id).catch(() => { }); } catch (e) { }
     }
 
     document.querySelectorAll('.customer-item').forEach(item => {
@@ -6086,10 +6177,10 @@ function applyCustomerSelection(customer, options = {}) {
         searchInput.readOnly = true;
     }
 
-        const selectedCustomerLabel = document.getElementById('selectedCustomer');
-        if (selectedCustomerLabel) {
-            selectedCustomerLabel.textContent = selectedCustomer.name || selectedCustomer.phone || 'Khách lẻ';
-        }
+    const selectedCustomerLabel = document.getElementById('selectedCustomer');
+    if (selectedCustomerLabel) {
+        selectedCustomerLabel.textContent = selectedCustomer.name || selectedCustomer.phone || 'Khách lẻ';
+    }
 
     const addBtn = document.getElementById('addCustomerBtn');
     if (addBtn) {
@@ -6753,7 +6844,7 @@ function getProductPricing(product) {
     const hasPromo = Number.isFinite(basePrice)
         && Number.isFinite(promoPrice)
         && promoPrice < basePrice;
-    
+
     // Bundle promotions should always show as having a promo, even if price doesn't change
     const hasBundlePromo = promoType === 'BUNDLE' && promoLabel;
 
@@ -6785,7 +6876,7 @@ function buildProductPriceParts(product) {
     const promoPrice = Number.isFinite(pricing.promoPrice) ? pricing.promoPrice : basePrice;
     const hasPromo = pricing.hasPromo;
     const isBundlePromo = pricing.promoType === 'BUNDLE';
-    
+
     // Show badge for both price discounts and bundle promotions
     const remainingText = getRemainingPromoText(pricing.promo);
     const badgeText = remainingText ? `KM ${remainingText}` : 'KM';
@@ -6793,7 +6884,7 @@ function buildProductPriceParts(product) {
     const tagClass = hasPromo && !isBundlePromo ? 'origin' : 'hidden';
     const priceTag = formatPriceCompact(basePrice);
     const label = hasPromo && pricing.label ? `<span class="price-label">${escapeHtml(pricing.label)}</span>` : '';
-    
+
     // For bundle promos, show the condition instead of discounted price
     const priceBlock = hasPromo
         ? `
@@ -7745,14 +7836,14 @@ function toggleEmptyState(isEmpty) {
 function setupEmployeeSelector() {
     const button = document.getElementById('employeeSelector');
     const dropdown = document.getElementById('employeeList');
-    
+
     if (!button || !dropdown) return;
 
     button.addEventListener('click', (e) => {
         e.stopPropagation();
         const isOpen = dropdown.style.display !== 'none';
         dropdown.style.display = isOpen ? 'none' : 'block';
-        
+
         if (!isOpen && !employeesLoaded) {
             loadEmployees();
         }
@@ -7860,14 +7951,14 @@ async function analyzeCartForCombo() {
     if (isAnalyzingCombo) {
         return;
     }
-    
+
     // Ki?m tra c× promotions kh×ng
     if (!allPromotions || allPromotions.length === 0) {
         return;
     }
-    
+
     isAnalyzingCombo = true;
-    
+
     try {
         // Chuy?n d?i gi? h×ng sang format cho AI (ch? s?n ph?m th?t)
         const cartItems = cart
@@ -7878,42 +7969,42 @@ async function analyzeCartForCombo() {
                 quantity: item.quantity,
                 price: item.productPrice
             }));
-        
+
         if (cartItems.length === 0) {
             console.log('[analyzeCartForCombo] Cart is empty');
             isAnalyzingCombo = false;
             return;
         }
-        
+
         // Format promotions cho AI (truyền products để lookup tên)
         const formattedPromotions = ComboPromotionAI.formatPromotions(allPromotions, products);
-        
+
         console.log('[analyzeCartForCombo] Analyzing:', {
             cartItems: cartItems.length,
             promotions: formattedPromotions.length,
             cart: cartItems
         });
-        
+
         // G?i AI ph×n t×ch
         const result = await ComboPromotionAI.analyzeCart(cartItems, formattedPromotions);
-        
+
         console.log('[analyzeCartForCombo] AI result:', result);
-        
+
         // Hi?n th? suggestions (ELIGIBLE ho?c UPSELL)
         if (result.suggestions && result.suggestions.length > 0) {
             displayComboSuggestions(result.suggestions);
         }
-        
+
         // T? d?ng th×m/c?p nh?t qu× t?ng
         if (result.auto_add_gifts && result.auto_add_gifts.length > 0) {
             result.auto_add_gifts.forEach(gift => {
                 autoAddGiftToCart(gift);
             });
         }
-        
+
         // X×a qu× t?ng kh×ng hộp l?
         await removeIneligibleGifts(result.auto_add_gifts || []);
-        
+
     } catch (error) {
         console.error('[analyzeCartForCombo] Error:', error);
     } finally {
@@ -7943,20 +8034,20 @@ function displayComboSuggestions(suggestions) {
  */
 function handleUpsellAddMore(suggestion) {
     console.log('[handleUpsellAddMore] Adding more:', suggestion);
-    
+
     // T×m s?n ph?m trong gi?
-    const cartItem = cart.find(item => 
+    const cartItem = cart.find(item =>
         item.productId === suggestion.main_product_id && !item.isFreeGift
     );
-    
+
     if (cartItem) {
         // Tang s? lu?ng l×n d? d? nh?n qu×
         const needed = suggestion.required_quantity - suggestion.current_quantity;
         cartItem.quantity += needed;
-        
+
         renderCart();
         updateTotal();
-        
+
         // Ph×n t×ch l?i d? t? d?ng th×m qu×
         setTimeout(() => analyzeCartForCombo(), 300);
     }
@@ -8029,17 +8120,17 @@ async function autoAddGiftToCart(gift) {
         console.log('[autoAddGiftToCart] Gift skipped due to quota/eligibility:', gift);
         return;
     }
-    
+
     // Lookup tên sản phẩm từ cache hoặc API
     let productName = gift.product_name || null;
-    
+
     if (!productName && gift.product_id) {
         // Thử tìm trong cache products trước
-        const cachedProduct = products.find(p => 
-            Number(p.productId) === Number(gift.product_id) || 
+        const cachedProduct = products.find(p =>
+            Number(p.productId) === Number(gift.product_id) ||
             Number(p.id) === Number(gift.product_id)
         );
-        
+
         if (cachedProduct) {
             productName = cachedProduct.name || cachedProduct.productName || cachedProduct.product_name;
             console.log('[autoAddGiftToCart] ✓ Found in cache:', productName);
@@ -8064,20 +8155,20 @@ async function autoAddGiftToCart(gift) {
             }
         }
     }
-    
+
     // Fallback cuối cùng
     if (!productName) {
         productName = `Sản phẩm #${gift.product_id}`;
         console.warn('[autoAddGiftToCart] ⚠️ Using fallback name:', productName);
     }
-    
+
     // Kiểm tra xem quà đã có trong giỏ chưa
-    const existingGift = cart.find(item => 
-        item.productId === gift.product_id && 
+    const existingGift = cart.find(item =>
+        item.productId === gift.product_id &&
         item.isFreeGift === true &&
         item.promoId === gift.promo_id
     );
-    
+
     if (existingGift) {
         // Cập nhật số lượng và tên nếu khác
         if (existingGift.quantity !== cappedGiftQty) {
@@ -8105,10 +8196,10 @@ async function autoAddGiftToCart(gift) {
             promoCode: gift.promo_code,
             promoLabel: `🎁 ${gift.promo_name}`
         });
-        
+
         renderCart();
         updateTotal();
-        
+
         // Hiển thị thông báo
         ComboPromotionUI.showNotification(
             `✨ Đã thêm ${cappedGiftQty} ${productName} (Quà tặng)`,
@@ -8134,22 +8225,22 @@ async function removeIneligibleGifts(validGifts) {
             productName: g.product_name
         });
     });
-    
+
     let hasChanges = false;
     const itemsToRemove = [];
-    
+
     // Kiểm tra từng quà tặng trong giỏ
     cart.forEach((item, idx) => {
         if (item.isFreeGift) {
             const key = `${item.productId}-${item.promoId}`;
             const validGift = validGiftMap.get(key);
-            
+
             if (!validGift) {
                 // Quà không hợp lệ nữa - đánh dấu xóa
                 console.log('[removeIneligibleGifts] ❌ Removing ineligible gift:', item.productName);
                 itemsToRemove.push(idx);
                 hasChanges = true;
-                
+
                 // Hiển thị thông báo
                 ComboPromotionUI.showNotification(
                     `⚠️ Đã xóa quà tặng: ${item.productName} (không đủ điều kiện)`,
@@ -8167,12 +8258,12 @@ async function removeIneligibleGifts(validGifts) {
             }
         }
     });
-    
+
     // Xóa các item từ cuối lên đầu để không bị lỗi index
     itemsToRemove.sort((a, b) => b - a).forEach(idx => {
         cart.splice(idx, 1);
     });
-    
+
     // Nếu có thay đổi, render lại
     if (hasChanges) {
         console.log('[removeIneligibleGifts] ✅ Cart updated, rendering...');

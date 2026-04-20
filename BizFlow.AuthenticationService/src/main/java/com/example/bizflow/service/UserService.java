@@ -24,8 +24,32 @@ public class UserService {
 
     @SuppressWarnings("null")
     public User createUser(CreateUserRequest request) {
-        if (userRepository.findByUsername(request.getUsername()).isPresent()) {
-            throw new RuntimeException("Username already exists");
+        String username = request.getUsername() == null ? null : request.getUsername().trim();
+        String email = request.getEmail() == null ? null : request.getEmail().trim();
+        String phone = request.getPhoneNumber() == null ? null : request.getPhoneNumber().trim();
+
+        if (username == null || username.isEmpty()) {
+            throw new RuntimeException("Tên đăng nhập là bắt buộc");
+        }
+
+        if (email == null || email.isEmpty()) {
+            throw new RuntimeException("Email là bắt buộc");
+        }
+
+        if (phone == null || phone.isEmpty()) {
+            throw new RuntimeException("Số điện thoại là bắt buộc");
+        }
+
+        if (userRepository.findByUsername(username).isPresent()) {
+            throw new RuntimeException("Tên đăng nhập đã tồn tại");
+        }
+
+        if (userRepository.existsByEmail(email)) {
+            throw new RuntimeException("Email đã được sử dụng");
+        }
+
+        if (userRepository.existsByPhoneNumber(phone)) {
+            throw new RuntimeException("Số điện thoại đã được sử dụng");
         }
 
         User user = new User();

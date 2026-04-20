@@ -53,6 +53,7 @@ window.addEventListener('DOMContentLoaded',()=>{
         if(res.ok){
           const data=await res.json();
           sessionStorage.setItem('accessToken',data.accessToken);
+          sessionStorage.setItem('refreshToken',data.refreshToken);
           sessionStorage.setItem('username',data.username);
           sessionStorage.setItem('role',data.role);
           sessionStorage.setItem('userId',data.userId);
@@ -66,7 +67,7 @@ window.addEventListener('DOMContentLoaded',()=>{
           if(res.status >= 500 || res.status === 0){
             showLoginError('Lỗi kết nối máy chủ .Vui lòng thử lại sau.');
           }else{
-            showLoginError('Tên đăng nhập hoặc mật khẩu không đúng');
+            showLoginError('Tên đăng nhập, email, SĐT hoặc mật khẩu không đúng');
           }
         }
       }catch(err){
