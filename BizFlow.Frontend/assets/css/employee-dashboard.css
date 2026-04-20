@@ -410,6 +410,35 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    transition: all 0.3s ease;
+    text-decoration: none;
+}
+
+.icon-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--primary-soft);
+}
+
+.icon-btn:active {
+    transform: scale(0.95);
+}
+
+.shop-locations-btn {
+    position: relative;
+}
+
+.shop-locations-btn:hover {
+    animation: mapPulse 0.6s ease;
+}
+
+@keyframes mapPulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.1);
+    }
 }
 
 .icon-btn.small {
@@ -2764,6 +2793,7 @@
 .app-indigo { background: #5b6ee1; }
 .app-teal { background: #2db6a3; }
 .app-gray { background: #9aa3b6; }
+.app-red { background: #e74c3c; }
 
 .customer-detail {
     width: min(900px, 94vw);

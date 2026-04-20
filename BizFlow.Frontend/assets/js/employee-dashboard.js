@@ -4130,11 +4130,27 @@ function selectAddressSuggestion(index) {
 }
 
 async function fetchAddressSuggestionsByText(query) {
-    if (!query || query.length < 3) {
+    if (!query || query.trim().length < 1) {
         return [];
     }
 
     try {
+        // First, try to find addresses from the local Vietnamese address database
+        if (typeof searchVietnameseAddresses === 'function') {
+            const localResults = searchVietnameseAddresses(query);
+            if (localResults && localResults.length > 0) {
+                console.log('Found local address suggestions:', localResults);
+                return localResults;
+            }
+        }
+
+        // If query is very short and no local results, don't call external API
+        if (query.trim().length < 3) {
+            return [];
+        }
+
+        // Fallback to Nominatim API if no local results found
+        console.log('No local results found, falling back to Nominatim API');
         const rawQuery = query.trim();
         const queryWithCity = /hcm|hồ chí minh|ho chi minh/i.test(rawQuery)
             ? rawQuery
@@ -4451,7 +4467,7 @@ function setupEventListeners() {
     });
     checkoutAddressEl?.addEventListener('input', (e) => {
         const query = e.target.value.trim();
-        if (!query || query.length < 3) {
+        if (!query || query.length < 1) {
             checkoutAddressCandidates = [];
             hideAddressSuggestions();
             return;

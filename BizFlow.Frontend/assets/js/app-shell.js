@@ -10,6 +10,7 @@
         { key: 'access-log', label: 'Nhat ky truy cap', icon: 'NK', color: 'app-gray', href: '/pages/access-log.html' },
         { key: 'management', label: 'Trang quan ly', icon: 'QL', color: 'app-indigo', href: '/pages/management.html' },
         { key: 'guide', label: 'Huong dan', icon: 'HD', color: 'app-purple', href: '/pages/guide.html' },
+        { key: 'locations', label: 'Vi tri ban hang', icon: 'VT', color: 'app-red', href: '/pages/shop-locations.html' },
         { key: 'intro', label: 'Gioi thieu', icon: 'GT', color: 'app-orange', href: '/pages/introduction.html' }
     ];
 
