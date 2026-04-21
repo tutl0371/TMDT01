@@ -72,9 +72,14 @@ public class CustomerController {
                 return ResponseEntity.badRequest().body("Phone is required.");
             }
 
+            String address = trimToNull(request.address);
+            if (address != null && !validateAddress(address)) {
+                return ResponseEntity.badRequest().body("Invalid address format. Address must include house number, street, ward/district, and city/province.");
+            }
+
             Customer customer = new Customer(name, phone);
             customer.setEmail(trimToNull(request.email));
-            customer.setAddress(trimToNull(request.address));
+            customer.setAddress(normalizeAddressForStorage(address));
             customer.setCccd(trimToNull(request.cccd));
             customer.setGender(trimToNull(request.gender));
             if (trimToNull(request.dob) != null) {
@@ -205,8 +210,12 @@ public class CustomerController {
                         }
                         
                         // Update optional fields
+                        String newAddress = trimToNull(request.address);
+                        if (newAddress != null && !validateAddress(newAddress)) {
+                            return ResponseEntity.badRequest().body("Invalid address format. Address must include house number, street, ward/district, and city/province.");
+                        }
                         customer.setEmail(trimToNull(request.email));
-                        customer.setAddress(trimToNull(request.address));
+                        customer.setAddress(normalizeAddressForStorage(newAddress));
                         customer.setCccd(trimToNull(request.cccd));
                         customer.setGender(trimToNull(request.gender));
                         
@@ -264,7 +273,11 @@ public class CustomerController {
                         changed = true;
                     }
                     if (request.address != null) {
-                        existing.setAddress(trimToNull(request.address));
+                        String newAddress = trimToNull(request.address);
+                        if (newAddress != null && !validateAddress(newAddress)) {
+                            return ResponseEntity.badRequest().body("Invalid address format. Address must include house number, street, ward/district, and city/province.");
+                        }
+                        existing.setAddress(normalizeAddressForStorage(newAddress));
                         changed = true;
                     }
                     if (request.phone != null && !request.phone.isBlank()) {
@@ -297,18 +310,14 @@ public class CustomerController {
                     created.setUserId(request.userId);
                     created.setUsername(trimToNull(request.username));
                     created.setEmail(trimToNull(request.email));
-                    created.setAddress(trimToNull(request.address));
+                    String newAddress = trimToNull(request.address);
+                    if (newAddress != null && !validateAddress(newAddress)) {
+                        return ResponseEntity.badRequest().body("Invalid address format. Address must include house number, street, ward/district, and city/province.");
+                    }
+                    created.setAddress(normalizeAddressForStorage(newAddress));
                     Customer saved = customerRepository.save(created);
                     return ResponseEntity.ok(saved);
                 });
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private static class CustomerCreateRequest {
@@ -345,5 +354,46 @@ public class CustomerController {
     private static String normalizePhone(String phone) {
         if (phone == null) return null;
         return phone.replaceAll("\\D", "");
+    }
+
+    private boolean validateAddress(String address) {
+        if (address == null || address.trim().isEmpty()) {
+            return true; // Allow empty address
+        }
+        String normalizedAddress = normalizeAddressForStorage(address).toLowerCase();
+        if (!normalizedAddress.matches(".*\\d+.*")) {
+            return false;
+        }
+        if (!normalizedAddress.contains(",")) {
+            return false;
+        }
+        if (!(normalizedAddress.contains("hồ chí minh") || normalizedAddress.contains("ho chi minh") || normalizedAddress.contains("tp.hcm") || normalizedAddress.contains("hcm"))) {
+            return false;
+        }
+        if (normalizedAddress.contains("thuận an") && normalizedAddress.contains("hồ chí minh")) {
+            return false;
+        }
+        return true;
+    }
+
+    private String normalizeAddressForStorage(String address) {
+        if (address == null) {
+            return null;
+        }
+        String normalized = address.trim().replaceAll("\\s*,\\s*", ", ");
+        if (normalized.matches("(?i).*(Thuận An).*") && normalized.matches("(?i).*(Hồ Chí Minh|Ho Chi Minh|TP.HCM|HCM).*")) {
+            normalized = normalized.replaceAll("(?i),?\\s*Thuận An"," ");
+        }
+        String lowerNormalized = normalized.toLowerCase();
+        if (lowerNormalized.contains("khu phố 23") && lowerNormalized.contains("tân thới nhất")) {
+            normalized = normalized.replaceAll("(?i),?\\s*Khu phố 23"," ");
+        }
+        normalized = normalized.replaceAll("\\s*,\\s*", ", ").replaceAll(",{2,}", ",").replaceAll("\\s+", " ").trim();
+        normalized = normalized.replaceAll(", $", "");
+        return normalized;
+    }
+
+    private String trimToNull(String str) {
+        return (str == null || str.trim().isEmpty()) ? null : str.trim();
     }
 }

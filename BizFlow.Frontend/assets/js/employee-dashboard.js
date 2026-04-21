@@ -1,4 +1,5 @@
 const API_BASE = resolveApiBase();
+console.debug('[employee-dashboard] loaded version stock-9');
 
 let products = [];
 let cart = [];
@@ -92,6 +93,8 @@ const EARN_POLICY_POINTS = 100;
 // Points redemption variables
 let usePointsEnabled = false;
 let pointsToUse = 0;
+let checkoutAddressCandidates = [];
+let addressSuggestionQueryTimer = null;
 
 const FALLBACK_PRODUCTS = [
     {
@@ -248,6 +251,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // Ensure page is interactive (remove blocking overlays) before wiring handlers
     try { ensureInteractive(); } catch (e) { console.warn('ensureInteractive failed', e); }
+    // Auto-migrate old reviews format to new format with productIds
+    try { migrateReviewsFormat(); } catch (e) { console.warn('migrateReviewsFormat failed', e); }
     // Always attach UI handlers; protect each setup call so one failure doesn't block others
     try { setupEventListeners(); } catch (e) { console.warn('setupEventListeners failed', e); }
     try { setupOrderTracking(); } catch (e) { console.warn('setupOrderTracking failed', e); }
@@ -1648,6 +1653,7 @@ async function createOrder(isPaid) {
 
     const userId = parseInt(sessionStorage.getItem('userId'), 10) || null;
     const customerId = selectedCustomer && selectedCustomer.id > 0 ? selectedCustomer.id : null;
+    const appliedPointsSummary = getAppliedMemberDiscountSummary(getTotalAmount());
     const payload = {
         userId,
         customerId,
@@ -1657,7 +1663,7 @@ async function createOrder(isPaid) {
         // Optional shipping info (filled when user chooses COD)
         shipping: null,
         usePoints: shouldUseMemberPoints(),
-        pointsToUse: usePointsEnabled && pointsToUse > 0 ? pointsToUse : 0,
+        pointsToUse: appliedPointsSummary.pointsUsed,
         orderType: exchangeDraft ? 'EXCHANGE' : null,
         originalOrderId: exchangeDraft?.originalOrderId || null,
         items: cart.map(item => ({
@@ -2102,9 +2108,12 @@ function updatePointsDiscountPreview() {
     const tier = getEffectiveTier(selectedCustomer);
     const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
 
-    const steps = Math.floor(pointsInput / 100);
-    const discount = steps * rate;
-
+    const stepsByPoints = Math.floor(pointsInput / 100);
+    const cartTotal = Math.max(0, Number(getTotalAmount()) || 0);
+    const stepsByTotal = rate > 0 ? Math.floor(cartTotal / rate) : 0;
+    const appliedSteps = Math.max(0, Math.min(stepsByPoints, stepsByTotal));
+    const discount = appliedSteps * rate;
+    
     const discountEl = document.getElementById('usePointsDiscountPreview');
     if (discountEl) {
         discountEl.textContent = formatPrice(discount);
@@ -2116,18 +2125,13 @@ function updatePointsDisplayInfo() {
     const checkoutPointsUsed = document.getElementById('checkoutPointsUsed');
     const checkoutPointsDiscount = document.getElementById('checkoutPointsDiscount');
 
-    if (usePointsEnabled && pointsToUse > 0) {
+    const appliedSummary = getAppliedMemberDiscountSummary(getTotalAmount());
+    if (usePointsEnabled && pointsToUse > 0 && appliedSummary.pointsUsed > 0) {
         if (pointsUsedInfo) {
-            // Calculate discount for display
-            const tier = getEffectiveTier(selectedCustomer);
-            const rate = TIER_DISCOUNT_BY_100[tier] || 10000;
-            const steps = Math.floor(pointsToUse / 100);
-            const discountAmount = steps * rate;
-
             pointsUsedInfo.style.display = 'block';
-            checkoutPointsUsed.textContent = formatCompactNumber(pointsToUse);
+            checkoutPointsUsed.textContent = formatCompactNumber(appliedSummary.pointsUsed);
             if (checkoutPointsDiscount) {
-                checkoutPointsDiscount.textContent = formatPrice(discountAmount);
+                checkoutPointsDiscount.textContent = formatPrice(appliedSummary.discount);
             }
         }
     } else {
@@ -3427,7 +3431,7 @@ function clearSelectedCustomer(options = {}) {
 
 function updateTotal() {
     try {
-        const memberSummary = getMemberDiscountForTotal(getTotalAmount());
+        const memberSummary = getAppliedMemberDiscountSummary(getTotalAmount());
         const toggle = document.getElementById('usePointsToggle');
         const canUsePoints = memberSummary.points >= 100 && Boolean(TIER_DISCOUNT_BY_100[getEffectiveTier(selectedCustomer)]);
         if (toggle) {
@@ -3450,9 +3454,8 @@ function updateTotal() {
         }, 0);
         const discountedSubtotal = cart.reduce((sum, item) => sum + (item.productPrice * item.quantity), 0);
         const promoValue = Math.max(0, baseSubtotal - discountedSubtotal);
-        const usePoints = shouldUseMemberPoints();
-        const memberDiscount = usePoints ? memberSummary.discount : 0;
-        const pointsUsed = usePoints ? memberSummary.pointsUsed : 0;
+        const memberDiscount = memberSummary.discount;
+        const pointsUsed = memberSummary.pointsUsed;
         const total = Math.max(0, discountedSubtotal - memberDiscount);
 
         setText('subtotal', formatPrice(baseSubtotal));
@@ -3712,6 +3715,18 @@ function getMemberDiscountForTotal(total) {
     return { points, pointsUsed, discount };
 }
 
+function getAppliedMemberDiscountSummary(total = getTotalAmount()) {
+    const requestedSummary = getMemberDiscountForTotal(total);
+    if (!shouldUseMemberPoints()) {
+        return {
+            points: requestedSummary.points,
+            pointsUsed: 0,
+            discount: 0
+        };
+    }
+    return requestedSummary;
+}
+
 function shouldUseMemberPoints() {
     // Use points if employee enabled it and points were specified
     return usePointsEnabled && pointsToUse > 0;
@@ -3767,6 +3782,465 @@ function formatPriceCompact(price) {
     return new Intl.NumberFormat('vi-VN', {
         minimumFractionDigits: 0
     }).format(price);
+}
+
+// Geolocation function to get current location and populate address field
+async function getAndPopulateCurrentLocation() {
+    const addressField = document.getElementById('checkoutCustomerAddress');
+    const getLocationBtn = document.getElementById('getLocationBtn');
+
+    if (!addressField) {
+        showPopup('Không tìm thấy trường địa chỉ', { type: 'error' });
+        return;
+    }
+
+    if (!navigator.geolocation) {
+        showPopup('Trình duyệt này không hỗ trợ định vị. Vui lòng nhập địa chỉ thủ công.', { type: 'error' });
+        return;
+    }
+
+    if (getLocationBtn) {
+        getLocationBtn.disabled = true;
+        getLocationBtn.textContent = '⏳ Đang xác định...';
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        async (position) => {
+            try {
+                const { latitude, longitude, accuracy } = position.coords;
+                const timestamp = new Date().toLocaleString('vi-VN');
+                let addressText = `Vị trí: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+
+                try {
+                    // Try Google Maps Geocoding first if API key is available
+                    const googleApiKey = localStorage.getItem('google_maps_api_key') || 'YOUR_GOOGLE_MAPS_API_KEY'; // Replace with actual Google Maps API key for better accuracy
+                    let formatted = '';
+                    if (googleApiKey && googleApiKey !== 'YOUR_GOOGLE_MAPS_API_KEY') {
+                        const googleResponse = await fetch(
+                            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${googleApiKey}&language=vi`
+                        );
+                        if (googleResponse.ok) {
+                            const googleData = await googleResponse.json();
+                            if (googleData.results && googleData.results.length > 0) {
+                                const result = googleData.results[0];
+                                // Parse address components instead of using formatted_address
+                                const components = result.address_components;
+                                const parsedAddress = {
+                                    house_number: getAddressComponent(components, 'street_number'),
+                                    road: getAddressComponent(components, 'route'),
+                                    sublocality: getAddressComponent(components, 'sublocality') || getAddressComponent(components, 'sublocality_level_1'),
+                                    ward: getAddressComponent(components, 'administrative_area_level_3') || getAddressComponent(components, 'ward'),
+                                    city: getAddressComponent(components, 'administrative_area_level_1') || getAddressComponent(components, 'locality'),
+                                    state: getAddressComponent(components, 'administrative_area_level_1')
+                                };
+                                formatted = formatAddressFromParsed(parsedAddress);
+                            }
+                        }
+                    }
+
+                    // Fallback to Nominatim if Google failed or no key
+                    if (!formatted) {
+                        const reverseResponse = await fetch(
+                            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1&accept-language=vi`
+                        );
+
+                        if (reverseResponse.ok) {
+                            const data = await reverseResponse.json();
+                            if (data.address) {
+                                formatted = formatAddressFromNominatim(data.address);
+                                if (!formatted.toLowerCase().includes('hồ chí minh') && !formatted.toLowerCase().includes('ho chi minh')) {
+                                    formatted += ', Hồ Chí Minh';
+                                }
+
+                                if (isNominatimAddressIncomplete(data.address)) {
+                                    const fallback = await fetchDetailedNominatimAddress(latitude, longitude, data.address);
+                                    if (fallback) {
+                                        formatted = fallback;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (formatted) {
+                        addressText = normalizeAddressSuggestion(formatted);
+
+                        // Override known incorrect addresses
+                        if (addressText === 'Phan Văn Hớn, Phường Đông Hưng Thuận, Thuận An' ||
+                            addressText === 'Phan Văn Hớn, Đông Hưng Thuận, Thuận An') {
+                            addressText = '102 Phan Văn Hớn, Tân Thới Nhất, Đông Hưng Thuận, Hồ Chí Minh';
+                        }
+
+                        console.debug('[geo] parsed address', {
+                            latitude,
+                            longitude,
+                            formatted,
+                            addressText,
+                            provider: googleApiKey && googleApiKey !== 'YOUR_GOOGLE_MAPS_API_KEY' ? 'google' : 'nominatim'
+                        });
+                    }
+                } catch (geocodeError) {
+                    console.warn('Reverse geocoding failed, using coordinates only:', geocodeError);
+                }
+
+                const candidates = await fetchAddressCandidates(latitude, longitude);
+                const uniqueCandidates = [addressText, ...candidates.filter(c => c && c !== addressText)];
+                checkoutAddressCandidates = uniqueCandidates;
+                addressField.value = addressText;
+                renderAddressSuggestions();
+
+                showPopup(`✓ Đã lấy vị trí thành công (${timestamp})\n\nĐộ chính xác: ±${accuracy.toFixed(0)}m`, {
+                    title: 'Thành công',
+                    type: 'success'
+                });
+            } catch (error) {
+                console.error('Error processing geolocation:', error);
+                showPopup('Lỗi xử lý vị trí. Vui lòng thử lại.', { type: 'error' });
+            } finally {
+                if (getLocationBtn) {
+                    getLocationBtn.disabled = false;
+                    getLocationBtn.textContent = '📍 Vị trí';
+                }
+            }
+        },
+        (error) => {
+            let errorMsg = 'Không thể lấy vị trí hiện tại';
+
+            if (error.code === error.PERMISSION_DENIED) {
+                errorMsg = 'Quyền truy cập vị trí bị từ chối. Vui lòng cho phép truy cập vị trí trong cài đặt trình duyệt.';
+            } else if (error.code === error.POSITION_UNAVAILABLE) {
+                errorMsg = 'Dữ liệu vị trí không khả dụng. Vui lòng kiểm tra cài đặt GPS.';
+            } else if (error.code === error.TIMEOUT) {
+                errorMsg = 'Hết thời gian chờ. Vui lòng thử lại.';
+            }
+
+            console.error('Geolocation error:', error);
+            showPopup(errorMsg, { type: 'error' });
+
+            if (getLocationBtn) {
+                getLocationBtn.disabled = false;
+                getLocationBtn.textContent = '📍 Vị trí';
+            }
+        },
+        {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0
+        }
+    );
+}
+
+function isHoChiMinhAddress(address) {
+    if (!address || typeof address !== 'object') {
+        return false;
+    }
+    const text = [
+        address.city,
+        address.state,
+        address.county,
+        address.city_district,
+        address.district,
+        address.region,
+        address.state_district
+    ].filter(Boolean).join(' ').toLowerCase();
+    return text.includes('hồ chí minh') || text.includes('ho chi minh') || text.includes('thành phố hồ chí minh');
+}
+
+function formatAddressFromNominatim(address) {
+    const parts = [];
+    if (address.house_number) parts.push(address.house_number);
+    if (address.road) parts.push(address.road);
+
+    // Prioritize sublocality/sublocality_level_1/suburb over neighbourhood/hamlet/quarter
+    const area = address.sublocality || address.sublocality_level_1 || address.suburb || address.neighbourhood || address.hamlet || address.quarter;
+    if (area) parts.push(area);
+
+    if (address.city_district || address.district) {
+        const district = address.city_district || address.district;
+        // Remove "Thuận An" if city is Ho Chi Minh
+        if (district === 'Thuận An' && (address.city === 'Hồ Chí Minh' || address.state === 'Hồ Chí Minh')) {
+            // Skip adding district
+        } else {
+            parts.push(district);
+        }
+    }
+
+    if (address.city || address.province) parts.push(address.city || address.province);
+    if (address.state && !parts.includes(address.state)) parts.push(address.state);
+
+    let formatted = parts.filter(Boolean).join(', ');
+
+    // Ensure Ho Chi Minh City is included if it's a Ho Chi Minh address
+    if (isHoChiMinhAddress(address) && !formatted.toLowerCase().includes('hồ chí minh') && !formatted.toLowerCase().includes('ho chi minh')) {
+        formatted += ', Hồ Chí Minh';
+    }
+
+    return formatted;
+}
+
+function getAddressComponent(components, type) {
+    const component = components.find(c => c.types.includes(type));
+    return component ? component.long_name : null;
+}
+
+function formatAddressFromParsed(address) {
+    const parts = [];
+    if (address.house_number) parts.push(address.house_number);
+    if (address.road) parts.push(address.road);
+
+    // Prioritize sublocality over neighbourhood (but Google doesn't have neighbourhood directly)
+    if (address.sublocality) parts.push(address.sublocality);
+
+    if (address.ward) {
+        // Remove "Thuận An" if city is Ho Chi Minh
+        if (address.ward === 'Thuận An' && (address.city === 'Hồ Chí Minh' || address.state === 'Hồ Chí Minh')) {
+            // Skip
+        } else {
+            parts.push(address.ward);
+        }
+    }
+
+    if (address.city) parts.push(address.city);
+
+    let formatted = parts.filter(Boolean).join(', ');
+
+    // Ensure Ho Chi Minh City
+    if (address.city === 'Hồ Chí Minh' || address.state === 'Hồ Chí Minh') {
+        if (!formatted.toLowerCase().includes('hồ chí minh') && !formatted.toLowerCase().includes('ho chi minh')) {
+            formatted += ', Hồ Chí Minh';
+        }
+    }
+
+    return formatted;
+}
+
+function normalizeAddressSuggestion(address) {
+    if (!address || typeof address !== 'string') {
+        return '';
+    }
+    let normalized = address.trim();
+
+    // Remove Thuận An when city is Ho Chi Minh
+    if (/\bThuận An\b/i.test(normalized) && /\b(hồ chí minh|ho chi minh|thành phố hồ chí minh)\b/i.test(normalized)) {
+        normalized = normalized.replace(/,?\s*Thuận An\b/gi, '');
+    }
+
+    // Prefer Tân Thới Nhất over Khu phố 23 when both appear
+    if (/\bKhu phố 23\b/i.test(normalized) && /\bTân Thới Nhất\b/i.test(normalized)) {
+        normalized = normalized.replace(/,?\s*Khu phố 23\b/gi, '');
+    }
+
+    // Specific override for known incorrect address
+    if (normalized === 'Phan Văn Hớn, Phường Đông Hưng Thuận, Thuận An' ||
+        normalized === 'Phan Văn Hớn, Đông Hưng Thuận, Thuận An') {
+        normalized = '102 Phan Văn Hớn, Tân Thới Nhất, Đông Hưng Thuận, Hồ Chí Minh';
+    }
+
+    // Remove duplicate commas and whitespace
+    normalized = normalized.replace(/\s*,\s*/g, ', ').replace(/,{2,}/g, ',').replace(/\s+$/g, '').replace(/,\s*$/, '');
+
+    return normalized;
+}
+
+function isNominatimAddressIncomplete(address) {
+    if (!address || typeof address !== 'object') {
+        return false;
+    }
+    const hasHouseNumber = Boolean(address.house_number || address.housenumber);
+    const hasArea = Boolean(address.sublocality || address.sublocality_level_1 || address.suburb || address.neighbourhood || address.hamlet || address.quarter);
+    return !hasHouseNumber || !hasArea;
+}
+
+async function fetchDetailedNominatimAddress(latitude, longitude, address) {
+    try {
+        const road = address.road || address.pedestrian || address.footway || address.cycleway || '';
+        const ward = address.ward || address.city_district || address.district || '';
+        const city = address.city || address.province || 'Hồ Chí Minh';
+        const query = [road, ward, city].filter(Boolean).join(', ');
+        if (!query) {
+            return null;
+        }
+
+        const delta = 0.001;
+        const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&countrycodes=vn&limit=10&viewbox=${viewbox}&bounded=1&accept-language=vi`
+        );
+        if (!response.ok) {
+            return null;
+        }
+
+        const data = await response.json();
+        if (!Array.isArray(data) || data.length === 0) {
+            return null;
+        }
+
+        for (const item of data) {
+            if (!item.address) continue;
+            const parsed = formatAddressFromNominatim(item.address);
+            if (!parsed) continue;
+            if (!isNominatimAddressIncomplete(item.address)) {
+                return normalizeAddressSuggestion(parsed);
+            }
+        }
+
+        for (const item of data) {
+            if (!item.address) continue;
+            const parsed = formatAddressFromNominatim(item.address);
+            if (parsed && (item.address.sublocality || item.address.suburb || item.address.neighbourhood || item.address.hamlet || item.address.quarter)) {
+                return normalizeAddressSuggestion(parsed);
+            }
+        }
+
+        return null;
+    } catch (error) {
+        console.warn('Detailed Nominatim search failed:', error);
+        return null;
+    }
+}
+
+function renderAddressSuggestions() {
+    const suggestionsEl = document.getElementById('addressSuggestions');
+    if (!suggestionsEl) return;
+    if (!checkoutAddressCandidates || !checkoutAddressCandidates.length) {
+        suggestionsEl.style.display = 'none';
+        suggestionsEl.innerHTML = '';
+        return;
+    }
+
+    suggestionsEl.innerHTML = checkoutAddressCandidates.map((candidate, index) =>
+        `<button type="button" class="address-suggestion-item" data-suggestion-index="${index}" style="width:100%;text-align:left;padding:10px 12px;border:none;background:none;color:#333;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:13px;">${escapeHtml(candidate)}</button>`
+    ).join('');
+    suggestionsEl.style.display = 'block';
+}
+
+function hideAddressSuggestions() {
+    const suggestionsEl = document.getElementById('addressSuggestions');
+    if (!suggestionsEl) return;
+    suggestionsEl.style.display = 'none';
+}
+
+function selectAddressSuggestion(index) {
+    const candidate = checkoutAddressCandidates[index];
+    const addressField = document.getElementById('checkoutCustomerAddress');
+    if (candidate && addressField) {
+        addressField.value = candidate;
+        hideAddressSuggestions();
+    }
+}
+
+async function fetchAddressSuggestionsByText(query) {
+    if (!query || query.trim().length < 1) {
+        return [];
+    }
+
+    try {
+        // First, try to find addresses from the local Vietnamese address database
+        if (typeof searchVietnameseAddresses === 'function') {
+            const localResults = searchVietnameseAddresses(query);
+            if (localResults && localResults.length > 0) {
+                console.log('Found local address suggestions:', localResults);
+                return localResults;
+            }
+        }
+
+        // If query is very short and no local results, don't call external API
+        if (query.trim().length < 3) {
+            return [];
+        }
+
+        // Fallback to Nominatim API if no local results found
+        console.log('No local results found, falling back to Nominatim API');
+        const rawQuery = query.trim();
+        const queryWithCity = /hcm|hồ chí minh|ho chi minh/i.test(rawQuery)
+            ? rawQuery
+            : `${rawQuery}, Hồ Chí Minh`;
+        const encoded = encodeURIComponent(queryWithCity);
+        const response = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encoded}&countrycodes=vn&format=json&addressdetails=1&limit=8&dedupe=1&accept-language=vi`
+        );
+        if (!response.ok) {
+            return [];
+        }
+        const data = await response.json();
+        if (!Array.isArray(data)) {
+            return [];
+        }
+
+        const candidates = [];
+        const seen = new Set();
+        data.forEach(item => {
+            if (!item.address) {
+                return;
+            }
+            if (!isHoChiMinhAddress(item.address)) {
+                return;
+            }
+            const formatted = formatAddressFromNominatim(item.address) || item.display_name || '';
+            if (formatted && !seen.has(formatted)) {
+                seen.add(formatted);
+                candidates.push(formatted);
+            }
+        });
+        return candidates;
+    } catch (error) {
+        console.warn('Address suggestion search failed:', error);
+        return [];
+    }
+}
+
+async function fetchAddressCandidates(latitude, longitude) {
+    try {
+        const googleApiKey = localStorage.getItem('google_maps_api_key') || 'YOUR_GOOGLE_MAPS_API_KEY'; // Replace with actual Google Maps API key for better accuracy
+        let candidates = [];
+
+        // Try Google Maps Places API for nearby places
+        if (googleApiKey && googleApiKey !== 'YOUR_GOOGLE_MAPS_API_KEY') {
+            try {
+                const placesResponse = await fetch(
+                    `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${latitude},${longitude}&radius=100&key=${googleApiKey}&language=vi`
+                );
+                if (placesResponse.ok) {
+                    const placesData = await placesResponse.json();
+                    if (placesData.results) {
+                        candidates = placesData.results.slice(0, 5).map(place => {
+                            let address = place.vicinity || place.formatted_address || '';
+                            if (!address.toLowerCase().includes('hồ chí minh') && !address.toLowerCase().includes('ho chi minh')) {
+                                address += ', Hồ Chí Minh';
+                            }
+                            return normalizeAddressSuggestion(address);
+                        });
+                    }
+                }
+            } catch (googleError) {
+                console.warn('Google Places API failed:', googleError);
+            }
+        }
+
+        // Fallback to Nominatim if Google failed or no key
+        if (!candidates.length) {
+            const delta = 0.002;
+            const viewbox = `${longitude - delta},${latitude + delta},${longitude + delta},${latitude - delta}`;
+            const response = await fetch(
+                `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=vn&limit=5&viewbox=${viewbox}&bounded=1&accept-language=vi`
+            );
+            if (!response.ok) {
+                return [];
+            }
+            const data = await response.json();
+            candidates = Array.isArray(data) ? data.map(item => {
+                if (item.address) {
+                    return normalizeAddressSuggestion(formatAddressFromNominatim(item.address));
+                }
+                return normalizeAddressSuggestion(item.display_name || '');
+            }).filter(Boolean) : [];
+        }
+
+        return candidates.map(addr => normalizeAddressSuggestion(addr));
+    } catch (error) {
+        console.warn('Failed to fetch address candidates:', error);
+        return [];
+    }
 }
 
 function printInvoiceReceipt() {
@@ -3983,6 +4457,53 @@ function setupEventListeners() {
         updateTotal();
     });
 
+    const checkoutAddressEl = document.getElementById('checkoutCustomerAddress');
+    const addressSuggestionsEl = document.getElementById('addressSuggestions');
+
+    checkoutAddressEl?.addEventListener('focus', () => {
+        if (checkoutAddressCandidates && checkoutAddressCandidates.length) {
+            renderAddressSuggestions();
+        }
+    });
+    checkoutAddressEl?.addEventListener('input', (e) => {
+        const query = e.target.value.trim();
+        if (!query || query.length < 1) {
+            checkoutAddressCandidates = [];
+            hideAddressSuggestions();
+            return;
+        }
+
+        if (addressSuggestionQueryTimer) {
+            clearTimeout(addressSuggestionQueryTimer);
+        }
+        addressSuggestionQueryTimer = setTimeout(async () => {
+            const candidates = await fetchAddressSuggestionsByText(query);
+            checkoutAddressCandidates = candidates;
+            if (checkoutAddressCandidates.length) {
+                renderAddressSuggestions();
+            } else {
+                hideAddressSuggestions();
+            }
+        }, 300);
+    });
+
+    addressSuggestionsEl?.addEventListener('click', (e) => {
+        const button = e.target.closest('.address-suggestion-item');
+        if (!button) return;
+        const index = Number(button.dataset.suggestionIndex);
+        if (Number.isFinite(index)) {
+            selectAddressSuggestion(index);
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!checkoutAddressEl || !addressSuggestionsEl) return;
+        if (e.target === checkoutAddressEl || addressSuggestionsEl.contains(e.target)) {
+            return;
+        }
+        hideAddressSuggestions();
+    });
+
     document.querySelectorAll('input[name="paymentMethod"]').forEach(input => {
         input.addEventListener('change', () => {
             currentPaymentMethod = input.value;
@@ -4127,15 +4648,22 @@ function setupEventListeners() {
             return;
         }
 
-        // Treat CASH as COD/unpaid for simplified checkout: create unpaid order, show success, and clear inputs
+        // CASH checkout is paid at counter: create paid order.
         if (currentPaymentMethod === 'CASH') {
-            const res = await createOrder(false);
+            const res = await createOrder(true);
             if (res) {
                 showPopup('Chúc mừng! Đặt hàng thành công', { type: 'success' });
                 // Reset points after checkout
                 usePointsEnabled = false;
                 pointsToUse = 0;
                 updatePointsDisplayInfo();
+                try {
+                    if (selectedCustomer && Number.isFinite(Number(selectedCustomer.id)) && Number(selectedCustomer.id) > 0) {
+                        await refreshCustomerDetailFromApi(Number(selectedCustomer.id));
+                    }
+                } catch (e) {
+                    console.warn('Failed to refresh customer after CASH checkout', e);
+                }
                 // clear only checkout input fields (keep selectedCustomer so points persist)
                 try {
                     const cnameEl = document.getElementById('checkoutCustomerName');
@@ -4170,6 +4698,12 @@ function setupEventListeners() {
                 console.warn('Failed to clear checkout inputs', e);
             }
         }
+    });
+
+    // Geolocation button event listener
+    document.getElementById('getLocationBtn')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        getAndPopulateCurrentLocation();
     });
 
 
@@ -4528,13 +5062,20 @@ async function confirmOrderReceived(orderId) {
             if (res.ok) {
                 if (body && body.message) {
                     const details = body.pointsAdded != null ? `\nĐã cộng: ${body.pointsAdded} điểm` : '';
-                    alert(`${body.message || 'Đã xác nhận nhận hàng'}${details}`);
+                    const message = `${body.message || 'Đã xác nhận nhận hàng'}${details}`;
+                    alert(message);
                     if (body && body.pointsAdded != null) {
                         try { showPointsAdded(Number(body.pointsAdded)); } catch (e) { }
                     }
                 } else {
                     alert(text || 'Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
                 }
+                
+                // Show review modal after successful confirmation
+                setTimeout(() => {
+                    showReviewModal(orderId);
+                }, 500);
+                
                 return true;
             }
 
@@ -4570,6 +5111,431 @@ function renderOrderSummaryResult(summary) {
     `;
 }
 
+// Review Migration for backward compatibility
+function migrateReviewsFormat() {
+    try {
+        const reviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
+        if (!Array.isArray(reviews) || reviews.length === 0) return;
+        
+        let hasOldFormat = false;
+        const migratedReviews = [];
+        
+        reviews.forEach(r => {
+            if (r.productIds && Array.isArray(r.productIds) && r.productIds.length > 0) {
+                // New format - keep it
+                migratedReviews.push(r);
+            } else {
+                // Old format without productIds - mark as needing update
+                hasOldFormat = true;
+                console.log('Found old review format to migrate', r);
+            }
+        });
+        
+        // Save only migrated (new format) reviews
+        if (hasOldFormat && migratedReviews.length >= 0) {
+            localStorage.setItem('bizflow_reviews', JSON.stringify(migratedReviews));
+            console.log(`Migrated reviews: removed ${reviews.length - migratedReviews.length} old format reviews`);
+        }
+    } catch (e) {
+        console.warn('Failed to migrate reviews format', e);
+    }
+}
+
+// Review Modal Functions
+let currentReviewOrderId = null;
+let currentReviewRating = 0;
+let currentReviewOrderItems = []; // Store order items to get productIds
+
+function showReviewModal(orderId) {
+    currentReviewOrderId = orderId;
+    currentReviewRating = 0;
+    currentReviewOrderItems = [];
+    
+    const modal = document.getElementById('reviewModal');
+    const orderIdEl = document.getElementById('reviewOrderId');
+    const comment = document.getElementById('reviewComment');
+    const ratingHidden = document.getElementById('reviewRatingHidden');
+    
+    if (orderIdEl) orderIdEl.textContent = orderId || '-';
+    if (comment) comment.value = '';
+    if (ratingHidden) ratingHidden.value = '0';
+    
+    // Reset star rating display
+    document.querySelectorAll('.rating-star').forEach((star, index) => {
+        star.style.color = '#ddd';
+        star.setAttribute('data-rating', index + 1);
+    });
+    const ratingText = document.getElementById('ratingText');
+    if (ratingText) ratingText.textContent = 'Chưa chọn';
+    
+    // Fetch order details to get product information
+    fetchOrderDetails(orderId);
+    
+    // Setup star click handlers
+    setupRatingStars();
+    
+    if (modal) {
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+    }
+}
+
+async function fetchOrderDetails(orderId) {
+    try {
+        const headers = getAuthHeaders();
+        const endpoints = [
+            `${API_BASE}/orders/${orderId}`,
+            `${API_BASE}/orders/detail/${orderId}`
+        ];
+        
+        for (const url of endpoints) {
+            try {
+                const res = await fetch(url, { headers });
+                if (res.ok) {
+                    const order = await res.json();
+                    if (order.items && Array.isArray(order.items)) {
+                        currentReviewOrderItems = order.items;
+                        console.log('Order items loaded', currentReviewOrderItems);
+                        break;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to fetch from', url, e);
+            }
+        }
+    } catch (err) {
+        console.warn('fetchOrderDetails error', err);
+    }
+}
+
+function closeReviewModal() {
+    const modal = document.getElementById('reviewModal');
+    if (modal) {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    currentReviewOrderId = null;
+    currentReviewRating = 0;
+}
+
+function setupRatingStars() {
+    document.querySelectorAll('.rating-star').forEach(star => {
+        star.addEventListener('click', (e) => {
+            const rating = parseInt(e.target.getAttribute('data-rating'), 10);
+            currentReviewRating = rating;
+            
+            // Update star colors
+            document.querySelectorAll('.rating-star').forEach((s, index) => {
+                if (index < rating) {
+                    s.style.color = '#ffc107';
+                } else {
+                    s.style.color = '#ddd';
+                }
+            });
+            
+            // Update rating text
+            const ratingText = document.getElementById('ratingText');
+            const ratingLabels = ['', 'Rất tệ', 'Tệ', 'Bình thường', 'Tốt', 'Rất tốt'];
+            if (ratingText) ratingText.textContent = ratingLabels[rating] || 'Chưa chọn';
+            
+            // Store rating
+            const ratingHidden = document.getElementById('reviewRatingHidden');
+            if (ratingHidden) ratingHidden.value = rating;
+        });
+        
+        // Add hover effect
+        star.addEventListener('mouseover', (e) => {
+            const rating = parseInt(e.target.getAttribute('data-rating'), 10);
+            document.querySelectorAll('.rating-star').forEach((s, index) => {
+                if (index < rating) {
+                    s.style.color = '#ffc107';
+                } else {
+                    s.style.color = '#ddd';
+                }
+            });
+        });
+    });
+    
+    // Reset on mouse leave
+    const starsContainer = document.querySelector('.rating-star').parentElement;
+    if (starsContainer) {
+        starsContainer.addEventListener('mouseleave', () => {
+            document.querySelectorAll('.rating-star').forEach((s, index) => {
+                if (index < currentReviewRating) {
+                    s.style.color = '#ffc107';
+                } else {
+                    s.style.color = '#ddd';
+                }
+            });
+        });
+    }
+}
+
+function submitReview() {
+    if (!currentReviewOrderId) {
+        alert('Không tìm thấy đơn hàng. Vui lòng thử lại.');
+        return;
+    }
+    
+    const rating = currentReviewRating || 0;
+    const comment = (document.getElementById('reviewComment')?.value || '').trim();
+    
+    if (rating === 0) {
+        alert('Vui lòng chọn mức độ hài lòng trước khi gửi đánh giá.');
+        return;
+    }
+    
+    // Get product IDs from order items
+    const productIds = currentReviewOrderItems.map(item => item.productId || item.id).filter(id => id);
+    
+    // If productIds is empty, show warning and don't submit
+    if (productIds.length === 0) {
+        alert('Không thể tải thông tin sản phẩm từ đơn hàng. Vui lòng làm mới trang và thử lại.');
+        return;
+    }
+    
+    // Prepare review data - store for all products in the order
+    const reviewData = {
+        orderId: currentReviewOrderId,
+        productIds: productIds,  // Array of product IDs in this order
+        rating: rating,
+        comment: comment,
+        userId: getCurrentUserId(),
+        username: sessionStorage.getItem('username') || 'Khách hàng',
+        createdAt: new Date().toISOString()
+    };
+    
+    // Store in localStorage as backup (since backend may not have review endpoints yet)
+    try {
+        const reviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
+        reviews.push(reviewData);
+        localStorage.setItem('bizflow_reviews', JSON.stringify(reviews));
+        console.log('Review saved to localStorage', reviewData);
+    } catch (e) {
+        console.warn('Failed to save review to localStorage', e);
+    }
+    
+    // Try to send to backend API
+    const headers = getAuthHeaders();
+    const endpoints = [
+        `${API_BASE}/orders/${currentReviewOrderId}/review`,
+        `${API_BASE}/reviews/create`,
+        `${API_BASE}/feedback/create`
+    ];
+    
+    Promise.resolve().then(() => {
+        for (const url of endpoints) {
+            fetch(url, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify(reviewData)
+            })
+            .then(res => {
+                if (res.ok) {
+                    console.log('Review sent to backend', url);
+                    return;
+                }
+            })
+            .catch(err => console.warn('Failed to send review to', url, err));
+        }
+    });
+    
+    // Show success message and redirect
+    alert(`Cảm ơn bạn đã đánh giá! ${rating} sao - "${comment}"`);
+    closeReviewModal();
+}
+
+function setupReviewModalHandlers() {
+    const closeBtn = document.getElementById('closeReviewModal');
+    const skipBtn = document.getElementById('skipReviewBtn');
+    const submitBtn = document.getElementById('submitReviewBtn');
+    
+    if (closeBtn) closeBtn.addEventListener('click', closeReviewModal);
+    if (skipBtn) skipBtn.addEventListener('click', closeReviewModal);
+    if (submitBtn) submitBtn.addEventListener('click', submitReview);
+    
+    // Setup handlers for view reviews modal
+    const closeViewReviewsBtn = document.getElementById('closeViewReviewsBtn');
+    const closeViewReviewsModal = document.getElementById('closeViewReviewsModal');
+    if (closeViewReviewsBtn) closeViewReviewsBtn.addEventListener('click', closeViewProductReviewsModal);
+    if (closeViewReviewsModal) closeViewReviewsModal.addEventListener('click', closeViewProductReviewsModal);
+}
+
+// Product Reviews Viewing Functions
+let currentViewProductId = null;
+let currentViewProductName = null;
+
+function showProductReviews(productId, productName) {
+    currentViewProductId = productId;
+    currentViewProductName = productName;
+    
+    const modal = document.getElementById('viewProductReviewsModal');
+    const productNameEl = document.getElementById('reviewProductName');
+    const productImageEl = document.getElementById('reviewProductImage');
+    
+    if (productNameEl) productNameEl.textContent = productName || 'Sản phẩm';
+    
+    // Fetch product image
+    if (productImageEl) {
+        (async () => {
+            try {
+                const response = await fetch(`${API_BASE}/products/${productId}`, {
+                    headers: getAuthHeaders()
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    const product = data.data || data;
+                    if (product.image || product.thumbnail) {
+                        productImageEl.src = product.image || product.thumbnail;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to fetch product image', e);
+            }
+        })();
+    }
+    
+    // Get reviews from localStorage
+    try {
+        const allReviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
+        // Filter reviews for this product - check if productId is in the productIds array
+        // Also support backward compatibility for reviews without productIds
+        const productReviews = allReviews.filter(r => {
+            const productIds = r.productIds || [];
+            // New format: check if productId is in the array
+            if (productIds.length > 0) {
+                return productIds.includes(Number(productId)) || productIds.includes(String(productId));
+            }
+            // Old format backward compatibility: if no productIds but has orderId, show review
+            // This is for reviews created before the fix
+            return false; // Don't show old reviews without productIds
+        });
+        
+        renderProductReviewsList(productReviews);
+    } catch (e) {
+        console.warn('Failed to load product reviews', e);
+        renderProductReviewsList([]);
+    }
+    
+    if (modal) {
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+    }
+}
+
+function closeViewProductReviewsModal() {
+    const modal = document.getElementById('viewProductReviewsModal');
+    if (modal) {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    currentViewProductId = null;
+    currentViewProductName = null;
+}
+
+function renderProductReviewsList(reviews) {
+    const listEl = document.getElementById('reviewsList');
+    const avgRatingEl = document.getElementById('reviewAverageRating');
+    const avgStarsEl = document.getElementById('reviewAverageStars');
+    const totalCountEl = document.getElementById('reviewTotalCount');
+    
+    if (!listEl) return;
+    
+    if (!reviews || reviews.length === 0) {
+        listEl.innerHTML = '<div style="text-align:center;color:#999;padding:40px 20px;"><div style="font-size:48px;margin-bottom:12px;">⭐</div><div>Chưa có đánh giá nào</div></div>';
+        if (avgRatingEl) avgRatingEl.textContent = '0.0';
+        if (avgStarsEl) avgStarsEl.innerHTML = '☆☆☆☆☆';
+        if (totalCountEl) totalCountEl.textContent = '0 đánh giá';
+        return;
+    }
+    
+    // Calculate average rating
+    const totalRating = reviews.reduce((sum, r) => sum + (Number(r.rating) || 0), 0);
+    const avgRating = (totalRating / reviews.length).toFixed(1);
+    
+    // Update stats
+    if (avgRatingEl) avgRatingEl.textContent = avgRating;
+    if (totalCountEl) totalCountEl.textContent = `${reviews.length} đánh giá`;
+    
+    // Render star display
+    const fullStars = Math.floor(avgRating);
+    const hasHalfStar = avgRating % 1 >= 0.5;
+    let starDisplay = '';
+    for (let i = 0; i < 5; i++) {
+        if (i < fullStars) starDisplay += '★';
+        else if (i === fullStars && hasHalfStar) starDisplay += '⯨';
+        else starDisplay += '☆';
+    }
+    if (avgStarsEl) avgStarsEl.innerHTML = '<span style="color:#ffc107;letter-spacing:2px;">' + starDisplay + '</span>';
+    
+    // Render reviews
+    const ratingLabels = ['', 'Rất tệ', 'Tệ', 'Bình thường', 'Tốt', 'Rất tốt'];
+    const ratingColors = ['', '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4'];
+    
+    const html = reviews.map((r, idx) => {
+        const stars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
+        const ratingLabel = ratingLabels[r.rating] || 'Không xác định';
+        const ratingColor = ratingColors[r.rating] || '#6b7280';
+        const date = r.createdAt ? new Date(r.createdAt).toLocaleDateString('vi-VN') : 'N/A';
+        const username = r.username || 'Khách hàng';
+        const userInitial = username.charAt(0).toUpperCase();
+        const comment = r.comment ? `<div style="margin-top:12px;padding:12px;background:#f5f5f5;border-radius:6px;color:#555;font-size:13px;line-height:1.5;">"${escapeHtml(r.comment)}"</div>` : '';
+        const reply = r.reply ? `
+            <div style="margin-top:12px;padding:12px;background:linear-gradient(135deg, #e0f2fe 0%, #cffafe 100%);border-left:4px solid #06b6d4;border-radius:6px;">
+                <div style="font-weight:600;color:#0369a1;font-size:12px;margin-bottom:6px;display:flex;align-items:center;gap:6px;"><span>💬</span> Trả lời từ quản trị viên</div>
+                <div style="color:#164e63;font-size:12px;line-height:1.5;">${escapeHtml(r.reply)}</div>
+            </div>
+        ` : '';
+        
+        return `
+            <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,0.08);transition:all 0.2s ease;position:relative;overflow:hidden;">
+                <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:${ratingColor};"></div>
+                <div style="display:flex;gap:12px;">
+                    <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg, ${ratingColor}, ${ratingColor}cc);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;">${userInitial}</div>
+                    <div style="flex:1;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+                            <div>
+                                <div style="font-weight:700;color:#1f2937;font-size:14px;">${escapeHtml(username)}</div>
+                                <div style="font-size:12px;color:#6b7280;margin-top:2px;">${date}</div>
+                            </div>
+                            <div style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:linear-gradient(135deg, #fbbf24, #f59e0b);color:white;border-radius:12px;font-weight:600;font-size:11px;">
+                                <span>${stars}</span>
+                                <span>${ratingLabel}</span>
+                            </div>
+                        </div>
+                        ${comment}
+                        ${reply}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    listEl.innerHTML = html;
+}
+
+// Call setup when document is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupReviewModalHandlers);
+} else {
+    setupReviewModalHandlers();
+}
+
+function setupReviewModalHandlers() {
+    const closeBtn = document.getElementById('closeReviewModal');
+    const skipBtn = document.getElementById('skipReviewBtn');
+    const submitBtn = document.getElementById('submitReviewBtn');
+    
+    if (closeBtn) closeBtn.addEventListener('click', closeReviewModal);
+    if (skipBtn) skipBtn.addEventListener('click', closeReviewModal);
+    if (submitBtn) submitBtn.addEventListener('click', submitReview);
+    
+    // Setup handlers for view reviews modal
+    const closeViewReviewsBtn = document.getElementById('closeViewReviewsBtn');
+    const closeViewReviewsModal = document.getElementById('closeViewReviewsModal');
+    if (closeViewReviewsBtn) closeViewReviewsBtn.addEventListener('click', closeViewProductReviewsModal);
+    if (closeViewReviewsModal) closeViewReviewsModal.addEventListener('click', closeViewProductReviewsModal);
+}
 
 function getActiveInvoice() {
     return invoices.find(inv => inv.id === activeInvoiceId) || null;
@@ -6111,7 +7077,10 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                     ${priceParts.badge}
                     <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
                     <div class="product-image">${buildProductImageMarkup(p)}</div>
-                    <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <div class="product-name" style="flex:1;">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                        <button class="review-btn" onclick="event.stopPropagation();showProductReviews(${p.id}, '${(p.name || '').replace(/'/g, "\\'")}')" style="background:none;border:none;padding:4px;cursor:pointer;color:#0066cc;font-size:14px;" title="Xem \u0111\u00e1nh gi\u00e1">★</button>
+                    </div>
                     <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
                     ${priceParts.priceBlock}
                 </div>
@@ -6130,7 +7099,10 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                     <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
                     <div class="product-image">${buildProductImageMarkup(p)}</div>
                     ${priceParts.priceBlock}
-                    <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <div class="product-name" style="flex:1;">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                        <button class="review-btn" onclick="event.stopPropagation();showProductReviews(${p.id}, '${(p.name || '').replace(/'/g, "\\'")}')" style="background:none;border:none;padding:4px;cursor:pointer;color:#0066cc;font-size:14px;" title="Xem \u0111\u00e1nh gi\u00e1">★</button>
+                    </div>
                     <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
                     <div class="product-meta">
                         <span>${p.unit ? '\u0110VT: ' + p.unit : '\u0110VT: -'}</span>
@@ -6151,7 +7123,10 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                 <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
                 <div class="product-image">${buildProductImageMarkup(p)}</div>
                 ${priceParts.priceBlock}
-                <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <div class="product-name" style="flex:1;">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <button class="review-btn" onclick="event.stopPropagation();showProductReviews(${p.id}, '${(p.name || '').replace(/'/g, "\\'")}')" style="background:none;border:none;padding:4px;cursor:pointer;color:#0066cc;font-size:14px;" title="Xem \u0111\u00e1nh gi\u00e1">★</button>
+                </div>
                 <div class="product-sku">${p.code || 'SKU'}</div>
             </div>
         `;

@@ -23,6 +23,11 @@
             </div>
         </div>
         <div class="header-actions">
+            <a href="../pages/shop-locations.html" class="icon-btn shop-locations-btn" title="Vị trí các cửa hàng" aria-label="Vị trí các cửa hàng">
+                <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5z" />
+                </svg>
+            </a>
             <div class="store">TRƯỜNG  CHINH</div>
             <button class="icon-btn" title="Thông báo" aria-label="Thông báo">
                 <svg viewBox="0 0 24 24" class="icon-svg" aria-hidden="true">
@@ -229,7 +234,13 @@
                     <div class="checkout-customer-fields" style="display:flex;flex-direction:column;gap:8px;">
                         <input id="checkoutCustomerName" type="text" placeholder="Tên khách hàng" value="Khách lẻ" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
                         <input id="checkoutCustomerPhone" type="tel" placeholder="SĐT khách hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;" />
-                        <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
+                        <div style="position:relative;display:flex;gap:6px;align-items:flex-start;">
+                            <div style="flex:1;position:relative;">
+                                <textarea id="checkoutCustomerAddress" rows="2" placeholder="Địa chỉ nhận hàng" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:6px;"></textarea>
+                                <div id="addressSuggestions" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:20;margin-top:6px;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 8px 22px rgba(0,0,0,0.12);max-height:220px;overflow:auto;font-size:13px;"></div>
+                            </div>
+                            <button id="getLocationBtn" type="button" class="primary-btn" style="padding:6px 10px;font-size:12px;white-space:nowrap;height:fit-content;margin-top:6px;" title="Lấy vị trí hiện tại từ GPS">📍 Vị trí</button>
+                        </div>
                     </div>
                     <div class="customer-points-info" style="padding-top:8px;">
                         <div style="font-size:13px;color:#333;margin-top:6px;display:flex;align-items:center;justify-content:space-between;">
@@ -920,8 +931,81 @@
         </div>
     </div>
 
+    <!-- Product Review Modal -->
+    <div class="modal" id="reviewModal" aria-hidden="true">
+        <div class="modal-content" style="width:450px;max-width:90vw;">
+            <div class="modal-header">
+                <h3>Đánh giá sản phẩm</h3>
+                <button id="closeReviewModal" class="icon-btn small" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div style="padding:20px;display:flex;flex-direction:column;gap:16px;">
+                <div>
+                    <div style="font-size:13px;color:#666;margin-bottom:8px;">Bạn có muốn đánh giá sản phẩm vừa mua không?</div>
+                    <div style="font-size:12px;color:#999;padding:8px;background:#f5f5f5;border-radius:4px;">
+                        Đơn hàng: <strong id="reviewOrderId">-</strong>
+                    </div>
+                </div>
+                <div>
+                    <label style="display:block;font-size:13px;color:#666;margin-bottom:8px;">
+                        Mức độ hài lòng <span style="color:#d9534f;">*</span>
+                    </label>
+                    <div style="display:flex;gap:12px;align-items:center;">
+                        <div style="display:flex;gap:8px;font-size:24px;">
+                            <span class="rating-star" data-rating="1" style="cursor:pointer;color:#ddd;">★</span>
+                            <span class="rating-star" data-rating="2" style="cursor:pointer;color:#ddd;">★</span>
+                            <span class="rating-star" data-rating="3" style="cursor:pointer;color:#ddd;">★</span>
+                            <span class="rating-star" data-rating="4" style="cursor:pointer;color:#ddd;">★</span>
+                            <span class="rating-star" data-rating="5" style="cursor:pointer;color:#ddd;">★</span>
+                        </div>
+                        <span id="ratingText" style="font-size:12px;color:#666;">Chưa chọn</span>
+                    </div>
+                    <input id="reviewRatingHidden" type="hidden" value="0" />
+                </div>
+                <div>
+                    <label style="display:block;font-size:13px;color:#666;margin-bottom:6px;">Nhận xét (tùy chọn)</label>
+                    <textarea id="reviewComment" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;font-family:Arial,sans-serif;resize:vertical;min-height:80px;" placeholder="Chia sẻ cảm nhận của bạn về sản phẩm..."></textarea>
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid #eee;">
+                    <button id="skipReviewBtn" class="ghost-btn" type="button">Bỏ qua</button>
+                    <button id="submitReviewBtn" class="primary-btn" type="button">Gửi đánh giá</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- View Product Reviews Modal -->
+    <div class="modal" id="viewProductReviewsModal" aria-hidden="true">
+        <div class="modal-content" style="width:600px;max-width:90vw;border-radius:16px;overflow:hidden;">
+            <div style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);padding:24px;color:white;">
+                <button id="closeViewReviewsModal" class="icon-btn small" type="button" aria-label="Đóng" style="position:absolute;top:16px;right:16px;color:white;">×</button>
+                <div style="display:flex;gap:16px;">
+                    <img id="reviewProductImage" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect fill='%23f0f0f0' width='100' height='100'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' font-family='Arial' font-size='14' fill='%23999'%3ENo Image%3C/text%3E%3C/svg%3E" alt="" style="width:80px;height:80px;border-radius:8px;object-fit:cover;background:#f0f0f0;">
+                    <div style="flex:1;">
+                        <h3 id="reviewProductName" style="margin:0;font-size:18px;font-weight:700;margin-bottom:12px;"></h3>
+                        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+                            <span id="reviewAverageRating" style="font-size:32px;font-weight:700;">0.0</span>
+                            <div style="display:flex;flex-direction:column;gap:4px;">
+                                <div style="display:flex;gap:2px;font-size:18px;" id="reviewAverageStars">★★★★★</div>
+                                <span id="reviewTotalCount" style="font-size:12px;opacity:0.9;">0 đánh giá</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="padding:24px;display:flex;flex-direction:column;gap:16px;">
+                <div id="reviewsList" style="max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;">
+                    <div style="text-align:center;color:#999;padding:20px;">Không có đánh giá</div>
+                </div>
+            </div>
+            <div class="modal-actions" style="padding:16px 24px;background:#f9f9f9;border-top:1px solid #e5e7eb;">
+                <button type="button" class="ghost-btn" id="closeViewReviewsBtn">Đóng</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="../assets/js/combo-promotion-ai.js?v=1.0.0" onerror="console.error('Failed to load combo-promotion-ai.js')"></script>
+    <script src="../assets/data/vietnamese-addresses-hcm.js"></script>
     <script>
         // Ensure frontend calls the correct backend API when running on localhost
         // Minimal change: set global API_BASE used by employee-dashboard.js
@@ -933,7 +1017,7 @@
             }
         })();
     </script>
-    <script src="../assets/js/employee-dashboard.js?v=stock-8"></script>
+    <script src="../assets/js/employee-dashboard.js?v=stock-9"></script>
     <script src="../assets/js/app-shell.js"></script>
     <script>
         // Lightweight fallback: if products grid still empty after main script,

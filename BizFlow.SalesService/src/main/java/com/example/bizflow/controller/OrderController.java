@@ -222,9 +222,15 @@ public class OrderController {
         Long customerId = request.getCustomerId();
         CustomerClient.CustomerSnapshot customer = null;
 
-        // Loyalty points are account-based: when an authenticated user creates
-        // an order, always resolve the linked customer record from that account.
-        if (userId != null && user != null) {
+        // POS must honor explicitly selected customer from the client payload.
+        // Resolve this first so points/tier come from the intended customer,
+        // not from the currently logged-in employee account.
+        if (customerId != null) {
+            customer = customerClient.getCustomer(customerId);
+        }
+
+        // If client did not provide customerId, try account-linked customer.
+        if (customer == null && customerId == null && userId != null && user != null) {
             customer = resolveOrUpsertCustomerForUser(
                     userId,
                     user,
@@ -237,25 +243,20 @@ public class OrderController {
             }
         }
 
-        // If client didn't provide existing customerId, try to associate by user first,
-        // falling back to phone-based upsert for guest customers.
-        if (customerId == null) {
-            if (request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
-                CustomerClient.CustomerSnapshot up = customerClient.upsertCustomer(
-                        request.getCustomerName(),
-                        request.getCustomerPhone(),
-                        request.getCustomerEmail(),
-                        request.getCustomerAddress()
-                );
-                if (up != null) {
-                    customerId = up.getId();
-                    customer = up;
-                }
+        // Final fallback for guest checkout by phone upsert.
+        if (customer == null && customerId == null
+                && request.getCustomerPhone() != null
+                && !request.getCustomerPhone().isBlank()) {
+            CustomerClient.CustomerSnapshot up = customerClient.upsertCustomer(
+                    request.getCustomerName(),
+                    request.getCustomerPhone(),
+                    request.getCustomerEmail(),
+                    request.getCustomerAddress()
+            );
+            if (up != null) {
+                customerId = up.getId();
+                customer = up;
             }
-        }
-
-        if (customer == null && customerId != null) {
-            customer = customerClient.getCustomer(customerId);
         }
 
         boolean paid = Boolean.TRUE.equals(request.getPaid());
