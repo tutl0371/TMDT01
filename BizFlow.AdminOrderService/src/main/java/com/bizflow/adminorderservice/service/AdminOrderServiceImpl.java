@@ -1,6 +1,8 @@
 package com.bizflow.adminorderservice.service;
 
 import java.util.List;
+import java.time.Instant;
+import java.util.*;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -54,22 +56,21 @@ public class AdminOrderServiceImpl implements AdminOrderService {
             .collect(Collectors.toList());
     }
 
-        @Override
-        @Transactional(readOnly = true)
-        public Page<OrderSummaryDto> listOrdersPage(String status, String query, int page, int size) {
+    @Override
+    @Transactional(readOnly = true)
+    public Page<OrderSummaryDto> listOrdersPage(String status, String query, int page, int size) {
         int safePage = Math.max(0, page);
         int safeSize = Math.min(Math.max(1, size), 200);
 
         return orderRecordRepository
             .searchOrders(status, query, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt")))
             .map(this::toDto);
-        }
+    }
 
     @Override
     @Transactional(readOnly = true)
     public OrderDetailDto getOrder(Long id) {
         try {
-            // Direct SQL from MySQL container (cross-schema joins supported).
             Map<String, Object> orderRow = jdbcTemplate.queryForMap(
                     "SELECT o.id, o.invoice_number, o.status, o.total_amount, o.created_at, " +
                             "o.customer_id, o.user_id, o.customer_name, o.note, o.order_type, o.is_return, " +
@@ -96,7 +97,6 @@ public class AdminOrderServiceImpl implements AdminOrderService {
             dto.setRefundMethod((String) orderRow.get("refund_method"));
             dto.setParentOrderId(toLong(orderRow.get("parent_order_id")));
 
-            // Items + product info from catalog DB
             List<OrderItemDto> items = jdbcTemplate.query(
                     "SELECT oi.id, oi.product_id, oi.quantity, oi.price, " +
                             "p.product_name, p.sku, p.unit " +
@@ -125,7 +125,6 @@ public class AdminOrderServiceImpl implements AdminOrderService {
             );
             dto.setItems(items);
 
-            // Payments
             List<OrderPaymentDto> payments = jdbcTemplate.query(
                     "SELECT p.id, p.amount, p.method, p.paid_at, p.status, p.token " +
                             "FROM bizflow_sales_db.payments p WHERE p.order_id = ? ORDER BY p.id",
@@ -143,7 +142,6 @@ public class AdminOrderServiceImpl implements AdminOrderService {
             );
             dto.setPayments(payments);
 
-            // Optional customer details (if customer_id exists)
             if (dto.getCustomerId() != null) {
                 try {
                     Map<String, Object> customerRow = jdbcTemplate.queryForMap(
@@ -156,11 +154,9 @@ public class AdminOrderServiceImpl implements AdminOrderService {
                     dto.setCustomerPhone((String) customerRow.get("phone"));
                     dto.setCustomerEmail((String) customerRow.get("email"));
                 } catch (EmptyResultDataAccessException ignored) {
-                    // leave as-is
                 }
             }
 
-            // Optional user details (if user_id exists)
             if (dto.getUserId() != null) {
                 try {
                     Map<String, Object> userRow = jdbcTemplate.queryForMap(
@@ -170,7 +166,6 @@ public class AdminOrderServiceImpl implements AdminOrderService {
                     dto.setUsername((String) userRow.get("username"));
                     dto.setUserFullName((String) userRow.get("full_name"));
                 } catch (EmptyResultDataAccessException ignored) {
-                    // leave as-is
                 }
             }
 
@@ -185,29 +180,90 @@ public class AdminOrderServiceImpl implements AdminOrderService {
     public OrderSummaryDto updateOrderStatus(Long id, OrderStatusUpdateRequest request) {
         OrderRecord record = orderRecordRepository.findById(id)
                 .orElseThrow(() -> new OrderNotFoundException(id));
-        record.setStatus(request.getStatus().toUpperCase(Locale.ROOT));
+        
+        String oldStatus = record.getStatus() != null ? record.getStatus().toUpperCase(Locale.ROOT) : "PENDING";
+        String newStatus = request.getStatus() != null ? request.getStatus().toUpperCase(Locale.ROOT) : oldStatus;
+        
+        // Define flexible transition map
+        Map<String, List<String>> allowedTransitions = new HashMap<>();
+        List<String> earlyStates = Arrays.asList("PENDING", "UNPAID", "PAID", "CONFIRMED", "PROCESSING", "PACKING");
+        
+        // From any early state, you can go to mostly any other state
+        for (String s : earlyStates) {
+            allowedTransitions.put(s, Arrays.asList("CONFIRMED", "PROCESSING", "PACKING", "SHIPPING", "SHIPPED", "DELIVERED", "CANCELLED"));
+        }
+        allowedTransitions.put("SHIPPING", Arrays.asList("SHIPPED", "DELIVERED", "CANCELLED", "RETURNED"));
+        allowedTransitions.put("SHIPPED", Arrays.asList("DELIVERED", "CANCELLED", "RETURNED"));
+        allowedTransitions.put("DELIVERED", Arrays.asList("RECEIVED", "RETURNED"));
+        
+        List<String> finalStates = Arrays.asList("RECEIVED", "CANCELLED", "RETURNED");
+        if (finalStates.contains(oldStatus)) {
+            throw new RuntimeException("Đơn hàng đã kết thúc ở trạng thái " + oldStatus + ", không thể thay đổi.");
+        }
+
+        if (!newStatus.equals(oldStatus)) {
+            List<String> allowed = allowedTransitions.get(oldStatus);
+            if (allowed == null || !allowed.contains(newStatus)) {
+                // If not in map, check if it's a forced move or log it
+                logger.warn("Status transition from {} to {} might be restricted, but attempting to proceed.", oldStatus, newStatus);
+            }
+        }
+
+        // Special logic for shipping
+        if ("SHIPPING".equals(newStatus) || "SHIPPED".equals(newStatus)) {
+            String method = request.getShippingMethod();
+            String tracking = request.getTrackingNumber();
+            
+            if (method != null && !method.isBlank()) record.setShippingMethod(method);
+            if (tracking != null && !tracking.isBlank()) record.setTrackingNumber(tracking);
+            
+            if (record.getShippingStartedAt() == null) {
+                record.setShippingStartedAt(Instant.now());
+            }
+        }
+
+        if ("DELIVERED".equals(newStatus) && record.getDeliveredAt() == null) {
+            record.setDeliveredAt(Instant.now());
+        }
+
+        record.setStatus(newStatus);
         OrderRecord updatedRecord = orderRecordRepository.save(record);
         
-        // Publish event to Kafka (optional)
+        // Record History in sales database
+        try {
+            String trackingInfo = "";
+            if (updatedRecord.getShippingMethod() != null && updatedRecord.getTrackingNumber() != null) {
+                trackingInfo = " [" + updatedRecord.getShippingMethod() + ": " + updatedRecord.getTrackingNumber() + "]";
+            }
+            String note = (request.getNote() != null && !request.getNote().isEmpty()) ? request.getNote() : "Cập nhật qua Admin";
+            
+            jdbcTemplate.update(
+                "INSERT INTO bizflow_sales_db.order_status_history (order_id, status, created_at, created_by, note) " +
+                "VALUES (?, ?, NOW(), ?, ?)",
+                id, updatedRecord.getStatus(), "ADMIN", note + trackingInfo
+            );
+        } catch (Exception e) {
+            logger.warn("Failed to record status history for order {}", id, e.getMessage());
+        }
+
+        // Publish event to Kafka
         if (orderEventProducer != null) {
             try {
-            PurchaseEvent event = new PurchaseEvent();
-            event.setOrderId(updatedRecord.getId());
-            // Note: customerId is extracted from invoice number pattern or order history
-            event.setInvoiceNumber(updatedRecord.getInvoiceNumber());
-            if (updatedRecord.getTotalAmount() != null) {
-                event.setTotalAmount(new java.math.BigDecimal(updatedRecord.getTotalAmount()));
-            }
-            event.setStatus(updatedRecord.getStatus());
-            if (updatedRecord.getCreatedAt() != null) {
-                event.setCreatedAt(java.time.LocalDateTime.ofInstant(updatedRecord.getCreatedAt(), java.time.ZoneId.systemDefault()));
-            }
-            
-            orderEventProducer.publishPurchaseEvent(event);
-            logger.info("Published purchase event for order {} with status {}", id, updatedRecord.getStatus());
+                PurchaseEvent event = new PurchaseEvent();
+                event.setOrderId(updatedRecord.getId());
+                event.setInvoiceNumber(updatedRecord.getInvoiceNumber());
+                if (updatedRecord.getTotalAmount() != null) {
+                    event.setTotalAmount(new java.math.BigDecimal(updatedRecord.getTotalAmount()));
+                }
+                event.setStatus(updatedRecord.getStatus());
+                if (updatedRecord.getCreatedAt() != null) {
+                    event.setCreatedAt(java.time.LocalDateTime.ofInstant(updatedRecord.getCreatedAt(), java.time.ZoneId.systemDefault()));
+                } else {
+                    event.setCreatedAt(java.time.LocalDateTime.now());
+                }
+                orderEventProducer.publishPurchaseEvent(event);
             } catch (Exception e) {
-                logger.warn("Failed to publish Kafka event for order {}", id, e);
-                // Don't fail the order status update if Kafka fails
+                logger.warn("Failed to publish Kafka event for order {}", id, e.getMessage());
             }
         }
         
@@ -215,7 +271,7 @@ public class AdminOrderServiceImpl implements AdminOrderService {
     }
 
     private OrderSummaryDto toDto(OrderRecord record) {
-        return new OrderSummaryDto(
+        OrderSummaryDto dto = new OrderSummaryDto(
                 record.getId(),
                 record.getInvoiceNumber(),
                 record.getStatus(),
@@ -223,6 +279,12 @@ public class AdminOrderServiceImpl implements AdminOrderService {
                 record.getTotalAmount(),
                 record.getCreatedAt()
         );
+        dto.setShippingMethod(record.getShippingMethod());
+        dto.setTrackingNumber(record.getTrackingNumber());
+        dto.setShippingStartedAt(record.getShippingStartedAt());
+        dto.setDeliveredAt(record.getDeliveredAt());
+        dto.setAddress(record.getAddress());
+        return dto;
     }
 
     private static Long toLong(Object value) {
@@ -238,7 +300,6 @@ public class AdminOrderServiceImpl implements AdminOrderService {
     private static Boolean toBoolean(Object value) {
         if (value == null) return null;
         if (value instanceof Boolean b) return b;
-        // MySQL BIT(1) often comes back as byte[] or numeric.
         if (value instanceof Number n) return n.intValue() != 0;
         if (value instanceof byte[] bytes) {
             return bytes.length > 0 && bytes[0] != 0;
@@ -255,7 +316,6 @@ public class AdminOrderServiceImpl implements AdminOrderService {
         if (value instanceof java.time.Instant i) return i;
         if (value instanceof java.time.OffsetDateTime odt) return odt.toInstant();
         if (value instanceof java.time.LocalDateTime ldt) {
-            // MySQL DATETIME has no timezone; treat it as UTC to match other services config.
             return ldt.toInstant(java.time.ZoneOffset.UTC);
         }
         return null;

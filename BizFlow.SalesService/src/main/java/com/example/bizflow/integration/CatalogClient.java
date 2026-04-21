@@ -99,12 +99,22 @@ public class CatalogClient {
             this.price = price;
         }
 
+        private Integer warrantyPeriod;
+
         public Long getCategoryId() {
             return categoryId;
         }
 
         public void setCategoryId(Long categoryId) {
             this.categoryId = categoryId;
+        }
+
+        public Integer getWarrantyPeriod() {
+            return warrantyPeriod;
+        }
+
+        public void setWarrantyPeriod(Integer warrantyPeriod) {
+            this.warrantyPeriod = warrantyPeriod;
         }
     }
 }

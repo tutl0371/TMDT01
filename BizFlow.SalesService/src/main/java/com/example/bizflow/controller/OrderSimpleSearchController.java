@@ -72,8 +72,6 @@ public class OrderSimpleSearchController {
             m.put("status", o.getStatus());
             m.put("createdAt", o.getCreatedAt());
             m.put("totalAmount", o.getTotalAmount());
-            m.put("estimatedDeliveryFrom", o.getEstimatedDeliveryFrom());
-            m.put("estimatedDeliveryTo", o.getEstimatedDeliveryTo());
                 String phoneFromOrder = o.getCustomerPhone();
                 String custPhone = phoneFromOrder != null && !phoneFromOrder.isBlank() ? phoneFromOrder
                     : (o.getCustomerId() == null ? null : (customerMap.get(o.getCustomerId()) == null ? null : customerMap.get(o.getCustomerId()).getPhone()));

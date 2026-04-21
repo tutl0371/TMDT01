@@ -10,6 +10,11 @@ public class OrderSummaryDto {
     private String customerName;
     private Double totalAmount;
     private Instant createdAt;
+    private String shippingMethod;
+    private String trackingNumber;
+    private Instant shippingStartedAt;
+    private Instant deliveredAt;
+    private String address;
 
     public OrderSummaryDto() {
     }
@@ -71,4 +76,19 @@ public class OrderSummaryDto {
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
     }
+
+    public String getShippingMethod() { return shippingMethod; }
+    public void setShippingMethod(String shippingMethod) { this.shippingMethod = shippingMethod; }
+
+    public String getTrackingNumber() { return trackingNumber; }
+    public void setTrackingNumber(String trackingNumber) { this.trackingNumber = trackingNumber; }
+
+    public Instant getShippingStartedAt() { return shippingStartedAt; }
+    public void setShippingStartedAt(Instant shippingStartedAt) { this.shippingStartedAt = shippingStartedAt; }
+
+    public Instant getDeliveredAt() { return deliveredAt; }
+    public void setDeliveredAt(Instant deliveredAt) { this.deliveredAt = deliveredAt; }
+
+    public String getAddress() { return address; }
+    public void setAddress(String address) { this.address = address; }
 }

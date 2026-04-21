@@ -316,25 +316,41 @@ function getTierColor(tier) {
 }
 
 function getStatusClass(status) {
-    if (!status) return 'success';
+    const s = String(status || '').toUpperCase();
     const statusMap = {
-        'COMPLETED': 'success',
-        'PAID': 'success',
         'PENDING': 'pending',
-        'CANCELLED': 'cancelled'
+        'CONFIRMED': 'pending',
+        'PACKING': 'pending',
+        'PROCESSING': 'pending',
+        'SHIPPING': 'pending',
+        'SHIPPED': 'pending',
+        'PAID': 'success',
+        'COMPLETED': 'success',
+        'DELIVERED': 'success',
+        'RECEIVED': 'success',
+        'CANCELLED': 'cancelled',
+        'RETURNED': 'cancelled'
     };
-    return statusMap[status] || 'success';
+    return statusMap[s] || 'success';
 }
 
 function getStatusText(status) {
-    if (!status) return 'Đã thanh toán';
+    const s = String(status || '').toUpperCase();
     const textMap = {
+        'PENDING': 'Chờ xác nhận',
+        'CONFIRMED': 'Đã xác nhận',
+        'PACKING': 'Đang đóng gói',
+        'PROCESSING': 'Đang đóng gói',
+        'SHIPPING': 'Đang giao hàng',
+        'SHIPPED': 'Đang giao hàng',
+        'PAID': 'Đã thanh toán (Chờ đóng gói)',
         'COMPLETED': 'Đã thanh toán',
-        'PAID': 'Đã thanh toán',
-        'PENDING': 'Chờ xử lý',
-        'CANCELLED': 'Đã hủy'
+        'DELIVERED': 'Giao hàng thành công',
+        'RECEIVED': 'Hoàn tất',
+        'CANCELLED': 'Đã hủy',
+        'RETURNED': 'Đã trả hàng'
     };
-    return textMap[status] || 'Đã thanh toán';
+    return textMap[s] || 'Đã thanh toán';
 }
 
 function showLoading(show) {
