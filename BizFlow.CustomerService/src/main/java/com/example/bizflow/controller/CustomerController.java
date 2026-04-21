@@ -351,6 +351,12 @@ public class CustomerController {
         public String phone;
     }
 
+    private static String trimToNull(String str) {
+        if (str == null) return null;
+        String trimmed = str.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private static String normalizePhone(String phone) {
         if (phone == null) return null;
         return phone.replaceAll("\\D", "");
