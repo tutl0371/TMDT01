@@ -251,6 +251,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // Ensure page is interactive (remove blocking overlays) before wiring handlers
     try { ensureInteractive(); } catch (e) { console.warn('ensureInteractive failed', e); }
+    // Auto-migrate old reviews format to new format with productIds
+    try { migrateReviewsFormat(); } catch (e) { console.warn('migrateReviewsFormat failed', e); }
     // Always attach UI handlers; protect each setup call so one failure doesn't block others
     try { setupEventListeners(); } catch (e) { console.warn('setupEventListeners failed', e); }
     try { setupOrderTracking(); } catch (e) { console.warn('setupOrderTracking failed', e); }
@@ -1800,7 +1802,7 @@ function showTransferQrModal(orderId, amount, token) {
 
     const bankCode = 'VCB';
     const account = '1021209511';
-    const accountName = 'BIZFLOW CO';
+    const accountName = 'UBIQUITY HUB';
 
     const payloadEl = document.getElementById('transferPayload');
     if (payloadEl) {
@@ -1826,7 +1828,7 @@ function showTransferQrModal(orderId, amount, token) {
     const bankQuickId = 'VCB';
     const template = 'compact';
     const amountParam = Number.isFinite(Number(amount)) && amount > 0 ? `amount=${Math.round(amount)}` : '';
-    const addInfoParam = `addInfo=${encodeURIComponent('Thanh to×n don #' + orderId)}`;
+    const addInfoParam = `addInfo=${encodeURIComponent('Thanh toan don #' + orderId)}`;
     const accountNameParam = `accountName=${encodeURIComponent(accountName)}`;
     const qrQuicklinkBase = `https://img.vietqr.io/image/${bankQuickId}-${account}-${template}.png`;
     const qrImgUrl = qrQuicklinkBase + (amountParam || addInfoParam || accountNameParam ? `?${[amountParam, addInfoParam, accountNameParam].filter(Boolean).join('&')}` : '');
@@ -2111,7 +2113,7 @@ function updatePointsDiscountPreview() {
     const stepsByTotal = rate > 0 ? Math.floor(cartTotal / rate) : 0;
     const appliedSteps = Math.max(0, Math.min(stepsByPoints, stepsByTotal));
     const discount = appliedSteps * rate;
-    
+
     const discountEl = document.getElementById('usePointsDiscountPreview');
     if (discountEl) {
         discountEl.textContent = formatPrice(discount);
@@ -4128,11 +4130,27 @@ function selectAddressSuggestion(index) {
 }
 
 async function fetchAddressSuggestionsByText(query) {
-    if (!query || query.length < 3) {
+    if (!query || query.trim().length < 1) {
         return [];
     }
 
     try {
+        // First, try to find addresses from the local Vietnamese address database
+        if (typeof searchVietnameseAddresses === 'function') {
+            const localResults = searchVietnameseAddresses(query);
+            if (localResults && localResults.length > 0) {
+                console.log('Found local address suggestions:', localResults);
+                return localResults;
+            }
+        }
+
+        // If query is very short and no local results, don't call external API
+        if (query.trim().length < 3) {
+            return [];
+        }
+
+        // Fallback to Nominatim API if no local results found
+        console.log('No local results found, falling back to Nominatim API');
         const rawQuery = query.trim();
         const queryWithCity = /hcm|hồ chí minh|ho chi minh/i.test(rawQuery)
             ? rawQuery
@@ -4449,7 +4467,7 @@ function setupEventListeners() {
     });
     checkoutAddressEl?.addEventListener('input', (e) => {
         const query = e.target.value.trim();
-        if (!query || query.length < 3) {
+        if (!query || query.length < 1) {
             checkoutAddressCandidates = [];
             hideAddressSuggestions();
             return;
@@ -5044,13 +5062,20 @@ async function confirmOrderReceived(orderId) {
             if (res.ok) {
                 if (body && body.message) {
                     const details = body.pointsAdded != null ? `\nĐã cộng: ${body.pointsAdded} điểm` : '';
-                    alert(`${body.message || 'Đã xác nhận nhận hàng'}${details}`);
+                    const message = `${body.message || 'Đã xác nhận nhận hàng'}${details}`;
+                    alert(message);
                     if (body && body.pointsAdded != null) {
                         try { showPointsAdded(Number(body.pointsAdded)); } catch (e) { }
                     }
                 } else {
                     alert(text || 'Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
                 }
+
+                // Show review modal after successful confirmation
+                setTimeout(() => {
+                    showReviewModal(orderId);
+                }, 500);
+
                 return true;
             }
 
@@ -5086,6 +5111,431 @@ function renderOrderSummaryResult(summary) {
     `;
 }
 
+// Review Migration for backward compatibility
+function migrateReviewsFormat() {
+    try {
+        const reviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
+        if (!Array.isArray(reviews) || reviews.length === 0) return;
+
+        let hasOldFormat = false;
+        const migratedReviews = [];
+
+        reviews.forEach(r => {
+            if (r.productIds && Array.isArray(r.productIds) && r.productIds.length > 0) {
+                // New format - keep it
+                migratedReviews.push(r);
+            } else {
+                // Old format without productIds - mark as needing update
+                hasOldFormat = true;
+                console.log('Found old review format to migrate', r);
+            }
+        });
+
+        // Save only migrated (new format) reviews
+        if (hasOldFormat && migratedReviews.length >= 0) {
+            localStorage.setItem('bizflow_reviews', JSON.stringify(migratedReviews));
+            console.log(`Migrated reviews: removed ${reviews.length - migratedReviews.length} old format reviews`);
+        }
+    } catch (e) {
+        console.warn('Failed to migrate reviews format', e);
+    }
+}
+
+// Review Modal Functions
+let currentReviewOrderId = null;
+let currentReviewRating = 0;
+let currentReviewOrderItems = []; // Store order items to get productIds
+
+function showReviewModal(orderId) {
+    currentReviewOrderId = orderId;
+    currentReviewRating = 0;
+    currentReviewOrderItems = [];
+
+    const modal = document.getElementById('reviewModal');
+    const orderIdEl = document.getElementById('reviewOrderId');
+    const comment = document.getElementById('reviewComment');
+    const ratingHidden = document.getElementById('reviewRatingHidden');
+
+    if (orderIdEl) orderIdEl.textContent = orderId || '-';
+    if (comment) comment.value = '';
+    if (ratingHidden) ratingHidden.value = '0';
+
+    // Reset star rating display
+    document.querySelectorAll('.rating-star').forEach((star, index) => {
+        star.style.color = '#ddd';
+        star.setAttribute('data-rating', index + 1);
+    });
+    const ratingText = document.getElementById('ratingText');
+    if (ratingText) ratingText.textContent = 'Chưa chọn';
+
+    // Fetch order details to get product information
+    fetchOrderDetails(orderId);
+
+    // Setup star click handlers
+    setupRatingStars();
+
+    if (modal) {
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+    }
+}
+
+async function fetchOrderDetails(orderId) {
+    try {
+        const headers = getAuthHeaders();
+        const endpoints = [
+            `${API_BASE}/orders/${orderId}`,
+            `${API_BASE}/orders/detail/${orderId}`
+        ];
+
+        for (const url of endpoints) {
+            try {
+                const res = await fetch(url, { headers });
+                if (res.ok) {
+                    const order = await res.json();
+                    if (order.items && Array.isArray(order.items)) {
+                        currentReviewOrderItems = order.items;
+                        console.log('Order items loaded', currentReviewOrderItems);
+                        break;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to fetch from', url, e);
+            }
+        }
+    } catch (err) {
+        console.warn('fetchOrderDetails error', err);
+    }
+}
+
+function closeReviewModal() {
+    const modal = document.getElementById('reviewModal');
+    if (modal) {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    currentReviewOrderId = null;
+    currentReviewRating = 0;
+}
+
+function setupRatingStars() {
+    document.querySelectorAll('.rating-star').forEach(star => {
+        star.addEventListener('click', (e) => {
+            const rating = parseInt(e.target.getAttribute('data-rating'), 10);
+            currentReviewRating = rating;
+
+            // Update star colors
+            document.querySelectorAll('.rating-star').forEach((s, index) => {
+                if (index < rating) {
+                    s.style.color = '#ffc107';
+                } else {
+                    s.style.color = '#ddd';
+                }
+            });
+
+            // Update rating text
+            const ratingText = document.getElementById('ratingText');
+            const ratingLabels = ['', 'Rất tệ', 'Tệ', 'Bình thường', 'Tốt', 'Rất tốt'];
+            if (ratingText) ratingText.textContent = ratingLabels[rating] || 'Chưa chọn';
+
+            // Store rating
+            const ratingHidden = document.getElementById('reviewRatingHidden');
+            if (ratingHidden) ratingHidden.value = rating;
+        });
+
+        // Add hover effect
+        star.addEventListener('mouseover', (e) => {
+            const rating = parseInt(e.target.getAttribute('data-rating'), 10);
+            document.querySelectorAll('.rating-star').forEach((s, index) => {
+                if (index < rating) {
+                    s.style.color = '#ffc107';
+                } else {
+                    s.style.color = '#ddd';
+                }
+            });
+        });
+    });
+
+    // Reset on mouse leave
+    const starsContainer = document.querySelector('.rating-star').parentElement;
+    if (starsContainer) {
+        starsContainer.addEventListener('mouseleave', () => {
+            document.querySelectorAll('.rating-star').forEach((s, index) => {
+                if (index < currentReviewRating) {
+                    s.style.color = '#ffc107';
+                } else {
+                    s.style.color = '#ddd';
+                }
+            });
+        });
+    }
+}
+
+function submitReview() {
+    if (!currentReviewOrderId) {
+        alert('Không tìm thấy đơn hàng. Vui lòng thử lại.');
+        return;
+    }
+
+    const rating = currentReviewRating || 0;
+    const comment = (document.getElementById('reviewComment')?.value || '').trim();
+
+    if (rating === 0) {
+        alert('Vui lòng chọn mức độ hài lòng trước khi gửi đánh giá.');
+        return;
+    }
+
+    // Get product IDs from order items
+    const productIds = currentReviewOrderItems.map(item => item.productId || item.id).filter(id => id);
+
+    // If productIds is empty, show warning and don't submit
+    if (productIds.length === 0) {
+        alert('Không thể tải thông tin sản phẩm từ đơn hàng. Vui lòng làm mới trang và thử lại.');
+        return;
+    }
+
+    // Prepare review data - store for all products in the order
+    const reviewData = {
+        orderId: currentReviewOrderId,
+        productIds: productIds,  // Array of product IDs in this order
+        rating: rating,
+        comment: comment,
+        userId: getCurrentUserId(),
+        username: sessionStorage.getItem('username') || 'Khách hàng',
+        createdAt: new Date().toISOString()
+    };
+
+    // Store in localStorage as backup (since backend may not have review endpoints yet)
+    try {
+        const reviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
+        reviews.push(reviewData);
+        localStorage.setItem('bizflow_reviews', JSON.stringify(reviews));
+        console.log('Review saved to localStorage', reviewData);
+    } catch (e) {
+        console.warn('Failed to save review to localStorage', e);
+    }
+
+    // Try to send to backend API
+    const headers = getAuthHeaders();
+    const endpoints = [
+        `${API_BASE}/orders/${currentReviewOrderId}/review`,
+        `${API_BASE}/reviews/create`,
+        `${API_BASE}/feedback/create`
+    ];
+
+    Promise.resolve().then(() => {
+        for (const url of endpoints) {
+            fetch(url, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify(reviewData)
+            })
+                .then(res => {
+                    if (res.ok) {
+                        console.log('Review sent to backend', url);
+                        return;
+                    }
+                })
+                .catch(err => console.warn('Failed to send review to', url, err));
+        }
+    });
+
+    // Show success message and redirect
+    alert(`Cảm ơn bạn đã đánh giá! ${rating} sao - "${comment}"`);
+    closeReviewModal();
+}
+
+function setupReviewModalHandlers() {
+    const closeBtn = document.getElementById('closeReviewModal');
+    const skipBtn = document.getElementById('skipReviewBtn');
+    const submitBtn = document.getElementById('submitReviewBtn');
+
+    if (closeBtn) closeBtn.addEventListener('click', closeReviewModal);
+    if (skipBtn) skipBtn.addEventListener('click', closeReviewModal);
+    if (submitBtn) submitBtn.addEventListener('click', submitReview);
+
+    // Setup handlers for view reviews modal
+    const closeViewReviewsBtn = document.getElementById('closeViewReviewsBtn');
+    const closeViewReviewsModal = document.getElementById('closeViewReviewsModal');
+    if (closeViewReviewsBtn) closeViewReviewsBtn.addEventListener('click', closeViewProductReviewsModal);
+    if (closeViewReviewsModal) closeViewReviewsModal.addEventListener('click', closeViewProductReviewsModal);
+}
+
+// Product Reviews Viewing Functions
+let currentViewProductId = null;
+let currentViewProductName = null;
+
+function showProductReviews(productId, productName) {
+    currentViewProductId = productId;
+    currentViewProductName = productName;
+
+    const modal = document.getElementById('viewProductReviewsModal');
+    const productNameEl = document.getElementById('reviewProductName');
+    const productImageEl = document.getElementById('reviewProductImage');
+
+    if (productNameEl) productNameEl.textContent = productName || 'Sản phẩm';
+
+    // Fetch product image
+    if (productImageEl) {
+        (async () => {
+            try {
+                const response = await fetch(`${API_BASE}/products/${productId}`, {
+                    headers: getAuthHeaders()
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    const product = data.data || data;
+                    if (product.image || product.thumbnail) {
+                        productImageEl.src = product.image || product.thumbnail;
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to fetch product image', e);
+            }
+        })();
+    }
+
+    // Get reviews from localStorage
+    try {
+        const allReviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
+        // Filter reviews for this product - check if productId is in the productIds array
+        // Also support backward compatibility for reviews without productIds
+        const productReviews = allReviews.filter(r => {
+            const productIds = r.productIds || [];
+            // New format: check if productId is in the array
+            if (productIds.length > 0) {
+                return productIds.includes(Number(productId)) || productIds.includes(String(productId));
+            }
+            // Old format backward compatibility: if no productIds but has orderId, show review
+            // This is for reviews created before the fix
+            return false; // Don't show old reviews without productIds
+        });
+
+        renderProductReviewsList(productReviews);
+    } catch (e) {
+        console.warn('Failed to load product reviews', e);
+        renderProductReviewsList([]);
+    }
+
+    if (modal) {
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+    }
+}
+
+function closeViewProductReviewsModal() {
+    const modal = document.getElementById('viewProductReviewsModal');
+    if (modal) {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    currentViewProductId = null;
+    currentViewProductName = null;
+}
+
+function renderProductReviewsList(reviews) {
+    const listEl = document.getElementById('reviewsList');
+    const avgRatingEl = document.getElementById('reviewAverageRating');
+    const avgStarsEl = document.getElementById('reviewAverageStars');
+    const totalCountEl = document.getElementById('reviewTotalCount');
+
+    if (!listEl) return;
+
+    if (!reviews || reviews.length === 0) {
+        listEl.innerHTML = '<div style="text-align:center;color:#999;padding:40px 20px;"><div style="font-size:48px;margin-bottom:12px;">⭐</div><div>Chưa có đánh giá nào</div></div>';
+        if (avgRatingEl) avgRatingEl.textContent = '0.0';
+        if (avgStarsEl) avgStarsEl.innerHTML = '☆☆☆☆☆';
+        if (totalCountEl) totalCountEl.textContent = '0 đánh giá';
+        return;
+    }
+
+    // Calculate average rating
+    const totalRating = reviews.reduce((sum, r) => sum + (Number(r.rating) || 0), 0);
+    const avgRating = (totalRating / reviews.length).toFixed(1);
+
+    // Update stats
+    if (avgRatingEl) avgRatingEl.textContent = avgRating;
+    if (totalCountEl) totalCountEl.textContent = `${reviews.length} đánh giá`;
+
+    // Render star display
+    const fullStars = Math.floor(avgRating);
+    const hasHalfStar = avgRating % 1 >= 0.5;
+    let starDisplay = '';
+    for (let i = 0; i < 5; i++) {
+        if (i < fullStars) starDisplay += '★';
+        else if (i === fullStars && hasHalfStar) starDisplay += '⯨';
+        else starDisplay += '☆';
+    }
+    if (avgStarsEl) avgStarsEl.innerHTML = '<span style="color:#ffc107;letter-spacing:2px;">' + starDisplay + '</span>';
+
+    // Render reviews
+    const ratingLabels = ['', 'Rất tệ', 'Tệ', 'Bình thường', 'Tốt', 'Rất tốt'];
+    const ratingColors = ['', '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4'];
+
+    const html = reviews.map((r, idx) => {
+        const stars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
+        const ratingLabel = ratingLabels[r.rating] || 'Không xác định';
+        const ratingColor = ratingColors[r.rating] || '#6b7280';
+        const date = r.createdAt ? new Date(r.createdAt).toLocaleDateString('vi-VN') : 'N/A';
+        const username = r.username || 'Khách hàng';
+        const userInitial = username.charAt(0).toUpperCase();
+        const comment = r.comment ? `<div style="margin-top:12px;padding:12px;background:#f5f5f5;border-radius:6px;color:#555;font-size:13px;line-height:1.5;">"${escapeHtml(r.comment)}"</div>` : '';
+        const reply = r.reply ? `
+            <div style="margin-top:12px;padding:12px;background:linear-gradient(135deg, #e0f2fe 0%, #cffafe 100%);border-left:4px solid #06b6d4;border-radius:6px;">
+                <div style="font-weight:600;color:#0369a1;font-size:12px;margin-bottom:6px;display:flex;align-items:center;gap:6px;"><span>💬</span> Trả lời từ quản trị viên</div>
+                <div style="color:#164e63;font-size:12px;line-height:1.5;">${escapeHtml(r.reply)}</div>
+            </div>
+        ` : '';
+
+        return `
+            <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,0.08);transition:all 0.2s ease;position:relative;overflow:hidden;">
+                <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:${ratingColor};"></div>
+                <div style="display:flex;gap:12px;">
+                    <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg, ${ratingColor}, ${ratingColor}cc);color:white;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;">${userInitial}</div>
+                    <div style="flex:1;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+                            <div>
+                                <div style="font-weight:700;color:#1f2937;font-size:14px;">${escapeHtml(username)}</div>
+                                <div style="font-size:12px;color:#6b7280;margin-top:2px;">${date}</div>
+                            </div>
+                            <div style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:linear-gradient(135deg, #fbbf24, #f59e0b);color:white;border-radius:12px;font-weight:600;font-size:11px;">
+                                <span>${stars}</span>
+                                <span>${ratingLabel}</span>
+                            </div>
+                        </div>
+                        ${comment}
+                        ${reply}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    listEl.innerHTML = html;
+}
+
+// Call setup when document is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupReviewModalHandlers);
+} else {
+    setupReviewModalHandlers();
+}
+
+function setupReviewModalHandlers() {
+    const closeBtn = document.getElementById('closeReviewModal');
+    const skipBtn = document.getElementById('skipReviewBtn');
+    const submitBtn = document.getElementById('submitReviewBtn');
+
+    if (closeBtn) closeBtn.addEventListener('click', closeReviewModal);
+    if (skipBtn) skipBtn.addEventListener('click', closeReviewModal);
+    if (submitBtn) submitBtn.addEventListener('click', submitReview);
+
+    // Setup handlers for view reviews modal
+    const closeViewReviewsBtn = document.getElementById('closeViewReviewsBtn');
+    const closeViewReviewsModal = document.getElementById('closeViewReviewsModal');
+    if (closeViewReviewsBtn) closeViewReviewsBtn.addEventListener('click', closeViewProductReviewsModal);
+    if (closeViewReviewsModal) closeViewReviewsModal.addEventListener('click', closeViewProductReviewsModal);
+}
 
 function getActiveInvoice() {
     return invoices.find(inv => inv.id === activeInvoiceId) || null;
@@ -6627,7 +7077,10 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                     ${priceParts.badge}
                     <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
                     <div class="product-image">${buildProductImageMarkup(p)}</div>
-                    <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <div class="product-name" style="flex:1;">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                        <button class="review-btn" onclick="event.stopPropagation();showProductReviews(${p.id}, '${(p.name || '').replace(/'/g, "\\'")}')" style="background:none;border:none;padding:4px;cursor:pointer;color:#0066cc;font-size:14px;" title="Xem \u0111\u00e1nh gi\u00e1">★</button>
+                    </div>
                     <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
                     ${priceParts.priceBlock}
                 </div>
@@ -6646,7 +7099,10 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                     <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
                     <div class="product-image">${buildProductImageMarkup(p)}</div>
                     ${priceParts.priceBlock}
-                    <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <div class="product-name" style="flex:1;">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                        <button class="review-btn" onclick="event.stopPropagation();showProductReviews(${p.id}, '${(p.name || '').replace(/'/g, "\\'")}')" style="background:none;border:none;padding:4px;cursor:pointer;color:#0066cc;font-size:14px;" title="Xem \u0111\u00e1nh gi\u00e1">★</button>
+                    </div>
                     <div class="product-sku">${p.code || p.barcode || 'SKU'}</div>
                     <div class="product-meta">
                         <span>${p.unit ? '\u0110VT: ' + p.unit : '\u0110VT: -'}</span>
@@ -6667,7 +7123,10 @@ function renderProducts(filteredProducts = null, viewMode = 'default') {
                 <div class="product-price-tag ${priceParts.tagClass}">${priceParts.priceTag}</div>
                 <div class="product-image">${buildProductImageMarkup(p)}</div>
                 ${priceParts.priceBlock}
-                <div class="product-name">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <div class="product-name" style="flex:1;">${p.name || 'S\u1ea3n ph\u1ea9m'}</div>
+                    <button class="review-btn" onclick="event.stopPropagation();showProductReviews(${p.id}, '${(p.name || '').replace(/'/g, "\\'")}')" style="background:none;border:none;padding:4px;cursor:pointer;color:#0066cc;font-size:14px;" title="Xem \u0111\u00e1nh gi\u00e1">★</button>
+                </div>
                 <div class="product-sku">${p.code || 'SKU'}</div>
             </div>
         `;
