@@ -162,6 +162,17 @@ public class Product {
         this.stock = stock;
     }
 
+    @Column(name = "warranty_period")
+    private Integer warrantyPeriod = 30;
+
+    public Integer getWarrantyPeriod() {
+        return this.warrantyPeriod;
+    }
+
+    public void setWarrantyPeriod(Integer warrantyPeriod) {
+        this.warrantyPeriod = warrantyPeriod;
+    }
+
     public BigDecimal getCostPrice() {
         return this.costPrice;
     }

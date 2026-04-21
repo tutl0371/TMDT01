@@ -110,6 +110,7 @@ public class ProductController {
                         existing.setDescription(product.getDescription());
                         existing.setCategoryId(product.getCategoryId());
                         existing.setStatus(product.getStatus());
+                        existing.setWarrantyPeriod(product.getWarrantyPeriod());
                         if (product.getStock() != null) {
                             existing.setStock(product.getStock());
                         }

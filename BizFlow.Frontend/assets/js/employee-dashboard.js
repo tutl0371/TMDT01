@@ -826,6 +826,8 @@ function resolveAppRoute(target) {
             return '/pages/guide.html';
         case 'intro':
             return '/pages/introduction.html';
+        case 'tracking':
+            return '/pages/order-tracking.html';
         default:
             return '';
     }
@@ -4779,6 +4781,27 @@ function getNextInvoiceNumberFromAll() {
     return max + 1;
 }
 
+
+const STATUS_MAP_VN = {
+    'PENDING': 'Chờ xác nhận',
+    'CONFIRMED': 'Đã xác nhận',
+    'PACKING': 'Đang đóng gói',
+    'PROCESSING': 'Đang đóng gói',
+    'SHIPPING': 'Đang giao hàng',
+    'SHIPPED': 'Đang giao hàng',
+    'DELIVERED': 'Giao hàng thành công',
+    'RECEIVED': 'Giao hàng thành công',
+    'CANCELLED': 'Đã hủy',
+    'RETURNED': 'Đã trả hàng',
+    'PAID': 'Đã xác nhận (Sẵn sàng đóng gói)',
+    'UNPAID': 'Chờ xác nhận'
+};
+
+function getVNStatus(s) {
+    const key = String(s || '').trim().toUpperCase();
+    return STATUS_MAP_VN[key] || key || '-';
+}
+
 function createInvoiceState(name) {
     const id = `invoice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const nextNumber = getNextInvoiceNumber();
@@ -4852,7 +4875,7 @@ async function trackOrder() {
             const html = (orders || []).map(o => {
                 const created = formatDateTime(o.createdAt || '-');
                 const invoice = o.invoiceNumber || ('#' + (o.id || '-'));
-                const status = escapeHtml(o.status || '-');
+                const status = getVNStatus(o.status);
                 const total = formatPrice(o.totalAmount || o.total || 0);
                 return `
                     <div style="padding:8px;border-bottom:1px solid #eef2f8;">
@@ -4968,7 +4991,7 @@ function renderOrderTrackingResult(order) {
     const el = document.getElementById('orderTrackingResult');
     if (!el || !order) return;
     const created = formatDateTime(order.createdAt || new Date());
-    const status = escapeHtml(order.status || '-');
+    const status = getVNStatus(order.status);
     const invoice = escapeHtml(order.invoiceNumber || (order.id ? `#${order.id}` : '-'));
     const total = formatPrice(order.totalAmount || order.total || 0);
     const customer = escapeHtml(order.customerName || order.customer || order.customerPhone || order.customer_phone || '-');
@@ -5101,7 +5124,7 @@ function renderOrderSummaryResult(summary) {
     if (!el || !summary) return;
     const created = formatDateTime(summary.createdAt || new Date());
     const invoice = escapeHtml(summary.invoiceNumber || (summary.id ? `#${summary.id}` : '-'));
-    const status = escapeHtml(summary.status || '-');
+    const status = getVNStatus(summary.status);
     const total = formatPrice(summary.totalAmount || 0);
     el.innerHTML = `
         <div style="font-weight:700;margin-bottom:6px">${invoice}</div>
@@ -5782,49 +5805,51 @@ function closeOrderTrackModal() {
 async function loadOrdersForModal(userId) {
     const listEl = document.getElementById('orderTrackList');
     if (!listEl) return;
+    
+    const phoneInput = document.getElementById('orderTrackPhoneInput');
+    const searchTerm = phoneInput ? phoneInput.value.trim() : '';
+
     listEl.innerHTML = '<div class="muted">Đang tải...</div>';
 
     try {
-        if (!userId) {
-            listEl.innerHTML = '<div class="muted">Không tìm thấy tài khoản. Vui lòng đăng nhập.</div>';
-            return;
-        }
-
         const headers = getAuthHeaders();
         let orders = [];
 
-        const res = await fetch(`${API_BASE}/orders/user/${userId}`, { headers });
-        if (res.ok) {
-            orders = await res.json();
-        } else {
-            console.warn('orders/user fetch failed', res.status, await res.text());
-        }
+        // Case 1: Search by specific phone or invoice if provided
+        if (searchTerm) {
+            const res = await fetch(`${API_BASE}/orders/search?keyword=${encodeURIComponent(searchTerm)}&phone=${encodeURIComponent(searchTerm)}`, { headers });
+            if (res.ok) {
+                orders = await res.json();
+            }
+        } 
+        // Case 2: Fallback to current user's orders if no search term
+        else if (userId) {
+            const res = await fetch(`${API_BASE}/orders/user/${userId}`, { headers });
+            if (res.ok) {
+                orders = await res.json();
+            }
 
-        if (!orders || (Array.isArray(orders) && orders.length === 0)) {
-            const summaryRes = await fetch(`${API_BASE}/orders/summary`, { headers });
-            if (summaryRes.ok) {
-                const summary = await summaryRes.json();
-                orders = Array.isArray(summary) ? summary.filter(o => Number(o.userId) === Number(userId)) : [];
-            } else {
-                console.warn('orders/summary fallback failed', summaryRes.status, await summaryRes.text());
+            if (!orders || (Array.isArray(orders) && orders.length === 0)) {
+                const summaryRes = await fetch(`${API_BASE}/orders/summary`, { headers });
+                if (summaryRes.ok) {
+                    const summary = await summaryRes.json();
+                    orders = Array.isArray(summary) ? summary.filter(o => Number(o.userId) === Number(userId)) : [];
+                }
             }
         }
 
         if (!orders || (Array.isArray(orders) && orders.length === 0)) {
-            listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
+            listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng nào. Vui lòng kiểm tra lại mã hoặc SĐT.</div>';
             return;
         }
 
-        renderOrdersInModal(orders || []);
+        // Sort by date desc
+        orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        renderOrdersInModal(orders);
     } catch (err) {
         console.warn('loadOrdersForModal error', err);
         listEl.innerHTML = '<div class="muted">Lỗi khi tải đơn hàng. Vui lòng thử lại.</div>';
-    }
-
-    function formatDiag(diagArr) {
-        if (!diagArr || diagArr.length === 0) return '';
-        const escaped = escapeHtml(diagArr.join('\n'));
-        return `<pre style="max-height:240px;overflow:auto;background:#fafafa;border:1px solid #eee;padding:8px;margin-top:8px;font-size:12px">${escaped}</pre>`;
     }
 }
 
@@ -5832,47 +5857,76 @@ function renderOrdersInModal(orders) {
     const listEl = document.getElementById('orderTrackList');
     if (!listEl) return;
     if (!orders || orders.length === 0) {
-        listEl.innerHTML = '<div class="muted">Không tìm thấy đơn hàng.</div>';
+        listEl.innerHTML = `
+            <div style="text-align:center;padding:40px 20px;color:#999;">
+                <div style="font-size:40px;margin-bottom:12px;">📭</div>
+                <div>Không tìm thấy đơn hàng nào</div>
+            </div>
+        `;
         return;
     }
 
     const html = orders.map(o => {
         const created = formatDateTime(o.createdAt || '-');
         const invoice = o.invoiceNumber || ('#' + (o.id || '-'));
-        const status = escapeHtml(o.status || '-');
+        const status = (o.status || 'PENDING').toUpperCase();
         const total = formatPrice(o.totalAmount || o.total || 0);
-        let delivery = '';
-        try {
-            if (o.estimatedDeliveryFrom || o.estimatedDeliveryTo) {
-                const f = o.estimatedDeliveryFrom ? new Date(o.estimatedDeliveryFrom) : null;
-                const t = o.estimatedDeliveryTo ? new Date(o.estimatedDeliveryTo) : null;
-                const fmt = d => d.toLocaleDateString('vi-VN');
-                if (f && t) delivery = `${fmt(f)} → ${fmt(t)}`;
-                else if (f) delivery = fmt(f);
-                else if (t) delivery = fmt(t);
-            }
-        } catch (e) { delivery = ''; }
+        
+        // Premium Status Styles
+        const statusConfigs = {
+            'PENDING': { label: 'Đơn mới', color: '#ff9800', bg: '#fff7ed' },
+            'UNPAID': { label: 'Đơn mới', color: '#ef4444', bg: '#fef2f2' },
+            'PAID': { label: 'Đã xác nhận (Chờ đóng gói)', color: '#00bfa5', bg: '#f0fdfa' },
+            'CONFIRMED': { label: 'Đã xác nhận', color: '#2563eb', bg: '#eff6ff' },
+            'PACKING': { label: 'Đang đóng gói', color: '#8b5cf6', bg: '#f5f3ff' },
+            'PROCESSING': { label: 'Đang đóng gói', color: '#8b5cf6', bg: '#f5f3ff' },
+            'SHIPPING': { label: 'Đang giao hàng', color: '#7c3aed', bg: '#f5f3ff' },
+            'SHIPPED': { label: 'Đang giao hàng', color: '#7c3aed', bg: '#f5f3ff' },
+            'DELIVERED': { label: 'Giao hàng thành công', color: '#16a34a', bg: '#f0fdf4' },
+            'CANCELLED': { label: 'Đã hủy', color: '#6b7280', bg: '#f3f4f6' },
+            'RECEIVED': { label: 'Hoàn tất', color: '#10b981', bg: '#ecfdf5' }
+        };
+        const cfg = statusConfigs[status] || { label: status, color: '#333', bg: '#f5f5f5' };
 
         return `
-            <div class="order-track-row" style="padding:8px;border-bottom:1px solid #eef2f8;">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
-                    <div style="flex:1">
-                        <div style="font-weight:700">${escapeHtml(invoice)} · ${created}</div>
-                        <div style="color:#333;margin-top:4px">Trạng thái: <strong>${status}</strong></div>
-                        ${delivery ? `<div style="color:#333;margin-top:4px">Ước tính giao hàng: <strong>${escapeHtml(delivery)}</strong></div>` : ''}
-                        <div style="margin-top:6px">Tổng: <strong>${total}</strong></div>
+            <div class="order-fancy-card" style="background:#fff;border:1px solid #eee;border-radius:12px;padding:16px;margin-bottom:12px;transition:all 0.2s;">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+                    <div>
+                        <div style="font-weight:800;color:#111;font-size:15px;margin-bottom:2px;">${escapeHtml(invoice)}</div>
+                        <div style="font-size:12px;color:#888;">${created}</div>
                     </div>
-                    <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
-                        ${(!['CANCELLED', 'RECEIVED'].includes(String(o.status || '').toUpperCase())) ? `<button class="ghost-btn small receive-order-btn" data-order-id="${o.id}">Đã nhận được hàng</button>` : ''}
-                        <button class="ghost-btn small view-order-btn" data-order-id="${o.id}">Xem</button>
-                        ${o.status && String(o.status).toUpperCase() !== 'CANCELLED' ? `<button class="ghost-btn small cancel-order-btn" data-order-id="${o.id}">Hủy</button>` : ''}
+                    <span style="background:${cfg.bg};color:${cfg.color};padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;text-transform:uppercase;">${cfg.label}</span>
+                </div>
+                
+                <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;border-top:1px dashed #eee;">
+                    <div>
+                        <div style="font-size:12px;color:#666;margin-bottom:2px;">Tổng thanh toán</div>
+                        <div style="font-weight:800;color:#ee4d2d;font-size:16px;">${total}</div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        ${(status === 'DELIVERED') ? `
+                            <button class="receive-order-btn" data-order-id="${o.id}" 
+                                     style="background:#10b981;color:#fff;border:none;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+                                Phê duyệt nhận hàng
+                            </button>
+                        ` : ''}
+                        <button class="view-order-btn" data-order-id="${o.id}" data-invoice-number="${o.invoiceNumber || ''}" 
+                                 style="background:#2563eb;color:#fff;border:none;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+                            📍 Hành trình
+                        </button>
+                        ${(status !== 'CANCELLED' && status !== 'RECEIVED') ? `
+                            <button class="cancel-order-btn" data-order-id="${o.id}" 
+                                    style="background:#fef2f2;color:#ef4444;border:none;padding:8px;border-radius:8px;cursor:pointer;" title="Hủy đơn">
+                                🗑️
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
             </div>
         `;
     }).join('');
 
-    listEl.innerHTML = html;
+    listEl.innerHTML = `<div style="padding:4px;">${html}</div>`;
 
     // bind buttons
     listEl.querySelectorAll('.cancel-order-btn').forEach(b => {
@@ -5910,38 +5964,12 @@ function renderOrdersInModal(orders) {
     });
 
     listEl.querySelectorAll('.view-order-btn').forEach(b => {
-        b.addEventListener('click', async (e) => {
-            const id = b.getAttribute('data-order-id');
-            if (!id) return;
-            try {
-                const headers = getAuthHeaders();
-                const res = await fetch(`${API_BASE}/orders/${id}`, { headers });
-                if (!res.ok) {
-                    alert('Không thể tải chi tiết đơn.');
-                    return;
-                }
-                const order = await res.json();
-                // render small detail in modal (append)
-                const list = document.getElementById('orderTrackList');
-                const items = Array.isArray(order.items) ? order.items : [];
-                const itemsHtml = items
-                    ? items.map(it => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed #eef2f8"><div>${escapeHtml(it.productName || it.name || '-')}</div><div>x${it.quantity || 0}</div></div>`).join('')
-                    : '';
-                const rawTotal = items.reduce((sum, it) => sum + ((Number(it.price) || 0) * (Number(it.quantity) || 0)), 0);
-                const finalTotal = Number(order.totalAmount || order.total || 0);
-                const discountTotal = Math.max(0, rawTotal - finalTotal);
-                list.innerHTML = `
-                    <div style="font-weight:700;margin-bottom:6px">Đơn: ${escapeHtml(order.invoiceNumber || ('#' + order.id))}</div>
-                    <div>Trạng thái: <strong>${escapeHtml(order.status || '-')}</strong></div>
-                    <div>Khách hàng: ${escapeHtml(order.customerName || order.customer || '-')} · ${escapeHtml(order.customerPhone || '-')}</div>
-                    <div>Thời gian: ${formatDateTime(order.createdAt || new Date())}</div>
-                    <div style="margin-top:6px">Tạm tính: <strong>${formatPrice(rawTotal)}</strong></div>
-                    <div>Giảm giá: <strong>${formatPrice(discountTotal)}</strong></div>
-                    <div style="margin-top:2px">Tổng thanh toán: <strong>${formatPrice(finalTotal)}</strong></div>
-                    <div style="margin-top:8px">${itemsHtml}</div>
-                `;
-            } catch (err) {
-                console.warn('view order error', err);
+        b.addEventListener('click', (e) => {
+            const invoice = b.getAttribute('data-invoice-number');
+            if (invoice) {
+                window.location.href = `/pages/order-tracking.html?invoice=${encodeURIComponent(invoice)}`;
+            } else {
+                alert('Mã hóa đơn không tồn tại.');
             }
         });
     });

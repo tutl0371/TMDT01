@@ -247,8 +247,8 @@ function ensureAppMenuModal() {
                     <span class="app-icon app-pink">HD</span>
                     <span>DS hóa đơn</span>
                 </button>
-                <button class="app-tile" data-app="returns">
-                    <span class="app-icon app-orange">ĐR</span>
+                <button class="app-tile" data-app="return-request" onclick="window.location.href='/pages/return-request.html'">
+                    <span class="app-icon app-red">ĐT</span>
                     <span>Đổi trả hàng</span>
                 </button>
                 <button class="app-tile" data-app="print">
@@ -503,13 +503,28 @@ function formatDate(value) {
 }
 
 function mapStatus(status) {
-    switch (status) {
+    const s = String(status || '').toUpperCase();
+    switch (s) {
         case 'PAID':
-            return { label: 'Đã thanh toán', className: 'status-paid' };
+            return { label: 'Đã xác nhận', className: 'status-paid' };
+        case 'CONFIRMED':
+            return { label: 'Đã xác nhận', className: 'status-paid' };
+        case 'DELIVERED':
+        case 'RECEIVED':
+            return { label: 'Giao hàng thành công', className: 'status-paid' };
+        case 'SHIPPING':
+        case 'SHIPPED':
+            return { label: 'Đang giao hàng', className: 'status-unpaid' };
+        case 'PACKING':
+        case 'PROCESSING':
+            return { label: 'Đang đóng gói', className: 'status-unpaid' };
         case 'RETURNED':
             return { label: 'Đổi trả', className: 'status-returned' };
         case 'UNPAID':
-            return { label: 'Chưa thanh toán', className: 'status-unpaid' };
+        case 'PENDING':
+            return { label: 'Đơn mới', className: 'status-unpaid' };
+        case 'CANCELLED':
+            return { label: 'Đã hủy', className: 'status-returned' };
         default:
             return { label: status || 'Không rõ', className: 'status-unpaid' };
     }

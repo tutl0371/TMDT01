@@ -32,6 +32,9 @@ public class Order {
     @Column(name = "status", length = 30)
     private String status;
 
+    @Column(name = "address")
+    private String address;
+
     @Column(name = "is_return")
     private Boolean returnOrder = false;
 
@@ -54,11 +57,17 @@ public class Order {
     @Column(name = "note", length = 255)
     private String note;
 
-    @Column(name = "estimated_delivery_from")
-    private LocalDateTime estimatedDeliveryFrom;
+    @Column(name = "shipping_method", length = 50)
+    private String shippingMethod;
 
-    @Column(name = "estimated_delivery_to")
-    private LocalDateTime estimatedDeliveryTo;
+    @Column(name = "tracking_number", length = 100)
+    private String trackingNumber;
+
+    @Column(name = "shipping_started_at")
+    private LocalDateTime shippingStartedAt;
+
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
@@ -189,21 +198,19 @@ public class Order {
         this.createdAt = createdAt;
     }
 
-    public LocalDateTime getEstimatedDeliveryFrom() {
-        return estimatedDeliveryFrom;
-    }
+    public String getShippingMethod() { return shippingMethod; }
+    public void setShippingMethod(String shippingMethod) { this.shippingMethod = shippingMethod; }
 
-    public void setEstimatedDeliveryFrom(LocalDateTime estimatedDeliveryFrom) {
-        this.estimatedDeliveryFrom = estimatedDeliveryFrom;
-    }
+    public String getTrackingNumber() { return trackingNumber; }
+    public void setTrackingNumber(String trackingNumber) { this.trackingNumber = trackingNumber; }
 
-    public LocalDateTime getEstimatedDeliveryTo() {
-        return estimatedDeliveryTo;
-    }
 
-    public void setEstimatedDeliveryTo(LocalDateTime estimatedDeliveryTo) {
-        this.estimatedDeliveryTo = estimatedDeliveryTo;
-    }
+
+    public LocalDateTime getShippingStartedAt() { return shippingStartedAt; }
+    public void setShippingStartedAt(LocalDateTime shippingStartedAt) { this.shippingStartedAt = shippingStartedAt; }
+
+    public LocalDateTime getDeliveredAt() { return deliveredAt; }
+    public void setDeliveredAt(LocalDateTime deliveredAt) { this.deliveredAt = deliveredAt; }
 
     public List<OrderItem> getItems() {
         return items;

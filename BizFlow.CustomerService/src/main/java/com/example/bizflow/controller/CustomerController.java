@@ -393,7 +393,5 @@ public class CustomerController {
         return normalized;
     }
 
-    private String trimToNull(String str) {
-        return (str == null || str.trim().isEmpty()) ? null : str.trim();
-    }
+
 }

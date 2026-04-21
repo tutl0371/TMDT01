@@ -1,4 +1,4 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap');
 /* POS Employee Dashboard - reference layout */
 * {
     margin: 0;
@@ -2785,6 +2785,7 @@
 }
 
 .app-blue { background: #4c6fff; }
+.app-red { background: #ef4444; }
 .app-purple { background: #8a63ff; }
 .app-pink { background: #e05ac6; }
 .app-green { background: #3fbf67; }
