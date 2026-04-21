@@ -1804,7 +1804,7 @@ function showTransferQrModal(orderId, amount, token) {
 
     const bankCode = 'VCB';
     const account = '1021209511';
-    const accountName = 'BIZFLOW CO';
+    const accountName = 'UBIQUITY HUB';
 
     const payloadEl = document.getElementById('transferPayload');
     if (payloadEl) {
@@ -1830,7 +1830,7 @@ function showTransferQrModal(orderId, amount, token) {
     const bankQuickId = 'VCB';
     const template = 'compact';
     const amountParam = Number.isFinite(Number(amount)) && amount > 0 ? `amount=${Math.round(amount)}` : '';
-    const addInfoParam = `addInfo=${encodeURIComponent('Thanh to×n don #' + orderId)}`;
+    const addInfoParam = `addInfo=${encodeURIComponent('Thanh toan don #' + orderId)}`;
     const accountNameParam = `accountName=${encodeURIComponent(accountName)}`;
     const qrQuicklinkBase = `https://img.vietqr.io/image/${bankQuickId}-${account}-${template}.png`;
     const qrImgUrl = qrQuicklinkBase + (amountParam || addInfoParam || accountNameParam ? `?${[amountParam, addInfoParam, accountNameParam].filter(Boolean).join('&')}` : '');
@@ -2115,7 +2115,7 @@ function updatePointsDiscountPreview() {
     const stepsByTotal = rate > 0 ? Math.floor(cartTotal / rate) : 0;
     const appliedSteps = Math.max(0, Math.min(stepsByPoints, stepsByTotal));
     const discount = appliedSteps * rate;
-    
+
     const discountEl = document.getElementById('usePointsDiscountPreview');
     if (discountEl) {
         discountEl.textContent = formatPrice(discount);
@@ -5093,12 +5093,12 @@ async function confirmOrderReceived(orderId) {
                 } else {
                     alert(text || 'Đã xác nhận nhận hàng. Điểm đã được cộng nếu có khách hàng hợp lệ.');
                 }
-                
+
                 // Show review modal after successful confirmation
                 setTimeout(() => {
                     showReviewModal(orderId);
                 }, 500);
-                
+
                 return true;
             }
 
@@ -5139,10 +5139,10 @@ function migrateReviewsFormat() {
     try {
         const reviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
         if (!Array.isArray(reviews) || reviews.length === 0) return;
-        
+
         let hasOldFormat = false;
         const migratedReviews = [];
-        
+
         reviews.forEach(r => {
             if (r.productIds && Array.isArray(r.productIds) && r.productIds.length > 0) {
                 // New format - keep it
@@ -5153,7 +5153,7 @@ function migrateReviewsFormat() {
                 console.log('Found old review format to migrate', r);
             }
         });
-        
+
         // Save only migrated (new format) reviews
         if (hasOldFormat && migratedReviews.length >= 0) {
             localStorage.setItem('bizflow_reviews', JSON.stringify(migratedReviews));
@@ -5173,16 +5173,16 @@ function showReviewModal(orderId) {
     currentReviewOrderId = orderId;
     currentReviewRating = 0;
     currentReviewOrderItems = [];
-    
+
     const modal = document.getElementById('reviewModal');
     const orderIdEl = document.getElementById('reviewOrderId');
     const comment = document.getElementById('reviewComment');
     const ratingHidden = document.getElementById('reviewRatingHidden');
-    
+
     if (orderIdEl) orderIdEl.textContent = orderId || '-';
     if (comment) comment.value = '';
     if (ratingHidden) ratingHidden.value = '0';
-    
+
     // Reset star rating display
     document.querySelectorAll('.rating-star').forEach((star, index) => {
         star.style.color = '#ddd';
@@ -5190,13 +5190,13 @@ function showReviewModal(orderId) {
     });
     const ratingText = document.getElementById('ratingText');
     if (ratingText) ratingText.textContent = 'Chưa chọn';
-    
+
     // Fetch order details to get product information
     fetchOrderDetails(orderId);
-    
+
     // Setup star click handlers
     setupRatingStars();
-    
+
     if (modal) {
         modal.classList.add('show');
         modal.setAttribute('aria-hidden', 'false');
@@ -5210,7 +5210,7 @@ async function fetchOrderDetails(orderId) {
             `${API_BASE}/orders/${orderId}`,
             `${API_BASE}/orders/detail/${orderId}`
         ];
-        
+
         for (const url of endpoints) {
             try {
                 const res = await fetch(url, { headers });
@@ -5246,7 +5246,7 @@ function setupRatingStars() {
         star.addEventListener('click', (e) => {
             const rating = parseInt(e.target.getAttribute('data-rating'), 10);
             currentReviewRating = rating;
-            
+
             // Update star colors
             document.querySelectorAll('.rating-star').forEach((s, index) => {
                 if (index < rating) {
@@ -5255,17 +5255,17 @@ function setupRatingStars() {
                     s.style.color = '#ddd';
                 }
             });
-            
+
             // Update rating text
             const ratingText = document.getElementById('ratingText');
             const ratingLabels = ['', 'Rất tệ', 'Tệ', 'Bình thường', 'Tốt', 'Rất tốt'];
             if (ratingText) ratingText.textContent = ratingLabels[rating] || 'Chưa chọn';
-            
+
             // Store rating
             const ratingHidden = document.getElementById('reviewRatingHidden');
             if (ratingHidden) ratingHidden.value = rating;
         });
-        
+
         // Add hover effect
         star.addEventListener('mouseover', (e) => {
             const rating = parseInt(e.target.getAttribute('data-rating'), 10);
@@ -5278,7 +5278,7 @@ function setupRatingStars() {
             });
         });
     });
-    
+
     // Reset on mouse leave
     const starsContainer = document.querySelector('.rating-star').parentElement;
     if (starsContainer) {
@@ -5299,24 +5299,24 @@ function submitReview() {
         alert('Không tìm thấy đơn hàng. Vui lòng thử lại.');
         return;
     }
-    
+
     const rating = currentReviewRating || 0;
     const comment = (document.getElementById('reviewComment')?.value || '').trim();
-    
+
     if (rating === 0) {
         alert('Vui lòng chọn mức độ hài lòng trước khi gửi đánh giá.');
         return;
     }
-    
+
     // Get product IDs from order items
     const productIds = currentReviewOrderItems.map(item => item.productId || item.id).filter(id => id);
-    
+
     // If productIds is empty, show warning and don't submit
     if (productIds.length === 0) {
         alert('Không thể tải thông tin sản phẩm từ đơn hàng. Vui lòng làm mới trang và thử lại.');
         return;
     }
-    
+
     // Prepare review data - store for all products in the order
     const reviewData = {
         orderId: currentReviewOrderId,
@@ -5327,7 +5327,7 @@ function submitReview() {
         username: sessionStorage.getItem('username') || 'Khách hàng',
         createdAt: new Date().toISOString()
     };
-    
+
     // Store in localStorage as backup (since backend may not have review endpoints yet)
     try {
         const reviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
@@ -5337,7 +5337,7 @@ function submitReview() {
     } catch (e) {
         console.warn('Failed to save review to localStorage', e);
     }
-    
+
     // Try to send to backend API
     const headers = getAuthHeaders();
     const endpoints = [
@@ -5345,7 +5345,7 @@ function submitReview() {
         `${API_BASE}/reviews/create`,
         `${API_BASE}/feedback/create`
     ];
-    
+
     Promise.resolve().then(() => {
         for (const url of endpoints) {
             fetch(url, {
@@ -5353,16 +5353,16 @@ function submitReview() {
                 headers: { ...headers, 'Content-Type': 'application/json' },
                 body: JSON.stringify(reviewData)
             })
-            .then(res => {
-                if (res.ok) {
-                    console.log('Review sent to backend', url);
-                    return;
-                }
-            })
-            .catch(err => console.warn('Failed to send review to', url, err));
+                .then(res => {
+                    if (res.ok) {
+                        console.log('Review sent to backend', url);
+                        return;
+                    }
+                })
+                .catch(err => console.warn('Failed to send review to', url, err));
         }
     });
-    
+
     // Show success message and redirect
     alert(`Cảm ơn bạn đã đánh giá! ${rating} sao - "${comment}"`);
     closeReviewModal();
@@ -5372,11 +5372,11 @@ function setupReviewModalHandlers() {
     const closeBtn = document.getElementById('closeReviewModal');
     const skipBtn = document.getElementById('skipReviewBtn');
     const submitBtn = document.getElementById('submitReviewBtn');
-    
+
     if (closeBtn) closeBtn.addEventListener('click', closeReviewModal);
     if (skipBtn) skipBtn.addEventListener('click', closeReviewModal);
     if (submitBtn) submitBtn.addEventListener('click', submitReview);
-    
+
     // Setup handlers for view reviews modal
     const closeViewReviewsBtn = document.getElementById('closeViewReviewsBtn');
     const closeViewReviewsModal = document.getElementById('closeViewReviewsModal');
@@ -5391,13 +5391,13 @@ let currentViewProductName = null;
 function showProductReviews(productId, productName) {
     currentViewProductId = productId;
     currentViewProductName = productName;
-    
+
     const modal = document.getElementById('viewProductReviewsModal');
     const productNameEl = document.getElementById('reviewProductName');
     const productImageEl = document.getElementById('reviewProductImage');
-    
+
     if (productNameEl) productNameEl.textContent = productName || 'Sản phẩm';
-    
+
     // Fetch product image
     if (productImageEl) {
         (async () => {
@@ -5417,7 +5417,7 @@ function showProductReviews(productId, productName) {
             }
         })();
     }
-    
+
     // Get reviews from localStorage
     try {
         const allReviews = JSON.parse(localStorage.getItem('bizflow_reviews') || '[]');
@@ -5433,13 +5433,13 @@ function showProductReviews(productId, productName) {
             // This is for reviews created before the fix
             return false; // Don't show old reviews without productIds
         });
-        
+
         renderProductReviewsList(productReviews);
     } catch (e) {
         console.warn('Failed to load product reviews', e);
         renderProductReviewsList([]);
     }
-    
+
     if (modal) {
         modal.classList.add('show');
         modal.setAttribute('aria-hidden', 'false');
@@ -5461,9 +5461,9 @@ function renderProductReviewsList(reviews) {
     const avgRatingEl = document.getElementById('reviewAverageRating');
     const avgStarsEl = document.getElementById('reviewAverageStars');
     const totalCountEl = document.getElementById('reviewTotalCount');
-    
+
     if (!listEl) return;
-    
+
     if (!reviews || reviews.length === 0) {
         listEl.innerHTML = '<div style="text-align:center;color:#999;padding:40px 20px;"><div style="font-size:48px;margin-bottom:12px;">⭐</div><div>Chưa có đánh giá nào</div></div>';
         if (avgRatingEl) avgRatingEl.textContent = '0.0';
@@ -5471,15 +5471,15 @@ function renderProductReviewsList(reviews) {
         if (totalCountEl) totalCountEl.textContent = '0 đánh giá';
         return;
     }
-    
+
     // Calculate average rating
     const totalRating = reviews.reduce((sum, r) => sum + (Number(r.rating) || 0), 0);
     const avgRating = (totalRating / reviews.length).toFixed(1);
-    
+
     // Update stats
     if (avgRatingEl) avgRatingEl.textContent = avgRating;
     if (totalCountEl) totalCountEl.textContent = `${reviews.length} đánh giá`;
-    
+
     // Render star display
     const fullStars = Math.floor(avgRating);
     const hasHalfStar = avgRating % 1 >= 0.5;
@@ -5490,11 +5490,11 @@ function renderProductReviewsList(reviews) {
         else starDisplay += '☆';
     }
     if (avgStarsEl) avgStarsEl.innerHTML = '<span style="color:#ffc107;letter-spacing:2px;">' + starDisplay + '</span>';
-    
+
     // Render reviews
     const ratingLabels = ['', 'Rất tệ', 'Tệ', 'Bình thường', 'Tốt', 'Rất tốt'];
     const ratingColors = ['', '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4'];
-    
+
     const html = reviews.map((r, idx) => {
         const stars = '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating);
         const ratingLabel = ratingLabels[r.rating] || 'Không xác định';
@@ -5509,7 +5509,7 @@ function renderProductReviewsList(reviews) {
                 <div style="color:#164e63;font-size:12px;line-height:1.5;">${escapeHtml(r.reply)}</div>
             </div>
         ` : '';
-        
+
         return `
             <div style="padding:16px;background:#fff;border-radius:10px;border:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,0.08);transition:all 0.2s ease;position:relative;overflow:hidden;">
                 <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:${ratingColor};"></div>
@@ -5533,7 +5533,7 @@ function renderProductReviewsList(reviews) {
             </div>
         `;
     }).join('');
-    
+
     listEl.innerHTML = html;
 }
 
@@ -5548,11 +5548,11 @@ function setupReviewModalHandlers() {
     const closeBtn = document.getElementById('closeReviewModal');
     const skipBtn = document.getElementById('skipReviewBtn');
     const submitBtn = document.getElementById('submitReviewBtn');
-    
+
     if (closeBtn) closeBtn.addEventListener('click', closeReviewModal);
     if (skipBtn) skipBtn.addEventListener('click', closeReviewModal);
     if (submitBtn) submitBtn.addEventListener('click', submitReview);
-    
+
     // Setup handlers for view reviews modal
     const closeViewReviewsBtn = document.getElementById('closeViewReviewsBtn');
     const closeViewReviewsModal = document.getElementById('closeViewReviewsModal');

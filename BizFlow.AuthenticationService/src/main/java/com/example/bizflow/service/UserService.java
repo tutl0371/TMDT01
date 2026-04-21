@@ -53,15 +53,22 @@ public class UserService {
         }
 
         User user = new User();
-        user.setUsername(request.getUsername());
+        user.setUsername(username);
 
         String encodedPassword = new PasswordEncoder().encode(request.getPassword());
         user.setPassword(encodedPassword);
         user.setPasswordHash(encodedPassword);
-        user.setEmail(request.getEmail());
+        user.setEmail(email);
         user.setFullName(request.getFullName());
-        user.setPhoneNumber(request.getPhoneNumber());
-        user.setRole(Role.valueOf(request.getRole().toUpperCase()));
+        user.setPhoneNumber(phone);
+
+        String roleStr = request.getRole() == null ? "EMPLOYEE" : request.getRole();
+        try {
+            user.setRole(Role.valueOf(roleStr.toUpperCase()));
+        } catch (Exception e) {
+            user.setRole(Role.EMPLOYEE);
+        }
+
         user.setEnabled(true);
         user.setCreatedAt(LocalDateTime.now());
 
@@ -118,7 +125,7 @@ public class UserService {
         return userRepository.save(user);
     }
 
-    // Admin dashboard methods
+    // Admin dashboard method
     public long getUsersCount() {
         return userRepository.count();
     }
