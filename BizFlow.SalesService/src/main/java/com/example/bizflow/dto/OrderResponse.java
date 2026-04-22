@@ -22,8 +22,10 @@ public class OrderResponse {
     private Boolean returnOrder;
     private String orderType;
     private String refundMethod;
-    private java.time.LocalDateTime estimatedDeliveryFrom;
-    private java.time.LocalDateTime estimatedDeliveryTo;
+    private String shippingMethod;
+    private String trackingNumber;
+    private LocalDateTime shippingStartedAt;
+    private LocalDateTime deliveredAt;
 
     public OrderResponse() {
     }
@@ -194,19 +196,15 @@ public class OrderResponse {
         this.refundMethod = refundMethod;
     }
 
-    public java.time.LocalDateTime getEstimatedDeliveryFrom() {
-        return estimatedDeliveryFrom;
-    }
+    public String getShippingMethod() { return shippingMethod; }
+    public void setShippingMethod(String shippingMethod) { this.shippingMethod = shippingMethod; }
 
-    public void setEstimatedDeliveryFrom(java.time.LocalDateTime estimatedDeliveryFrom) {
-        this.estimatedDeliveryFrom = estimatedDeliveryFrom;
-    }
+    public String getTrackingNumber() { return trackingNumber; }
+    public void setTrackingNumber(String trackingNumber) { this.trackingNumber = trackingNumber; }
 
-    public java.time.LocalDateTime getEstimatedDeliveryTo() {
-        return estimatedDeliveryTo;
-    }
+    public LocalDateTime getShippingStartedAt() { return shippingStartedAt; }
+    public void setShippingStartedAt(LocalDateTime shippingStartedAt) { this.shippingStartedAt = shippingStartedAt; }
 
-    public void setEstimatedDeliveryTo(java.time.LocalDateTime estimatedDeliveryTo) {
-        this.estimatedDeliveryTo = estimatedDeliveryTo;
-    }
+    public LocalDateTime getDeliveredAt() { return deliveredAt; }
+    public void setDeliveredAt(LocalDateTime deliveredAt) { this.deliveredAt = deliveredAt; }
 }

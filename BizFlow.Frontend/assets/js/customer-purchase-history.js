@@ -162,7 +162,7 @@ class CustomerPurchaseHistory {
                 <td>${purchase.orderId}</td>
                 <td>${purchase.invoiceNumber || 'N/A'}</td>
                 <td class="amount">${this.formatCurrency(purchase.totalAmount)}</td>
-                <td><span class="status-badge ${statusClass}">${purchase.status}</span></td>
+                <td><span class="status-badge ${statusClass}">${this.getStatusLabel(purchase.status)}</span></td>
                 <td>${orderDate}</td>
                 <td>${purchase.paymentMethod || 'N/A'}</td>
                 <td class="center">${itemsCount}</td>
@@ -229,7 +229,7 @@ class CustomerPurchaseHistory {
         html += `<p><strong>Mã hóa đơn:</strong> ${purchase.invoiceNumber || 'N/A'}</p>`;
         html += `<p><strong>Ngày tạo:</strong> ${new Date(purchase.orderCreatedAt).toLocaleString('vi-VN')}</p>`;
         html += `<p><strong>Tổng tiền:</strong> ${this.formatCurrency(purchase.totalAmount)}</p>`;
-        html += `<p><strong>Trạng thái:</strong> <span class="status-badge ${this.getStatusClass(purchase.status)}">${purchase.status}</span></p>`;
+        html += `<p><strong>Trạng thái:</strong> <span class="status-badge ${this.getStatusClass(purchase.status)}">${this.getStatusLabel(purchase.status)}</span></p>`;
         html += `<p><strong>Phương thức thanh toán:</strong> ${purchase.paymentMethod || 'N/A'}</p>`;
         html += '</div>';
 
@@ -304,14 +304,41 @@ class CustomerPurchaseHistory {
      * Get CSS class for status badge
      */
     getStatusClass(status) {
+        const s = String(status || '').toUpperCase();
         const statusMap = {
             'PAID': 'status-paid',
             'UNPAID': 'status-unpaid',
             'RETURNED': 'status-returned',
             'CANCELLED': 'status-cancelled',
-            'PENDING': 'status-pending'
+            'PENDING': 'status-pending',
+            'CONFIRMED': 'status-pending',
+            'PACKING': 'status-pending',
+            'PROCESSING': 'status-pending',
+            'SHIPPING': 'status-pending',
+            'SHIPPED': 'status-pending',
+            'DELIVERED': 'status-paid',
+            'RECEIVED': 'status-paid'
         };
-        return statusMap[status] || 'status-unknown';
+        return statusMap[s] || 'status-unknown';
+    }
+
+    getStatusLabel(status) {
+        const s = String(status || '').toUpperCase();
+        const labelMap = {
+            'PENDING': 'Chờ xác nhận',
+            'CONFIRMED': 'Đã xác nhận',
+            'PACKING': 'Đang đóng gói',
+            'PROCESSING': 'Đang đóng gói',
+            'SHIPPING': 'Đang giao hàng',
+            'SHIPPED': 'Đang giao hàng',
+            'PAID': 'Đã thanh toán (Sẵn sàng đóng gói)',
+            'UNPAID': 'Chưa thanh toán',
+            'DELIVERED': 'Giao hàng thành công',
+            'RECEIVED': 'Hoàn tất',
+            'CANCELLED': 'Đã hủy',
+            'RETURNED': 'Đã trả hàng'
+        };
+        return labelMap[s] || s || '-';
     }
 
     /**

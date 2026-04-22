@@ -364,72 +364,72 @@
     <div class="container">
         <div class="card">
             <div class="header">
-                <h2>Chọn Phương Thức Thanh Toán</h2>
-                <p>Lựa chọn cách thanh toán thuận tiện nhất cho bạn</p>
+                <h2>Thông Tin Giao Hàng & Thanh Toán</h2>
+                <p>Vui lòng kiểm tra kỹ địa chỉ và phương thức vận chuyển</p>
             </div>
 
             <div class="content">
+                <!-- Địa chỉ nhận hàng -->
+                <div class="form-group">
+                    <label>📍 Địa Chỉ Nhận Hàng</label>
+                    <div class="form-row">
+                        <input type="text" id="shipReceiverName" placeholder="Tên người nhận">
+                        <input type="text" id="shipReceiverPhone" placeholder="Số điện thoại">
+                    </div>
+                    <textarea id="shipReceiverAddress" placeholder="Địa chỉ chi tiết (Số nhà, đường, phường/xã, quận/huyện...)" rows="2" style="margin-top:10px;"></textarea>
+                </div>
+
+                <!-- Đơn vị vận chuyển -->
+                <label>🚚 Đơn Vị Vận Chuyển</label>
+                <div class="payment-method" id="shippingMethods" style="margin-bottom:30px;">
+                    <div class="method-option active" onclick="selectShipping(this, 'STANDARD', 15000)">
+                        <div class="method-icon">🚚</div>
+                        <div class="method-name">Tiêu Chuẩn</div>
+                        <div style="font-size:12px; color:var(--muted)">15.000₫ (3-5 ngày)</div>
+                    </div>
+                    <div class="method-option" onclick="selectShipping(this, 'FAST', 30000)">
+                        <div class="method-icon">🚀</div>
+                        <div class="method-name">Giao Nhanh</div>
+                        <div style="font-size:12px; color:var(--muted)">30.000₫ (1-2 ngày)</div>
+                    </div>
+                    <div class="method-option" onclick="selectShipping(this, 'ECONOMY', 10000)">
+                        <div class="method-icon">💰</div>
+                        <div class="method-name">Tiết Kiệm</div>
+                        <div style="font-size:12px; color:var(--muted)">10.000₫ (5-7 ngày)</div>
+                    </div>
+                </div>
+
+                <label>💳 Phương Thức Thanh Toán</label>
                 <div class="payment-method" id="paymentMethods">
                     <div class="method-option active" onclick="selectPayment(this, 'cash')">
                         <div class="method-icon">💵</div>
                         <div class="method-name">Tiền Mặt</div>
                     </div>
-                    <div class="method-option" onclick="selectPayment(this, 'card')">
-                        <div class="method-icon">💳</div>
-                        <div class="method-name">Thẻ Ngân Hàng</div>
-                    </div>
                     <div class="method-option" onclick="selectPayment(this, 'transfer')">
                         <div class="method-icon">🏦</div>
                         <div class="method-name">Chuyển Khoản</div>
                     </div>
-                    <div class="method-option" onclick="selectPayment(this, 'ewallet')">
-                        <div class="method-icon">📱</div>
-                        <div class="method-name">Ví Điện Tử</div>
-                    </div>
                 </div>
 
                 <div id="paymentForm">
-                    <div class="info-box">
-                        <strong>💡 Thông Tin Thanh Toán</strong>
-                        <p>Phương thức hiện tại: <strong id="selectedMethod">Tiền Mặt</strong></p>
-                    </div>
-
-                    <div id="cardSection" style="display:none;">
-                        <div class="form-group">
-                            <label>Số Thẻ</label>
-                            <input type="text" placeholder="1234 5678 9012 3456" maxlength="19">
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Ngày Hết Hạn</label>
-                                <input type="text" placeholder="MM/YY">
-                            </div>
-                            <div class="form-group">
-                                <label>CVV</label>
-                                <input type="text" placeholder="123" maxlength="4">
-                            </div>
-                        </div>
-                    </div>
-
                     <div id="transferSection" style="display:none;">
                         <div class="info-box">
                             <strong>📋 Thông tin chuyển khoản:</strong>
                             <p>Ngân hàng: VCB<br>
                             Số tài khoản: 1021209511<br>
-                            Chủ tài khoản: BIZFLOW CO<br>
                             Nội dung: Thanh toán đơn hàng</p>
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label>Ghi Chú (Nếu Có)</label>
-                        <textarea placeholder="Ghi chú thêm cho đơn hàng..." rows="3"></textarea>
+                        <label>Ghi Chú Đơn Hàng</label>
+                        <textarea id="orderNote" placeholder="Ghi chú thêm cho shop..." rows="2"></textarea>
                     </div>
                 </div>
 
                 <div class="btn-group">
                     <button class="btn btn-secondary" onclick="window.location.href='/pages/select-quantity.html'">← Quay Lại</button>
-                    <button class="btn btn-primary" onclick="confirmPayment()">Xác Nhận Thanh Toán</button>
+                    <button class="btn btn-primary" onclick="confirmPayment()">Đặt Hàng (Xác Nhận)</button>
                 </div>
             </div>
         </div>
@@ -444,19 +444,15 @@
                     <span id="summaryProduct">--</span>
                 </div>
                 <div class="summary-row">
-                    <span>Giá đơn vị:</span>
-                    <span id="summaryPrice">--</span>
+                    <span>Tạm tính:</span>
+                    <span id="summarySubtotal">--</span>
                 </div>
                 <div class="summary-row">
-                    <span>Số lượng:</span>
-                    <span id="summaryQty">--</span>
-                </div>
-                <div class="summary-row">
-                    <span>Giảm giá:</span>
-                    <span id="summaryDiscount">0₫</span>
+                    <span>Phí vận chuyển:</span>
+                    <span id="summaryShippingFee" style="color: #2563eb; font-weight: 600;">15.000₫</span>
                 </div>
                 <div class="summary-row total">
-                    <span>Tổng:</span>
+                    <span>Tổng cộng:</span>
                     <span id="summaryTotal">0₫</span>
                 </div>
             </div>
@@ -465,6 +461,9 @@
 
     <script>
         let selectedPaymentMethod = 'cash';
+        let selectedShippingMethod = 'STANDARD';
+        let currentShippingFee = 15000;
+        let baseTotal = 0;
 
         function showPopup(message, options = {}) {
             const { title = 'Thông báo' } = options;
@@ -514,54 +513,130 @@
             return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
         }
 
+        function selectShipping(element, method, fee) {
+            document.querySelectorAll('#shippingMethods .method-option').forEach(el => el.classList.remove('active'));
+            element.classList.add('active');
+            selectedShippingMethod = method;
+            currentShippingFee = fee;
+            document.getElementById('summaryShippingFee').textContent = formatPrice(fee);
+            updateFinalTotal();
+        }
+
         function selectPayment(element, method) {
-            document.querySelectorAll('.method-option').forEach(el => {
+            document.querySelectorAll('#paymentMethods .method-option').forEach(el => {
                 el.classList.remove('active');
             });
             element.classList.add('active');
             selectedPaymentMethod = method;
-
-            document.getElementById('selectedMethod').textContent = 
-                method === 'cash' ? 'Tiền Mặt' :
-                method === 'card' ? 'Thẻ Ngân Hàng' :
-                method === 'transfer' ? 'Chuyển Khoản' : 'Ví Điện Tử';
-
-            document.getElementById('cardSection').style.display = method === 'card' ? 'block' : 'none';
             document.getElementById('transferSection').style.display = method === 'transfer' ? 'block' : 'none';
+        }
+
+        function updateFinalTotal() {
+            document.getElementById('summaryTotal').textContent = formatPrice(baseTotal + currentShippingFee);
         }
 
         function loadOrderSummary() {
             const product = JSON.parse(localStorage.getItem('selectedProduct'));
             const qty = parseInt(localStorage.getItem('orderQuantity')) || 1;
-            const total = parseInt(localStorage.getItem('orderTotal')) || 0;
+            const subtotal = parseInt(localStorage.getItem('orderTotal')) || 0;
+            baseTotal = subtotal;
 
             if (product) {
-                document.getElementById('summaryProduct').textContent = product.name;
-                document.getElementById('summaryPrice').textContent = formatPrice(product.price);
-                document.getElementById('summaryQty').textContent = qty;
-                document.getElementById('summaryTotal').textContent = formatPrice(total);
+                document.getElementById('summaryProduct').textContent = product.name + ' (x' + qty + ')';
+                document.getElementById('summarySubtotal').textContent = formatPrice(subtotal);
+                updateFinalTotal();
             }
         }
 
-        function confirmPayment() {
-            const notes = document.querySelector('textarea').value;
-            
-            if (selectedPaymentMethod === 'card') {
-                const cardNumber = document.querySelector('input[placeholder*="1234"]').value;
-                if (!cardNumber || cardNumber.length < 13) {
-                    showPopup('⚠️ Vui lòng nhập số thẻ hợp lệ');
-                    return;
-                }
+        async function confirmPayment() {
+            const name = document.getElementById('shipReceiverName').value.trim();
+            const phone = document.getElementById('shipReceiverPhone').value.trim();
+            const addr = document.getElementById('shipReceiverAddress').value.trim();
+
+            if (!name || !phone || !addr) {
+                showPopup('⚠️ Vui lòng điền đầy đủ thông tin địa chỉ nhận hàng');
+                return;
             }
 
-            showPopup('✅ Thanh toán thành công! Đơn hàng của bạn đã được xác nhận. Vui lòng chờ xác nhận từ nhân viên quầy.');
-            
-            // Clear order data and redirect
-            localStorage.removeItem('selectedProduct');
-            localStorage.removeItem('orderQuantity');
-            localStorage.removeItem('orderTotal');
-            
-            window.location.href = '/pages/employee-dashboard.html';
+            const btn = document.querySelector('.btn-primary');
+            btn.disabled = true;
+            btn.textContent = 'Đang xử lý...';
+
+            try {
+                // 1. Thu thập dữ liệu đơn hàng từ localStorage
+                const product = JSON.parse(localStorage.getItem('selectedProduct'));
+                const qty = parseInt(localStorage.getItem('orderQuantity')) || 1;
+                const token = sessionStorage.getItem('accessToken');
+                const userId = localStorage.getItem('userId');
+                const customerId = localStorage.getItem('selectedCustomerId');
+
+                const orderPayload = {
+                    userId: userId ? parseInt(userId) : null,
+                    customerId: customerId ? parseInt(customerId) : null,
+                    paid: selectedPaymentMethod === 'cash',
+                    paymentMethod: selectedPaymentMethod.toUpperCase(),
+                    orderType: 'ONLINE', // Vì có shipping nên đánh dấu là ONLINE
+                    items: [{
+                        productId: product.id,
+                        quantity: qty,
+                        unitPrice: product.price
+                    }]
+                };
+
+                // 2. Gọi API tạo đơn hàng
+                const orderRes = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify(orderPayload)
+                });
+
+                if (!orderRes.ok) throw new Error('Không thể tạo đơn hàng');
+                const orderData = await orderRes.json();
+                const orderId = orderData.id;
+
+                // 3. Gọi API tạo vận chuyển (Shipment)
+                const shipmentPayload = {
+                    orderId: orderId,
+                    shippingMethod: selectedShippingMethod,
+                    shippingFee: currentShippingFee,
+                    receiverName: name,
+                    receiverPhone: phone,
+                    receiverAddress: addr,
+                    note: document.getElementById('orderNote').value
+                };
+
+                const shipRes = await fetch('/api/orders/shipments', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify(shipmentPayload)
+                });
+
+                if (!shipRes.ok) throw new Error('Không thể tạo phiếu vận chuyển');
+                const shipData = await shipRes.json();
+
+                // 4. Thành công
+                showPopup('✅ Đặt hàng & Giao hàng thành công! \nMã vận đơn của bạn là: ' + shipData.shipmentNumber, {title: 'Thành công'});
+                
+                // Clear and redirect
+                setTimeout(() => {
+                    localStorage.removeItem('selectedProduct');
+                    localStorage.removeItem('orderQuantity');
+                    localStorage.removeItem('orderTotal');
+                    localStorage.removeItem('selectedCustomerId');
+                    window.location.href = '/pages/employee-dashboard.html';
+                }, 3000);
+
+            } catch (e) {
+                showPopup('❌ Lỗi: ' + e.message);
+                btn.disabled = false;
+                btn.textContent = 'Đặt Hàng (Xác Nhận)';
+            }
         }
 
         function logout() {

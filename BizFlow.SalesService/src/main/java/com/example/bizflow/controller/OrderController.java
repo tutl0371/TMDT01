@@ -20,7 +20,9 @@ import com.example.bizflow.integration.InventoryClient;
 import com.example.bizflow.integration.PromotionClient;
 import com.example.bizflow.integration.UserClient;
 import com.example.bizflow.repository.OrderItemRepository;
+import com.example.bizflow.entity.OrderStatusHistory;
 import com.example.bizflow.repository.OrderRepository;
+import com.example.bizflow.repository.OrderStatusHistoryRepository;
 import com.example.bizflow.repository.PaymentRepository;
 import com.example.bizflow.service.OrderMessageProducer;
 import com.example.bizflow.service.OrderService;
@@ -33,7 +35,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -66,6 +67,7 @@ public class OrderController {
     private final PromotionClient promotionClient;
     private final OrderMessageProducer orderMessageProducer;
     private final UserCartService userCartService;
+    private final OrderStatusHistoryRepository orderStatusHistoryRepository;
 
     public OrderController(
             OrderRepository orderRepository,
@@ -77,8 +79,9 @@ public class OrderController {
             CustomerClient customerClient,
             UserClient userClient,
             PromotionClient promotionClient,
-                OrderMessageProducer orderMessageProducer,
-                UserCartService userCartService
+            OrderMessageProducer orderMessageProducer,
+            UserCartService userCartService,
+            OrderStatusHistoryRepository orderStatusHistoryRepository
     ) {
         this.orderRepository = orderRepository;
         this.orderItemRepository = orderItemRepository;
@@ -91,6 +94,21 @@ public class OrderController {
         this.promotionClient = promotionClient;
         this.orderMessageProducer = orderMessageProducer;
         this.userCartService = userCartService;
+        this.orderStatusHistoryRepository = orderStatusHistoryRepository;
+    }
+
+    private void saveStatusHistory(Long orderId, String status, String note) {
+        try {
+            orderStatusHistoryRepository.save(new OrderStatusHistory(orderId, status, note, "SYSTEM"));
+        } catch (Exception e) {
+            // Log error but don't fail the transaction if history fails
+            System.err.println("Failed to save status history: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/{id}/history")
+    public ResponseEntity<?> getOrderHistory(@PathVariable Long id) {
+        return ResponseEntity.ok(orderStatusHistoryRepository.findByOrderIdOrderByCreatedAtDesc(id));
     }
 
     @GetMapping("/cart/{userId}")
@@ -187,6 +205,7 @@ public class OrderController {
 
         order.setStatus("PAID");
         orderRepository.save(order);
+        saveStatusHistory(order.getId(), "PAID", "Đơn hàng đã thanh toán");
 
         inventoryClient.applySale(toSaleItems(order.getItems()), order.getId(), order.getUserId());
 
@@ -380,16 +399,13 @@ public class OrderController {
         }
 
         order.setTotalAmount(total);
-        // set estimated delivery window: ~2-3 days from now
-        LocalDateTime now = LocalDateTime.now();
-        order.setEstimatedDeliveryFrom(now.plusDays(2));
-        order.setEstimatedDeliveryTo(now.plusDays(3));
         // persist provided customer phone on order (so searches by phone work even without customer_id)
         if (request.getCustomerPhone() != null && !request.getCustomerPhone().isBlank()) {
             order.setCustomerPhone(PhoneUtils.normalize(request.getCustomerPhone().trim()));
         }
 
         Order savedOrder = orderRepository.save(order);
+        saveStatusHistory(savedOrder.getId(), savedOrder.getStatus(), "Đơn hàng được tạo mới");
 
         items.forEach(i -> i.setOrder(savedOrder));
         orderItemRepository.saveAll(items);
@@ -587,6 +603,15 @@ public class OrderController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/invoice/{invoiceNumber}")
+    public ResponseEntity<?> getOrderByInvoiceNumber(@PathVariable String invoiceNumber) {
+        return orderRepository.findByInvoiceNumber(invoiceNumber)
+                .map(order -> {
+                    return ResponseEntity.ok(toOrderResponse(order));
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
     @PostMapping("/{id}/cancel")
     public ResponseEntity<?> cancelOrder(@PathVariable Long id) {
         Order order = orderRepository.findByIdWithDetails(id).orElse(null);
@@ -613,7 +638,8 @@ public class OrderController {
 
         order.setStatus("CANCELLED");
         orderRepository.save(order);
-        return ResponseEntity.ok("Order cancelled");
+        saveStatusHistory(id, "CANCELLED", "Đơn hàng đã bị hủy");
+        return ResponseEntity.ok("Order cancelled successfully");
     }
 
     @PostMapping("/{id}/received")
@@ -883,8 +909,10 @@ public class OrderController {
         response.setReturnOrder(order.getReturnOrder());
         response.setOrderType(order.getOrderType());
         response.setRefundMethod(order.getRefundMethod());
-        response.setEstimatedDeliveryFrom(order.getEstimatedDeliveryFrom());
-        response.setEstimatedDeliveryTo(order.getEstimatedDeliveryTo());
+        response.setShippingMethod(order.getShippingMethod());
+        response.setTrackingNumber(order.getTrackingNumber());
+        response.setShippingStartedAt(order.getShippingStartedAt());
+        response.setDeliveredAt(order.getDeliveredAt());
         response.setCustomerPhone(customerPhone);
         return response;
     }

@@ -503,9 +503,15 @@
                 return;
             }
 
-            if (type === 'existing' && !document.getElementById('existingCustomer').value) {
-                showPopup('⚠️ Vui lòng chọn khách hàng');
-                return;
+            if (type === 'existing') {
+                const customerId = document.getElementById('existingCustomer').value;
+                if (!customerId) {
+                    showPopup('⚠️ Vui lòng chọn khách hàng');
+                    return;
+                }
+                localStorage.setItem('selectedCustomerId', customerId);
+            } else {
+                localStorage.removeItem('selectedCustomerId'); // Guest or new (handled by name/phone in backend)
             }
 
             window.location.href = '/pages/search-product.html';

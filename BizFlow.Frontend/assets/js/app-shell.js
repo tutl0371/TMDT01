@@ -3,13 +3,15 @@
     const APP_TILES = [
         { key: 'pos', label: 'Ban hang', icon: 'BH', color: 'app-blue', href: '/pages/employee-dashboard.html' },
         { key: 'promotions', label: 'Khuyen mai', icon: 'KM', color: 'app-green', href: '/pages/promotions.html' },
-        { key: 'invoices', label: 'DS hoa don', icon: 'HD', color: 'app-pink', href: '/pages/invoice-list.html' },
-        { key: 'returns', label: 'Doi tra hang', icon: 'DR', color: 'app-orange', href: '/pages/return-orders.html' },
-        { key: 'print', label: 'May in - Mau in', icon: 'IN', color: 'app-orange', href: '/pages/print-templates.html' },
+        { key: 'invoices', label: 'DS hóa đơn', icon: 'HD', color: 'app-pink', href: '/pages/invoice-list.html' },
+        { key: 'return-request', label: 'Đổi trả hàng', icon: 'ĐT', color: 'app-red', href: '/pages/return-request.html' },
+        { key: 'warranty-request', label: 'Bảo hành', icon: 'BH', color: 'app-teal', href: '/pages/warranty-request.html' },
+        { key: 'print', label: 'Máy in - Mẫu in', icon: 'IN', color: 'app-orange', href: '/pages/print-templates.html' },
         { key: 'daily-report', label: 'Bao cao theo ngay', icon: 'BC', color: 'app-teal', href: '/pages/daily-report.html' },
         { key: 'access-log', label: 'Nhat ky truy cap', icon: 'NK', color: 'app-gray', href: '/pages/access-log.html' },
         { key: 'management', label: 'Trang quan ly', icon: 'QL', color: 'app-indigo', href: '/pages/management.html' },
         { key: 'guide', label: 'Huong dan', icon: 'HD', color: 'app-purple', href: '/pages/guide.html' },
+        { key: 'locations', label: 'Vi tri ban hang', icon: 'VT', color: 'app-red', href: '/pages/shop-locations.html' },
         { key: 'intro', label: 'Gioi thieu', icon: 'GT', color: 'app-orange', href: '/pages/introduction.html' }
     ];
 

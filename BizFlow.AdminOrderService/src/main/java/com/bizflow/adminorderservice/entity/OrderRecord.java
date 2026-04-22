@@ -33,6 +33,21 @@ public class OrderRecord {
     @Column(name = "created_at")
     private Instant createdAt;
 
+    @Column(name = "shipping_method")
+    private String shippingMethod;
+
+    @Column(name = "tracking_number")
+    private String trackingNumber;
+
+    @Column(name = "shipping_started_at")
+    private Instant shippingStartedAt;
+
+    @Column(name = "delivered_at")
+    private Instant deliveredAt;
+
+    @Column(name = "address")
+    private String address;
+
     @SuppressWarnings("unused")
     @PrePersist
     void prePersist() {
@@ -88,4 +103,19 @@ public class OrderRecord {
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
     }
+
+    public String getShippingMethod() { return shippingMethod; }
+    public void setShippingMethod(String shippingMethod) { this.shippingMethod = shippingMethod; }
+
+    public String getTrackingNumber() { return trackingNumber; }
+    public void setTrackingNumber(String trackingNumber) { this.trackingNumber = trackingNumber; }
+
+    public Instant getShippingStartedAt() { return shippingStartedAt; }
+    public void setShippingStartedAt(Instant shippingStartedAt) { this.shippingStartedAt = shippingStartedAt; }
+
+    public Instant getDeliveredAt() { return deliveredAt; }
+    public void setDeliveredAt(Instant deliveredAt) { this.deliveredAt = deliveredAt; }
+
+    public String getAddress() { return address; }
+    public void setAddress(String address) { this.address = address; }
 }

@@ -1,6 +1,46 @@
-// Login page JS(scoped)
-const API_BASE = '/api';
+// Login page JS
+const API_BASE = resolveApiBase();
 const ALLOWED_ROLES = ['ADMIN','OWNER','EMPLOYEE', 'MANAGER'];
+
+function resolveApiBase() {
+  const configured = window.API_BASE_URL || window.API_BASE;
+  if (configured) {
+    return configured;
+  }
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:8000/api';
+  }
+  return `${window.location.origin}/api`;
+}
+
+async function postLogin(username, password) {
+  const primaryUrl = `${API_BASE}/auth/login`;
+  let response;
+  try {
+    response = await fetch(primaryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+  } catch (error) {
+    throw new Error(`Không kết nối được tới API đăng nhập: ${error.message}`);
+  }
+
+  if (response.status !== 404) {
+    return response;
+  }
+
+  const fallbackUrl = 'http://localhost:8000/api/auth/login';
+  if (primaryUrl === fallbackUrl) {
+    return response;
+  }
+
+  return fetch(fallbackUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
+}
 
 function showLoginError(message){
   const el=document.getElementById('loginError');
@@ -49,7 +89,7 @@ window.addEventListener('DOMContentLoaded',()=>{
       const password=document.getElementById('password').value.trim();
       if(!username||!password){showLoginError('Vui lòng nhập đầy đủ thông tin');return;}
       try{
-        const res=await fetch(`${API_BASE}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+        const res = await postLogin(username, password);
         if(res.ok){
           const data=await res.json();
           sessionStorage.setItem('accessToken',data.accessToken);
